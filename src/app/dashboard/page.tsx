@@ -61,6 +61,18 @@ interface VehicleData {
   sentry_mode: boolean;
   car_version: string;
   power: number;
+  // Doors (0 = closed, 1 = open)
+  df: number;  // driver front
+  pf: number;  // passenger front
+  dr: number;  // driver rear
+  pr: number;  // passenger rear
+  ft: number;  // frunk
+  rt: number;  // trunk
+  // Tire pressure (bar)
+  tpms_pressure_fl: number;
+  tpms_pressure_fr: number;
+  tpms_pressure_rl: number;
+  tpms_pressure_rr: number;
 }
 
 interface CachedData {
@@ -334,10 +346,10 @@ export default function DashboardPage() {
             </select>
             <span
               className={`rounded-full px-3 py-1 text-xs font-medium ${waking
-                  ? 'bg-yellow-500/20 text-yellow-400'
-                  : isAsleep
-                    ? 'bg-slate-700 text-slate-400'
-                    : 'bg-green-500/20 text-green-400'
+                ? 'bg-yellow-500/20 text-yellow-400'
+                : isAsleep
+                  ? 'bg-slate-700 text-slate-400'
+                  : 'bg-green-500/20 text-green-400'
                 }`}
             >
               {waking ? 'Waking...' : isAsleep ? 'Asleep' : 'Online'}
@@ -522,6 +534,36 @@ export default function DashboardPage() {
               />
             </div>
 
+            {/* Doors & Openings */}
+            <div className="mt-6 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+              <div className="mb-4 flex items-center gap-3">
+                <Car className="h-5 w-5 text-blue-400" />
+                <span className="font-medium">Doors & Openings</span>
+              </div>
+              <div className="grid grid-cols-3 gap-4 sm:grid-cols-6">
+                <DoorStatus label="Driver Front" isOpen={displayData.df === 1} />
+                <DoorStatus label="Pass. Front" isOpen={displayData.pf === 1} />
+                <DoorStatus label="Driver Rear" isOpen={displayData.dr === 1} />
+                <DoorStatus label="Pass. Rear" isOpen={displayData.pr === 1} />
+                <DoorStatus label="Frunk" isOpen={displayData.ft === 1} />
+                <DoorStatus label="Trunk" isOpen={displayData.rt === 1} />
+              </div>
+            </div>
+
+            {/* Tire Pressure */}
+            <div className="mt-6 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+              <div className="mb-4 flex items-center gap-3">
+                <Gauge className="h-5 w-5 text-orange-400" />
+                <span className="font-medium">Tire Pressure</span>
+              </div>
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                <TirePressure label="Front Left" pressure={displayData.tpms_pressure_fl} />
+                <TirePressure label="Front Right" pressure={displayData.tpms_pressure_fr} />
+                <TirePressure label="Rear Left" pressure={displayData.tpms_pressure_rl} />
+                <TirePressure label="Rear Right" pressure={displayData.tpms_pressure_rr} />
+              </div>
+            </div>
+
             {/* Location Map */}
             {displayData.latitude && displayData.longitude && (
               <div className="mt-6 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
@@ -568,8 +610,8 @@ function NavLink({
     <Link
       href={href}
       className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${active
-          ? 'bg-red-500/10 text-red-400'
-          : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+        ? 'bg-red-500/10 text-red-400'
+        : 'text-slate-400 hover:bg-slate-800 hover:text-white'
         }`}
     >
       {icon}
@@ -605,6 +647,41 @@ function StatCard({
       <p className="text-sm text-slate-400">{label}</p>
       <p className="text-xl font-bold">{value}</p>
       {subvalue && <p className="text-sm text-slate-500">{subvalue}</p>}
+    </div>
+  );
+}
+
+function DoorStatus({ label, isOpen }: { label: string; isOpen: boolean }) {
+  return (
+    <div className="text-center">
+      <div
+        className={`mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-full ${isOpen ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'
+          }`}
+      >
+        {isOpen ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+      </div>
+      <p className="text-xs text-slate-400">{label}</p>
+      <p className={`text-sm font-medium ${isOpen ? 'text-red-400' : 'text-green-400'}`}>
+        {isOpen ? 'Open' : 'Closed'}
+      </p>
+    </div>
+  );
+}
+
+function TirePressure({ label, pressure }: { label: string; pressure: number }) {
+  // Convert bar to PSI for display if needed (1 bar ≈ 14.5 PSI)
+  const psi = pressure ? Math.round(pressure * 14.5) : null;
+  const isLow = psi !== null && psi < 35;
+
+  return (
+    <div className="text-center rounded-lg bg-slate-700/30 p-3">
+      <p className="text-xs text-slate-400">{label}</p>
+      <p className={`text-lg font-bold ${isLow ? 'text-orange-400' : 'text-slate-200'}`}>
+        {psi !== null ? `${psi} PSI` : '--'}
+      </p>
+      <p className="text-xs text-slate-500">
+        {pressure ? `${pressure.toFixed(2)} bar` : '--'}
+      </p>
     </div>
   );
 }
