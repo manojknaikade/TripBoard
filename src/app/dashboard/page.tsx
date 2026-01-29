@@ -23,6 +23,17 @@ import {
   Power,
 } from 'lucide-react';
 import { useSettingsStore } from '@/stores/settingsStore';
+import dynamic from 'next/dynamic';
+
+// Dynamic import for map component (client-side only)
+const VehicleMap = dynamic(() => import('@/components/VehicleMap'), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-64 items-center justify-center rounded-xl bg-slate-700/30">
+      <div className="h-6 w-6 animate-spin rounded-full border-2 border-red-500 border-t-transparent" />
+    </div>
+  ),
+});
 
 interface VehicleData {
   id: number;
@@ -268,10 +279,10 @@ export default function DashboardPage() {
             </select>
             <span
               className={`rounded-full px-3 py-1 text-xs font-medium ${waking
-                  ? 'bg-yellow-500/20 text-yellow-400'
-                  : isAsleep
-                    ? 'bg-slate-700 text-slate-400'
-                    : 'bg-green-500/20 text-green-400'
+                ? 'bg-yellow-500/20 text-yellow-400'
+                : isAsleep
+                  ? 'bg-slate-700 text-slate-400'
+                  : 'bg-green-500/20 text-green-400'
                 }`}
             >
               {waking ? 'Waking...' : isAsleep ? 'Asleep' : 'Online'}
@@ -393,16 +404,21 @@ export default function DashboardPage() {
               />
             </div>
 
-            {/* Location */}
+            {/* Location Map */}
             {vehicleData.latitude && vehicleData.longitude && (
               <div className="mt-6 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
-                <div className="flex items-center gap-3">
+                <div className="mb-4 flex items-center gap-3">
                   <MapPin className="h-5 w-5 text-red-400" />
                   <span className="text-slate-400">Location</span>
                   <span className="text-sm">
                     {vehicleData.latitude.toFixed(4)}, {vehicleData.longitude.toFixed(4)}
                   </span>
                 </div>
+                <VehicleMap
+                  latitude={vehicleData.latitude}
+                  longitude={vehicleData.longitude}
+                  vehicleName={vehicleData.display_name}
+                />
               </div>
             )}
           </>
@@ -434,8 +450,8 @@ function NavLink({
     <Link
       href={href}
       className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${active
-          ? 'bg-red-500/10 text-red-400'
-          : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+        ? 'bg-red-500/10 text-red-400'
+        : 'text-slate-400 hover:bg-slate-800 hover:text-white'
         }`}
     >
       {icon}
