@@ -1,62 +1,143 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   Zap,
   Battery,
-  MapPin,
+  Gauge,
   Thermometer,
-  Clock,
+  MapPin,
+  Lock,
+  Unlock,
+  Sun,
+  Moon,
+  History,
+  BarChart3,
   Settings,
   LogOut,
+  RefreshCw,
   Car,
-  Navigation,
-  Gauge,
-  BarChart3,
-  History,
   Loader2,
+  AlertCircle,
 } from 'lucide-react';
-import { createClient } from '@/lib/supabase/client';
 
-// Mock data for development (will be replaced with real Tesla API data)
-const mockVehicle = {
-  id: '1234567890',
-  display_name: 'Model 3',
-  vin: '5YJ3E1EA1NF123456',
-  state: 'online',
-  battery_level: 78,
-  battery_range: 245.5,
-  charging_state: 'Disconnected',
-  odometer: 15234.5,
-  inside_temp: 21.5,
-  outside_temp: 18.2,
-  location: { lat: 52.52, lng: 13.405 },
-  last_seen: new Date().toISOString(),
-};
+interface VehicleData {
+  id: number;
+  vin: string;
+  display_name: string;
+  state: string;
+  battery_level: number;
+  battery_range: number;
+  charging_state: string;
+  charge_limit_soc: number;
+  inside_temp: number;
+  outside_temp: number;
+  odometer: number;
+  locked: boolean;
+  is_climate_on: boolean;
+  latitude: number;
+  longitude: number;
+  sentry_mode: boolean;
+}
+
+interface Vehicle {
+  id: number;
+  display_name: string;
+  vin: string;
+  state: string;
+}
 
 export default function DashboardPage() {
-  const router = useRouter();
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | null>(null);
+  const [vehicleData, setVehicleData] = useState<VehicleData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [vehicle, setVehicle] = useState(mockVehicle);
+  const [dataLoading, setDataLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isAsleep, setIsAsleep] = useState(false);
 
+  // Fetch vehicles list on mount
   useEffect(() => {
-    // Simulate loading
-    const timer = setTimeout(() => setLoading(false), 1000);
-    return () => clearTimeout(timer);
+    fetchVehicles();
   }, []);
 
-  const handleSignOut = async () => {
-    const supabase = createClient();
-    await supabase.auth.signOut();
-    router.push('/');
+  // Fetch vehicle data when selected vehicle changes
+  useEffect(() => {
+    if (selectedVehicle) {
+      fetchVehicleData(selectedVehicle.id);
+    }
+  }, [selectedVehicle]);
+
+  const fetchVehicles = async () => {
+    try {
+      const response = await fetch('/api/tesla/test');
+      const data = await response.json();
+
+      if (data.success && data.vehicles.length > 0) {
+        setVehicles(data.vehicles);
+        setSelectedVehicle(data.vehicles[0]);
+      } else if (!data.success) {
+        setError(data.error || 'Failed to fetch vehicles');
+      }
+    } catch (err) {
+      setError('Failed to connect to Tesla');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchVehicleData = async (vehicleId: number) => {
+    setDataLoading(true);
+    setIsAsleep(false);
+
+    try {
+      const response = await fetch(`/api/tesla/vehicle-data?id=${vehicleId}&region=eu`);
+      const data = await response.json();
+
+      if (data.success) {
+        if (data.state === 'asleep') {
+          setIsAsleep(true);
+          setVehicleData(null);
+        } else {
+          setVehicleData(data.vehicle);
+          setIsAsleep(false);
+        }
+      } else {
+        setError(data.error);
+      }
+    } catch (err) {
+      setError('Failed to fetch vehicle data');
+    } finally {
+      setDataLoading(false);
+    }
+  };
+
+  const handleRefresh = () => {
+    if (selectedVehicle) {
+      fetchVehicleData(selectedVehicle.id);
+    }
   };
 
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-red-500" />
+      </div>
+    );
+  }
+
+  if (error && vehicles.length === 0) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4">
+        <AlertCircle className="h-12 w-12 text-red-500" />
+        <p className="text-lg text-slate-400">{error}</p>
+        <Link
+          href="/auth/login"
+          className="rounded-xl bg-red-500 px-6 py-3 font-semibold text-white"
+        >
+          Connect Tesla
+        </Link>
       </div>
     );
   }
@@ -88,10 +169,7 @@ export default function DashboardPage() {
             </NavLink>
           </nav>
 
-          <button
-            onClick={handleSignOut}
-            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
-          >
+          <button className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-slate-800 hover:text-white">
             <LogOut className="h-4 w-4" />
             Sign Out
           </button>
@@ -100,99 +178,141 @@ export default function DashboardPage() {
 
       {/* Main Content */}
       <main className="mx-auto max-w-7xl px-6 py-8">
-        {/* Vehicle Header */}
+        {/* Vehicle Selector & Refresh */}
         <div className="mb-8 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-800">
-              <Car className="h-8 w-8 text-slate-400" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold">{vehicle.display_name}</h1>
-              <p className="text-sm text-slate-400">{vehicle.vin}</p>
-            </div>
+            <Car className="h-6 w-6 text-red-400" />
+            <select
+              value={selectedVehicle?.id || ''}
+              onChange={(e) => {
+                const v = vehicles.find((v) => v.id === Number(e.target.value));
+                if (v) setSelectedVehicle(v);
+              }}
+              className="rounded-lg border border-slate-600 bg-slate-800 px-4 py-2 text-white"
+            >
+              {vehicles.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.display_name}
+                </option>
+              ))}
+            </select>
+            <span
+              className={`rounded-full px-3 py-1 text-xs font-medium ${isAsleep
+                  ? 'bg-slate-700 text-slate-400'
+                  : 'bg-green-500/20 text-green-400'
+                }`}
+            >
+              {isAsleep ? 'Asleep' : 'Online'}
+            </span>
           </div>
-          <StatusBadge status={vehicle.state} />
+
+          <button
+            onClick={handleRefresh}
+            disabled={dataLoading}
+            className="flex items-center gap-2 rounded-lg bg-slate-800 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700"
+          >
+            <RefreshCw className={`h-4 w-4 ${dataLoading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
         </div>
 
-        {/* Stats Grid */}
-        <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard
-            icon={<Battery className="h-5 w-5" />}
-            label="Battery"
-            value={`${vehicle.battery_level}%`}
-            subtext={`${vehicle.battery_range.toFixed(0)} mi range`}
-            color="green"
-          />
-          <StatCard
-            icon={<Navigation className="h-5 w-5" />}
-            label="Odometer"
-            value={`${vehicle.odometer.toLocaleString()} mi`}
-            subtext="Total distance"
-            color="blue"
-          />
-          <StatCard
-            icon={<Thermometer className="h-5 w-5" />}
-            label="Temperature"
-            value={`${vehicle.inside_temp}°C`}
-            subtext={`Outside: ${vehicle.outside_temp}°C`}
-            color="orange"
-          />
-          <StatCard
-            icon={<Clock className="h-5 w-5" />}
-            label="Last Seen"
-            value="Just now"
-            subtext={vehicle.charging_state}
-            color="purple"
-          />
-        </div>
+        {/* Asleep State */}
+        {isAsleep && (
+          <div className="mb-8 flex flex-col items-center justify-center rounded-2xl border border-slate-700/50 bg-slate-800/30 py-16">
+            <Moon className="mb-4 h-12 w-12 text-slate-500" />
+            <h2 className="text-xl font-semibold text-slate-400">Vehicle is Sleeping</h2>
+            <p className="mt-2 text-slate-500">
+              Data will be available when the vehicle wakes up
+            </p>
+          </div>
+        )}
 
-        {/* Two column layout */}
-        <div className="grid gap-6 lg:grid-cols-3">
-          {/* Vehicle Status Card */}
-          <div className="lg:col-span-2">
-            <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
-              <h2 className="mb-6 text-lg font-semibold">Vehicle Status</h2>
-              
-              {/* Battery visualization */}
-              <div className="mb-6">
-                <div className="mb-2 flex items-center justify-between text-sm">
-                  <span className="text-slate-400">Battery Level</span>
-                  <span className="font-medium">{vehicle.battery_level}%</span>
+        {/* Vehicle Data */}
+        {vehicleData && !isAsleep && (
+          <>
+            {/* Battery Card */}
+            <div className="mb-8 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+              <div className="mb-4 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Battery className="h-6 w-6 text-green-400" />
+                  <h2 className="text-lg font-semibold">Battery</h2>
                 </div>
-                <div className="h-4 overflow-hidden rounded-full bg-slate-700">
+                <span className="text-sm text-slate-400">
+                  {vehicleData.charging_state === 'Charging' ? '⚡ Charging' : vehicleData.charging_state}
+                </span>
+              </div>
+
+              {/* Battery Visualization */}
+              <div className="mb-4">
+                <div className="mb-2 flex justify-between text-sm">
+                  <span className="text-slate-400">Charge Level</span>
+                  <span className="font-semibold">{vehicleData.battery_level}%</span>
+                </div>
+                <div className="h-4 w-full overflow-hidden rounded-full bg-slate-700">
                   <div
-                    className="h-full rounded-full bg-gradient-to-r from-green-500 to-green-400 transition-all"
-                    style={{ width: `${vehicle.battery_level}%` }}
+                    className={`h-full rounded-full transition-all ${vehicleData.battery_level > 20 ? 'bg-green-500' : 'bg-red-500'
+                      }`}
+                    style={{ width: `${vehicleData.battery_level}%` }}
                   />
                 </div>
                 <div className="mt-2 flex justify-between text-xs text-slate-500">
-                  <span>0%</span>
-                  <span>~{vehicle.battery_range.toFixed(0)} miles remaining</span>
-                  <span>100%</span>
+                  <span>Limit: {vehicleData.charge_limit_soc}%</span>
+                  <span>~{Math.round(vehicleData.battery_range)} mi range</span>
                 </div>
               </div>
+            </div>
 
-              {/* Info grid */}
-              <div className="grid gap-4 sm:grid-cols-2">
-                <InfoRow label="Charging State" value={vehicle.charging_state} />
-                <InfoRow label="Vehicle State" value={vehicle.state} />
-                <InfoRow label="Inside Temp" value={`${vehicle.inside_temp}°C`} />
-                <InfoRow label="Outside Temp" value={`${vehicle.outside_temp}°C`} />
+            {/* Stats Grid */}
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <StatCard
+                icon={<Gauge className="h-5 w-5" />}
+                label="Odometer"
+                value={`${Math.round(vehicleData.odometer).toLocaleString()} mi`}
+                color="blue"
+              />
+              <StatCard
+                icon={<Thermometer className="h-5 w-5" />}
+                label="Temperature"
+                value={`${Math.round(vehicleData.inside_temp)}°C inside`}
+                subvalue={`${Math.round(vehicleData.outside_temp)}°C outside`}
+                color="orange"
+              />
+              <StatCard
+                icon={vehicleData.locked ? <Lock className="h-5 w-5" /> : <Unlock className="h-5 w-5" />}
+                label="Security"
+                value={vehicleData.locked ? 'Locked' : 'Unlocked'}
+                subvalue={vehicleData.sentry_mode ? 'Sentry On' : 'Sentry Off'}
+                color={vehicleData.locked ? 'green' : 'red'}
+              />
+              <StatCard
+                icon={vehicleData.is_climate_on ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+                label="Climate"
+                value={vehicleData.is_climate_on ? 'On' : 'Off'}
+                color="purple"
+              />
+            </div>
+
+            {/* Location */}
+            {vehicleData.latitude && vehicleData.longitude && (
+              <div className="mt-6 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+                <div className="flex items-center gap-3">
+                  <MapPin className="h-5 w-5 text-red-400" />
+                  <span className="text-slate-400">Location</span>
+                  <span className="text-sm">
+                    {vehicleData.latitude.toFixed(4)}, {vehicleData.longitude.toFixed(4)}
+                  </span>
+                </div>
               </div>
-            </div>
-          </div>
+            )}
+          </>
+        )}
 
-          {/* Quick Actions */}
-          <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
-            <h2 className="mb-6 text-lg font-semibold">Quick Actions</h2>
-            <div className="space-y-3">
-              <QuickAction icon={<MapPin className="h-5 w-5" />} label="View Location" />
-              <QuickAction icon={<History className="h-5 w-5" />} label="Recent Trips" />
-              <QuickAction icon={<BarChart3 className="h-5 w-5" />} label="Energy Stats" />
-              <QuickAction icon={<Settings className="h-5 w-5" />} label="Polling Settings" />
-            </div>
+        {/* Loading State */}
+        {dataLoading && !vehicleData && !isAsleep && (
+          <div className="flex items-center justify-center py-16">
+            <Loader2 className="h-8 w-8 animate-spin text-red-500" />
           </div>
-        </div>
+        )}
       </main>
     </div>
   );
@@ -212,11 +332,10 @@ function NavLink({
   return (
     <Link
       href={href}
-      className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${
-        active
+      className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${active
           ? 'bg-red-500/10 text-red-400'
           : 'text-slate-400 hover:bg-slate-800 hover:text-white'
-      }`}
+        }`}
     >
       {icon}
       {children}
@@ -224,64 +343,33 @@ function NavLink({
   );
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const isOnline = status === 'online';
-  return (
-    <div
-      className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium ${
-        isOnline ? 'bg-green-500/10 text-green-400' : 'bg-slate-700 text-slate-400'
-      }`}
-    >
-      <div className={`h-2 w-2 rounded-full ${isOnline ? 'bg-green-400' : 'bg-slate-500'}`} />
-      {status.charAt(0).toUpperCase() + status.slice(1)}
-    </div>
-  );
-}
-
 function StatCard({
   icon,
   label,
   value,
-  subtext,
+  subvalue,
   color,
 }: {
   icon: React.ReactNode;
   label: string;
   value: string;
-  subtext: string;
-  color: 'green' | 'blue' | 'orange' | 'purple';
+  subvalue?: string;
+  color: 'blue' | 'green' | 'purple' | 'orange' | 'red';
 }) {
   const colors = {
-    green: 'bg-green-500/10 text-green-400',
     blue: 'bg-blue-500/10 text-blue-400',
-    orange: 'bg-orange-500/10 text-orange-400',
+    green: 'bg-green-500/10 text-green-400',
     purple: 'bg-purple-500/10 text-purple-400',
+    orange: 'bg-orange-500/10 text-orange-400',
+    red: 'bg-red-500/10 text-red-400',
   };
 
   return (
     <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
       <div className={`mb-3 inline-flex rounded-lg p-2 ${colors[color]}`}>{icon}</div>
       <p className="text-sm text-slate-400">{label}</p>
-      <p className="text-2xl font-bold">{value}</p>
-      <p className="text-xs text-slate-500">{subtext}</p>
+      <p className="text-xl font-bold">{value}</p>
+      {subvalue && <p className="text-sm text-slate-500">{subvalue}</p>}
     </div>
-  );
-}
-
-function InfoRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between rounded-lg bg-slate-700/30 px-4 py-3">
-      <span className="text-sm text-slate-400">{label}</span>
-      <span className="font-medium">{value}</span>
-    </div>
-  );
-}
-
-function QuickAction({ icon, label }: { icon: React.ReactNode; label: string }) {
-  return (
-    <button className="flex w-full items-center gap-3 rounded-xl border border-slate-700/50 bg-slate-700/30 px-4 py-3 text-left transition-colors hover:border-slate-600 hover:bg-slate-700/50">
-      <div className="text-slate-400">{icon}</div>
-      <span className="font-medium">{label}</span>
-    </button>
   );
 }
