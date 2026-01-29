@@ -20,7 +20,9 @@ import {
   Car,
   Loader2,
   AlertCircle,
+  Power,
 } from 'lucide-react';
+import { useSettingsStore } from '@/stores/settingsStore';
 
 interface VehicleData {
   id: number;
@@ -54,8 +56,11 @@ export default function DashboardPage() {
   const [vehicleData, setVehicleData] = useState<VehicleData | null>(null);
   const [loading, setLoading] = useState(true);
   const [dataLoading, setDataLoading] = useState(false);
+  const [waking, setWaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isAsleep, setIsAsleep] = useState(false);
+
+  const { units, region } = useSettingsStore();
 
   // Fetch vehicles list on mount
   useEffect(() => {
@@ -80,7 +85,7 @@ export default function DashboardPage() {
       } else if (!data.success) {
         setError(data.error || 'Failed to fetch vehicles');
       }
-    } catch (err) {
+    } catch {
       setError('Failed to connect to Tesla');
     } finally {
       setLoading(false);
@@ -92,7 +97,7 @@ export default function DashboardPage() {
     setIsAsleep(false);
 
     try {
-      const response = await fetch(`/api/tesla/vehicle-data?id=${vehicleId}&region=eu`);
+      const response = await fetch(`/api/tesla/vehicle-data?id=${vehicleId}&region=${region}`);
       const data = await response.json();
 
       if (data.success) {
@@ -106,10 +111,60 @@ export default function DashboardPage() {
       } else {
         setError(data.error);
       }
-    } catch (err) {
+    } catch {
       setError('Failed to fetch vehicle data');
     } finally {
       setDataLoading(false);
+    }
+  };
+
+  const handleWakeAndRefresh = async () => {
+    if (!selectedVehicle) return;
+
+    setWaking(true);
+    setError(null);
+
+    try {
+      // Send wake command
+      const wakeResponse = await fetch(`/api/tesla/wake?region=${region}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vehicleId: selectedVehicle.id }),
+      });
+      const wakeData = await wakeResponse.json();
+
+      if (!wakeData.success) {
+        setError(wakeData.error || 'Failed to wake vehicle');
+        setWaking(false);
+        return;
+      }
+
+      // Wait for vehicle to wake up (poll every 2 seconds for up to 30 seconds)
+      let attempts = 0;
+      const maxAttempts = 15;
+
+      const pollForData = async () => {
+        attempts++;
+        const response = await fetch(`/api/tesla/vehicle-data?id=${selectedVehicle.id}&region=${region}`);
+        const data = await response.json();
+
+        if (data.success && data.state !== 'asleep') {
+          setVehicleData(data.vehicle);
+          setIsAsleep(false);
+          setWaking(false);
+        } else if (attempts < maxAttempts) {
+          setTimeout(pollForData, 2000);
+        } else {
+          setError('Vehicle is taking too long to wake up. Please try again.');
+          setWaking(false);
+        }
+      };
+
+      // Start polling after a short delay
+      setTimeout(pollForData, 3000);
+    } catch {
+      setError('Failed to wake vehicle');
+      setWaking(false);
     }
   };
 
@@ -117,6 +172,21 @@ export default function DashboardPage() {
     if (selectedVehicle) {
       fetchVehicleData(selectedVehicle.id);
     }
+  };
+
+  // Unit conversion helpers
+  const formatDistance = (miles: number) => {
+    if (units === 'metric') {
+      return `${Math.round(miles * 1.60934).toLocaleString()} km`;
+    }
+    return `${Math.round(miles).toLocaleString()} mi`;
+  };
+
+  const formatTemp = (celsius: number) => {
+    if (units === 'imperial') {
+      return `${Math.round(celsius * 9 / 5 + 32)}°F`;
+    }
+    return `${Math.round(celsius)}°C`;
   };
 
   if (loading) {
@@ -197,38 +267,69 @@ export default function DashboardPage() {
               ))}
             </select>
             <span
-              className={`rounded-full px-3 py-1 text-xs font-medium ${isAsleep
-                  ? 'bg-slate-700 text-slate-400'
-                  : 'bg-green-500/20 text-green-400'
+              className={`rounded-full px-3 py-1 text-xs font-medium ${waking
+                  ? 'bg-yellow-500/20 text-yellow-400'
+                  : isAsleep
+                    ? 'bg-slate-700 text-slate-400'
+                    : 'bg-green-500/20 text-green-400'
                 }`}
             >
-              {isAsleep ? 'Asleep' : 'Online'}
+              {waking ? 'Waking...' : isAsleep ? 'Asleep' : 'Online'}
             </span>
           </div>
 
-          <button
-            onClick={handleRefresh}
-            disabled={dataLoading}
-            className="flex items-center gap-2 rounded-lg bg-slate-800 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700"
-          >
-            <RefreshCw className={`h-4 w-4 ${dataLoading ? 'animate-spin' : ''}`} />
-            Refresh
-          </button>
+          <div className="flex gap-2">
+            {isAsleep && !waking && (
+              <button
+                onClick={handleWakeAndRefresh}
+                className="flex items-center gap-2 rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600"
+              >
+                <Power className="h-4 w-4" />
+                Wake & Refresh
+              </button>
+            )}
+            <button
+              onClick={handleRefresh}
+              disabled={dataLoading || waking}
+              className="flex items-center gap-2 rounded-lg bg-slate-800 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-4 w-4 ${dataLoading ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+          </div>
         </div>
 
+        {/* Error Message */}
+        {error && (
+          <div className="mb-6 rounded-xl bg-red-500/10 p-4 text-red-400">
+            <p>{error}</p>
+          </div>
+        )}
+
+        {/* Waking State */}
+        {waking && (
+          <div className="mb-8 flex flex-col items-center justify-center rounded-2xl border border-yellow-500/30 bg-yellow-500/10 py-16">
+            <Loader2 className="mb-4 h-12 w-12 animate-spin text-yellow-400" />
+            <h2 className="text-xl font-semibold text-yellow-400">Waking Vehicle...</h2>
+            <p className="mt-2 text-slate-400">
+              This may take up to 30 seconds
+            </p>
+          </div>
+        )}
+
         {/* Asleep State */}
-        {isAsleep && (
+        {isAsleep && !waking && (
           <div className="mb-8 flex flex-col items-center justify-center rounded-2xl border border-slate-700/50 bg-slate-800/30 py-16">
             <Moon className="mb-4 h-12 w-12 text-slate-500" />
             <h2 className="text-xl font-semibold text-slate-400">Vehicle is Sleeping</h2>
             <p className="mt-2 text-slate-500">
-              Data will be available when the vehicle wakes up
+              Click &quot;Wake &amp; Refresh&quot; to get live data
             </p>
           </div>
         )}
 
         {/* Vehicle Data */}
-        {vehicleData && !isAsleep && (
+        {vehicleData && !isAsleep && !waking && (
           <>
             {/* Battery Card */}
             <div className="mb-8 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
@@ -257,7 +358,7 @@ export default function DashboardPage() {
                 </div>
                 <div className="mt-2 flex justify-between text-xs text-slate-500">
                   <span>Limit: {vehicleData.charge_limit_soc}%</span>
-                  <span>~{Math.round(vehicleData.battery_range)} mi range</span>
+                  <span>~{formatDistance(vehicleData.battery_range)} range</span>
                 </div>
               </div>
             </div>
@@ -267,14 +368,14 @@ export default function DashboardPage() {
               <StatCard
                 icon={<Gauge className="h-5 w-5" />}
                 label="Odometer"
-                value={`${Math.round(vehicleData.odometer).toLocaleString()} mi`}
+                value={formatDistance(vehicleData.odometer)}
                 color="blue"
               />
               <StatCard
                 icon={<Thermometer className="h-5 w-5" />}
                 label="Temperature"
-                value={`${Math.round(vehicleData.inside_temp)}°C inside`}
-                subvalue={`${Math.round(vehicleData.outside_temp)}°C outside`}
+                value={`${formatTemp(vehicleData.inside_temp)} inside`}
+                subvalue={`${formatTemp(vehicleData.outside_temp)} outside`}
                 color="orange"
               />
               <StatCard
@@ -308,7 +409,7 @@ export default function DashboardPage() {
         )}
 
         {/* Loading State */}
-        {dataLoading && !vehicleData && !isAsleep && (
+        {dataLoading && !vehicleData && !isAsleep && !waking && (
           <div className="flex items-center justify-center py-16">
             <Loader2 className="h-8 w-8 animate-spin text-red-500" />
           </div>

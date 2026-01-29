@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
     Zap,
@@ -13,28 +13,43 @@ import {
     Bell,
     Globe,
     Download,
-    Save,
-    Loader2,
+    Check,
 } from 'lucide-react';
+import { useSettingsStore } from '@/stores/settingsStore';
 
 export default function SettingsPage() {
-    const [saving, setSaving] = useState(false);
-    const [settings, setSettings] = useState({
-        pollingDriving: 30,
-        pollingCharging: 300,
-        pollingParked: 1800,
-        pollingSleeping: 3600,
-        units: 'imperial',
-        notifications: true,
-        region: 'eu',
-    });
+    const [saved, setSaved] = useState(false);
+    const [mounted, setMounted] = useState(false);
 
-    const handleSave = async () => {
-        setSaving(true);
-        // Simulate save
-        await new Promise((r) => setTimeout(r, 1000));
-        setSaving(false);
+    const {
+        pollingConfig,
+        region,
+        units,
+        notifications,
+        setPollingConfig,
+        setRegion,
+        setUnits,
+        setNotifications,
+    } = useSettingsStore();
+
+    // Handle hydration
+    useEffect(() => {
+        setMounted(true);
+    }, []);
+
+    const showSaved = () => {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
     };
+
+    // Show loading while hydrating to avoid hydration mismatch
+    if (!mounted) {
+        return (
+            <div className="flex min-h-screen items-center justify-center">
+                <div className="h-8 w-8 animate-spin rounded-full border-2 border-red-500 border-t-transparent" />
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen">
@@ -70,6 +85,14 @@ export default function SettingsPage() {
                 </div>
             </header>
 
+            {/* Saved Toast */}
+            {saved && (
+                <div className="fixed right-6 top-24 z-50 flex items-center gap-2 rounded-lg bg-green-500 px-4 py-2 text-white shadow-lg">
+                    <Check className="h-4 w-4" />
+                    Settings saved!
+                </div>
+            )}
+
             {/* Main Content */}
             <main className="mx-auto max-w-3xl px-6 py-8">
                 <div className="mb-8">
@@ -87,35 +110,43 @@ export default function SettingsPage() {
                         <div className="grid gap-4 sm:grid-cols-2">
                             <PollingInput
                                 label="While Driving"
-                                value={settings.pollingDriving}
-                                onChange={(v) => setSettings({ ...settings, pollingDriving: v })}
+                                value={pollingConfig.drivingInterval}
+                                onChange={(v) => {
+                                    setPollingConfig({ drivingInterval: v });
+                                    showSaved();
+                                }}
                                 min={10}
                                 max={60}
-                                unit="seconds"
                             />
                             <PollingInput
                                 label="While Charging"
-                                value={settings.pollingCharging}
-                                onChange={(v) => setSettings({ ...settings, pollingCharging: v })}
+                                value={pollingConfig.chargingInterval}
+                                onChange={(v) => {
+                                    setPollingConfig({ chargingInterval: v });
+                                    showSaved();
+                                }}
                                 min={60}
                                 max={900}
-                                unit="seconds"
                             />
                             <PollingInput
                                 label="While Parked"
-                                value={settings.pollingParked}
-                                onChange={(v) => setSettings({ ...settings, pollingParked: v })}
+                                value={pollingConfig.parkedInterval}
+                                onChange={(v) => {
+                                    setPollingConfig({ parkedInterval: v });
+                                    showSaved();
+                                }}
                                 min={300}
                                 max={3600}
-                                unit="seconds"
                             />
                             <PollingInput
                                 label="While Sleeping"
-                                value={settings.pollingSleeping}
-                                onChange={(v) => setSettings({ ...settings, pollingSleeping: v })}
+                                value={pollingConfig.sleepingInterval}
+                                onChange={(v) => {
+                                    setPollingConfig({ sleepingInterval: v });
+                                    showSaved();
+                                }}
                                 min={1800}
                                 max={7200}
-                                unit="seconds"
                             />
                         </div>
                         <p className="mt-4 text-sm text-slate-500">
@@ -134,16 +165,19 @@ export default function SettingsPage() {
                                 { id: 'na', label: 'North America' },
                                 { id: 'eu', label: 'Europe' },
                                 { id: 'cn', label: 'China' },
-                            ].map((region) => (
+                            ].map((r) => (
                                 <button
-                                    key={region.id}
-                                    onClick={() => setSettings({ ...settings, region: region.id })}
-                                    className={`rounded-lg px-4 py-2 text-sm transition-colors ${settings.region === region.id
+                                    key={r.id}
+                                    onClick={() => {
+                                        setRegion(r.id as 'na' | 'eu' | 'cn');
+                                        showSaved();
+                                    }}
+                                    className={`rounded-lg px-4 py-2 text-sm transition-colors ${region === r.id
                                             ? 'bg-red-500/10 text-red-400 ring-1 ring-red-500/30'
                                             : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
                                         }`}
                                 >
-                                    {region.label}
+                                    {r.label}
                                 </button>
                             ))}
                         </div>
@@ -159,16 +193,19 @@ export default function SettingsPage() {
                             {[
                                 { id: 'imperial', label: 'Imperial (mi, °F)' },
                                 { id: 'metric', label: 'Metric (km, °C)' },
-                            ].map((unit) => (
+                            ].map((u) => (
                                 <button
-                                    key={unit.id}
-                                    onClick={() => setSettings({ ...settings, units: unit.id })}
-                                    className={`rounded-lg px-4 py-2 text-sm transition-colors ${settings.units === unit.id
+                                    key={u.id}
+                                    onClick={() => {
+                                        setUnits(u.id as 'imperial' | 'metric');
+                                        showSaved();
+                                    }}
+                                    className={`rounded-lg px-4 py-2 text-sm transition-colors ${units === u.id
                                             ? 'bg-red-500/10 text-red-400 ring-1 ring-red-500/30'
                                             : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
                                         }`}
                                 >
-                                    {unit.label}
+                                    {u.label}
                                 </button>
                             ))}
                         </div>
@@ -183,12 +220,15 @@ export default function SettingsPage() {
                         <label className="flex cursor-pointer items-center justify-between">
                             <span className="text-slate-300">Enable notifications</span>
                             <button
-                                onClick={() => setSettings({ ...settings, notifications: !settings.notifications })}
-                                className={`relative h-6 w-11 rounded-full transition-colors ${settings.notifications ? 'bg-red-500' : 'bg-slate-600'
+                                onClick={() => {
+                                    setNotifications(!notifications);
+                                    showSaved();
+                                }}
+                                className={`relative h-6 w-11 rounded-full transition-colors ${notifications ? 'bg-red-500' : 'bg-slate-600'
                                     }`}
                             >
                                 <span
-                                    className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${settings.notifications ? 'translate-x-5' : ''
+                                    className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${notifications ? 'translate-x-5' : ''
                                         }`}
                                 />
                             </button>
@@ -212,27 +252,6 @@ export default function SettingsPage() {
                             </button>
                         </div>
                     </SettingsSection>
-
-                    {/* Save Button */}
-                    <div className="flex justify-end pt-4">
-                        <button
-                            onClick={handleSave}
-                            disabled={saving}
-                            className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-red-500 to-red-600 px-6 py-3 font-semibold text-white shadow-lg shadow-red-500/25 transition-all hover:shadow-xl disabled:opacity-50"
-                        >
-                            {saving ? (
-                                <>
-                                    <Loader2 className="h-5 w-5 animate-spin" />
-                                    Saving...
-                                </>
-                            ) : (
-                                <>
-                                    <Save className="h-5 w-5" />
-                                    Save Settings
-                                </>
-                            )}
-                        </button>
-                    </div>
                 </div>
             </main>
         </div>
@@ -295,14 +314,12 @@ function PollingInput({
     onChange,
     min,
     max,
-    unit,
 }: {
     label: string;
     value: number;
     onChange: (value: number) => void;
     min: number;
     max: number;
-    unit: string;
 }) {
     const formatValue = (v: number) => {
         if (v >= 3600) return `${v / 3600}h`;
