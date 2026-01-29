@@ -110,9 +110,9 @@ export default function SettingsPage() {
                         <div className="grid gap-4 sm:grid-cols-2">
                             <PollingInput
                                 label="While Driving"
-                                value={pollingConfig.drivingInterval}
+                                value={pollingConfig.driving}
                                 onChange={(v) => {
-                                    setPollingConfig({ drivingInterval: v });
+                                    setPollingConfig({ driving: v });
                                     showSaved();
                                 }}
                                 min={10}
@@ -120,9 +120,9 @@ export default function SettingsPage() {
                             />
                             <PollingInput
                                 label="While Charging"
-                                value={pollingConfig.chargingInterval}
+                                value={pollingConfig.charging}
                                 onChange={(v) => {
-                                    setPollingConfig({ chargingInterval: v });
+                                    setPollingConfig({ charging: v });
                                     showSaved();
                                 }}
                                 min={60}
@@ -130,9 +130,9 @@ export default function SettingsPage() {
                             />
                             <PollingInput
                                 label="While Parked"
-                                value={pollingConfig.parkedInterval}
+                                value={pollingConfig.parked}
                                 onChange={(v) => {
-                                    setPollingConfig({ parkedInterval: v });
+                                    setPollingConfig({ parked: v });
                                     showSaved();
                                 }}
                                 min={300}
@@ -140,9 +140,9 @@ export default function SettingsPage() {
                             />
                             <PollingInput
                                 label="While Sleeping"
-                                value={pollingConfig.sleepingInterval}
+                                value={pollingConfig.sleeping}
                                 onChange={(v) => {
-                                    setPollingConfig({ sleepingInterval: v });
+                                    setPollingConfig({ sleeping: v });
                                     showSaved();
                                 }}
                                 min={1800}
@@ -173,8 +173,8 @@ export default function SettingsPage() {
                                         showSaved();
                                     }}
                                     className={`rounded-lg px-4 py-2 text-sm transition-colors ${region === r.id
-                                            ? 'bg-red-500/10 text-red-400 ring-1 ring-red-500/30'
-                                            : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
+                                        ? 'bg-red-500/10 text-red-400 ring-1 ring-red-500/30'
+                                        : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
                                         }`}
                                 >
                                     {r.label}
@@ -201,8 +201,8 @@ export default function SettingsPage() {
                                         showSaved();
                                     }}
                                     className={`rounded-lg px-4 py-2 text-sm transition-colors ${units === u.id
-                                            ? 'bg-red-500/10 text-red-400 ring-1 ring-red-500/30'
-                                            : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
+                                        ? 'bg-red-500/10 text-red-400 ring-1 ring-red-500/30'
+                                        : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
                                         }`}
                                 >
                                     {u.label}
@@ -273,8 +273,8 @@ function NavLink({
         <Link
             href={href}
             className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${active
-                    ? 'bg-red-500/10 text-red-400'
-                    : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                ? 'bg-red-500/10 text-red-400'
+                : 'text-slate-400 hover:bg-slate-800 hover:text-white'
                 }`}
         >
             {icon}
