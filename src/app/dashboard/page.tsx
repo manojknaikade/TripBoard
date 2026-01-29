@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import {
   Zap,
@@ -21,6 +21,9 @@ import {
   Loader2,
   AlertCircle,
   Power,
+  Clock,
+  Cpu,
+  BatteryCharging,
 } from 'lucide-react';
 import { useSettingsStore } from '@/stores/settingsStore';
 import dynamic from 'next/dynamic';
@@ -44,6 +47,10 @@ interface VehicleData {
   battery_range: number;
   charging_state: string;
   charge_limit_soc: number;
+  charge_rate: number;
+  charger_power: number;
+  time_to_full_charge: number;
+  charge_energy_added: number;
   inside_temp: number;
   outside_temp: number;
   odometer: number;
@@ -52,6 +59,13 @@ interface VehicleData {
   latitude: number;
   longitude: number;
   sentry_mode: boolean;
+  car_version: string;
+  power: number;
+}
+
+interface CachedData {
+  vehicle: VehicleData;
+  timestamp: number;
 }
 
 interface Vehicle {
@@ -61,17 +75,40 @@ interface Vehicle {
   state: string;
 }
 
+const CACHE_KEY = 'tripboard_vehicle_cache';
+
+function formatTimeAgo(timestamp: number): string {
+  const seconds = Math.floor((Date.now() - timestamp) / 1000);
+
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} hours ago`;
+  return `${Math.floor(seconds / 86400)} days ago`;
+}
+
 export default function DashboardPage() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | null>(null);
   const [vehicleData, setVehicleData] = useState<VehicleData | null>(null);
+  const [cachedData, setCachedData] = useState<CachedData | null>(null);
   const [loading, setLoading] = useState(true);
   const [dataLoading, setDataLoading] = useState(false);
   const [waking, setWaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isAsleep, setIsAsleep] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
 
   const { units, region } = useSettingsStore();
+
+  // Load cached data on mount
+  useEffect(() => {
+    const cached = localStorage.getItem(CACHE_KEY);
+    if (cached) {
+      try {
+        setCachedData(JSON.parse(cached));
+      } catch { /* ignore */ }
+    }
+  }, []);
 
   // Fetch vehicles list on mount
   useEffect(() => {
@@ -103,7 +140,7 @@ export default function DashboardPage() {
     }
   };
 
-  const fetchVehicleData = async (vehicleId: number) => {
+  const fetchVehicleData = useCallback(async (vehicleId: number) => {
     setDataLoading(true);
     setIsAsleep(false);
 
@@ -115,9 +152,18 @@ export default function DashboardPage() {
         if (data.state === 'asleep') {
           setIsAsleep(true);
           setVehicleData(null);
+          // Keep using cached data but don't update it
         } else {
           setVehicleData(data.vehicle);
+          setLastUpdated(data.timestamp || Date.now());
           setIsAsleep(false);
+          // Cache the data
+          const cacheEntry: CachedData = {
+            vehicle: data.vehicle,
+            timestamp: data.timestamp || Date.now(),
+          };
+          setCachedData(cacheEntry);
+          localStorage.setItem(CACHE_KEY, JSON.stringify(cacheEntry));
         }
       } else {
         setError(data.error);
@@ -127,7 +173,7 @@ export default function DashboardPage() {
     } finally {
       setDataLoading(false);
     }
-  };
+  }, [region]);
 
   const handleWakeAndRefresh = async () => {
     if (!selectedVehicle) return;
@@ -136,7 +182,6 @@ export default function DashboardPage() {
     setError(null);
 
     try {
-      // Send wake command
       const wakeResponse = await fetch(`/api/tesla/wake?region=${region}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -150,7 +195,6 @@ export default function DashboardPage() {
         return;
       }
 
-      // Wait for vehicle to wake up (poll every 2 seconds for up to 30 seconds)
       let attempts = 0;
       const maxAttempts = 15;
 
@@ -161,8 +205,16 @@ export default function DashboardPage() {
 
         if (data.success && data.state !== 'asleep') {
           setVehicleData(data.vehicle);
+          setLastUpdated(data.timestamp || Date.now());
           setIsAsleep(false);
           setWaking(false);
+          // Cache the data
+          const cacheEntry: CachedData = {
+            vehicle: data.vehicle,
+            timestamp: data.timestamp || Date.now(),
+          };
+          setCachedData(cacheEntry);
+          localStorage.setItem(CACHE_KEY, JSON.stringify(cacheEntry));
         } else if (attempts < maxAttempts) {
           setTimeout(pollForData, 2000);
         } else {
@@ -171,7 +223,6 @@ export default function DashboardPage() {
         }
       };
 
-      // Start polling after a short delay
       setTimeout(pollForData, 3000);
     } catch {
       setError('Failed to wake vehicle');
@@ -199,6 +250,10 @@ export default function DashboardPage() {
     }
     return `${Math.round(celsius)}°C`;
   };
+
+  // Data to display (current or cached)
+  const displayData = vehicleData || (isAsleep && cachedData?.vehicle) || null;
+  const displayTimestamp = vehicleData ? lastUpdated : cachedData?.timestamp;
 
   if (loading) {
     return (
@@ -279,14 +334,20 @@ export default function DashboardPage() {
             </select>
             <span
               className={`rounded-full px-3 py-1 text-xs font-medium ${waking
-                ? 'bg-yellow-500/20 text-yellow-400'
-                : isAsleep
-                  ? 'bg-slate-700 text-slate-400'
-                  : 'bg-green-500/20 text-green-400'
+                  ? 'bg-yellow-500/20 text-yellow-400'
+                  : isAsleep
+                    ? 'bg-slate-700 text-slate-400'
+                    : 'bg-green-500/20 text-green-400'
                 }`}
             >
               {waking ? 'Waking...' : isAsleep ? 'Asleep' : 'Online'}
             </span>
+            {displayTimestamp && (
+              <span className="flex items-center gap-1 text-xs text-slate-500">
+                <Clock className="h-3 w-3" />
+                {formatTimeAgo(displayTimestamp)}
+              </span>
+            )}
           </div>
 
           <div className="flex gap-2">
@@ -328,8 +389,8 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Asleep State */}
-        {isAsleep && !waking && (
+        {/* Asleep State with Cached Data */}
+        {isAsleep && !waking && !cachedData && (
           <div className="mb-8 flex flex-col items-center justify-center rounded-2xl border border-slate-700/50 bg-slate-800/30 py-16">
             <Moon className="mb-4 h-12 w-12 text-slate-500" />
             <h2 className="text-xl font-semibold text-slate-400">Vehicle is Sleeping</h2>
@@ -339,9 +400,17 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Vehicle Data */}
-        {vehicleData && !isAsleep && !waking && (
+        {/* Vehicle Data (live or cached) */}
+        {displayData && !waking && (
           <>
+            {/* Cached Data Banner */}
+            {isAsleep && cachedData && (
+              <div className="mb-4 flex items-center gap-2 rounded-lg bg-slate-700/50 px-4 py-2 text-sm text-slate-400">
+                <Moon className="h-4 w-4" />
+                <span>Vehicle is sleeping. Showing last known data from {formatTimeAgo(cachedData.timestamp)}</span>
+              </div>
+            )}
+
             {/* Battery Card */}
             <div className="mb-8 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
               <div className="mb-4 flex items-center justify-between">
@@ -350,7 +419,7 @@ export default function DashboardPage() {
                   <h2 className="text-lg font-semibold">Battery</h2>
                 </div>
                 <span className="text-sm text-slate-400">
-                  {vehicleData.charging_state === 'Charging' ? '⚡ Charging' : vehicleData.charging_state}
+                  {displayData.charging_state === 'Charging' ? '⚡ Charging' : displayData.charging_state}
                 </span>
               </div>
 
@@ -358,20 +427,44 @@ export default function DashboardPage() {
               <div className="mb-4">
                 <div className="mb-2 flex justify-between text-sm">
                   <span className="text-slate-400">Charge Level</span>
-                  <span className="font-semibold">{vehicleData.battery_level}%</span>
+                  <span className="font-semibold">{displayData.battery_level}%</span>
                 </div>
                 <div className="h-4 w-full overflow-hidden rounded-full bg-slate-700">
                   <div
-                    className={`h-full rounded-full transition-all ${vehicleData.battery_level > 20 ? 'bg-green-500' : 'bg-red-500'
+                    className={`h-full rounded-full transition-all ${displayData.battery_level > 20 ? 'bg-green-500' : 'bg-red-500'
                       }`}
-                    style={{ width: `${vehicleData.battery_level}%` }}
+                    style={{ width: `${displayData.battery_level}%` }}
                   />
                 </div>
                 <div className="mt-2 flex justify-between text-xs text-slate-500">
-                  <span>Limit: {vehicleData.charge_limit_soc}%</span>
-                  <span>~{formatDistance(vehicleData.battery_range)} range</span>
+                  <span>Limit: {displayData.charge_limit_soc}%</span>
+                  <span>~{formatDistance(displayData.battery_range)} range</span>
                 </div>
               </div>
+
+              {/* Charging Info */}
+              {displayData.charging_state === 'Charging' && (
+                <div className="mt-4 grid grid-cols-3 gap-4 rounded-xl bg-green-500/10 p-4">
+                  <div className="text-center">
+                    <p className="text-xs text-slate-400">Time to Full</p>
+                    <p className="text-lg font-semibold text-green-400">
+                      {displayData.time_to_full_charge ? `${displayData.time_to_full_charge.toFixed(1)}h` : '-'}
+                    </p>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-xs text-slate-400">Power</p>
+                    <p className="text-lg font-semibold text-green-400">
+                      {displayData.charger_power ? `${displayData.charger_power} kW` : '-'}
+                    </p>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-xs text-slate-400">Energy Added</p>
+                    <p className="text-lg font-semibold text-green-400">
+                      {displayData.charge_energy_added ? `${displayData.charge_energy_added.toFixed(1)} kWh` : '-'}
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Stats Grid */}
@@ -379,45 +472,70 @@ export default function DashboardPage() {
               <StatCard
                 icon={<Gauge className="h-5 w-5" />}
                 label="Odometer"
-                value={formatDistance(vehicleData.odometer)}
+                value={formatDistance(displayData.odometer)}
                 color="blue"
               />
               <StatCard
                 icon={<Thermometer className="h-5 w-5" />}
                 label="Temperature"
-                value={`${formatTemp(vehicleData.inside_temp)} inside`}
-                subvalue={`${formatTemp(vehicleData.outside_temp)} outside`}
+                value={`${formatTemp(displayData.inside_temp)} inside`}
+                subvalue={`${formatTemp(displayData.outside_temp)} outside`}
                 color="orange"
               />
               <StatCard
-                icon={vehicleData.locked ? <Lock className="h-5 w-5" /> : <Unlock className="h-5 w-5" />}
+                icon={displayData.locked ? <Lock className="h-5 w-5" /> : <Unlock className="h-5 w-5" />}
                 label="Security"
-                value={vehicleData.locked ? 'Locked' : 'Unlocked'}
-                subvalue={vehicleData.sentry_mode ? 'Sentry On' : 'Sentry Off'}
-                color={vehicleData.locked ? 'green' : 'red'}
+                value={displayData.locked ? 'Locked' : 'Unlocked'}
+                subvalue={displayData.sentry_mode ? 'Sentry On' : 'Sentry Off'}
+                color={displayData.locked ? 'green' : 'red'}
               />
               <StatCard
-                icon={vehicleData.is_climate_on ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+                icon={displayData.is_climate_on ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
                 label="Climate"
-                value={vehicleData.is_climate_on ? 'On' : 'Off'}
+                value={displayData.is_climate_on ? 'On' : 'Off'}
                 color="purple"
               />
             </div>
 
+            {/* Second Row of Stats */}
+            <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <StatCard
+                icon={<Cpu className="h-5 w-5" />}
+                label="Software"
+                value={displayData.car_version?.split(' ')[0] || 'Unknown'}
+                color="blue"
+              />
+              <StatCard
+                icon={<BatteryCharging className="h-5 w-5" />}
+                label="Range"
+                value={formatDistance(displayData.battery_range)}
+                subvalue={`${displayData.battery_level}% charged`}
+                color="green"
+              />
+              <StatCard
+                icon={<MapPin className="h-5 w-5" />}
+                label="Location"
+                value={displayData.latitude && displayData.longitude
+                  ? `${displayData.latitude.toFixed(3)}, ${displayData.longitude.toFixed(3)}`
+                  : 'Unknown'}
+                color="red"
+              />
+            </div>
+
             {/* Location Map */}
-            {vehicleData.latitude && vehicleData.longitude && (
+            {displayData.latitude && displayData.longitude && (
               <div className="mt-6 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
                 <div className="mb-4 flex items-center gap-3">
                   <MapPin className="h-5 w-5 text-red-400" />
-                  <span className="text-slate-400">Location</span>
-                  <span className="text-sm">
-                    {vehicleData.latitude.toFixed(4)}, {vehicleData.longitude.toFixed(4)}
-                  </span>
+                  <span className="font-medium">Vehicle Location</span>
+                  {isAsleep && (
+                    <span className="text-xs text-slate-500">(last known)</span>
+                  )}
                 </div>
                 <VehicleMap
-                  latitude={vehicleData.latitude}
-                  longitude={vehicleData.longitude}
-                  vehicleName={vehicleData.display_name}
+                  latitude={displayData.latitude}
+                  longitude={displayData.longitude}
+                  vehicleName={displayData.display_name}
                 />
               </div>
             )}
@@ -425,7 +543,7 @@ export default function DashboardPage() {
         )}
 
         {/* Loading State */}
-        {dataLoading && !vehicleData && !isAsleep && !waking && (
+        {dataLoading && !displayData && !isAsleep && !waking && (
           <div className="flex items-center justify-center py-16">
             <Loader2 className="h-8 w-8 animate-spin text-red-500" />
           </div>
@@ -450,8 +568,8 @@ function NavLink({
     <Link
       href={href}
       className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${active
-        ? 'bg-red-500/10 text-red-400'
-        : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+          ? 'bg-red-500/10 text-red-400'
+          : 'text-slate-400 hover:bg-slate-800 hover:text-white'
         }`}
     >
       {icon}
