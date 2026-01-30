@@ -87,12 +87,30 @@ export async function POST(request: NextRequest) {
             }
         );
 
-        const data = await response.json();
+        // Get response as text first to handle HTML errors
+        const responseText = await response.text();
+
+        let data;
+        try {
+            data = JSON.parse(responseText);
+        } catch {
+            // Tesla returned HTML (error page)
+            console.error('Tesla API returned non-JSON:', responseText.slice(0, 500));
+            return NextResponse.json({
+                success: false,
+                error: `Tesla API error (${response.status}): returned HTML instead of JSON`,
+                hint: response.status === 401 ? 'Access token may be expired' :
+                    response.status === 403 ? 'Virtual key not paired with vehicle' :
+                        response.status === 404 ? 'Vehicle not found or telemetry not supported' :
+                            'Check Tesla API status',
+                status: response.status,
+            }, { status: response.status });
+        }
 
         if (!response.ok) {
             return NextResponse.json({
                 success: false,
-                error: data.error || `Failed to configure telemetry: ${response.status}`,
+                error: data.error || data.error_description || `Failed to configure telemetry: ${response.status}`,
                 details: data,
             }, { status: response.status });
         }
