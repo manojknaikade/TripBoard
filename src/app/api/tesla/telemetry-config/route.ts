@@ -66,9 +66,7 @@ export async function POST(request: NextRequest) {
             ca: null, // Use system CAs (Let's Encrypt)
             fields: {
                 // Location tracking
-                EstLat: { interval_seconds: 10 },
-                EstLng: { interval_seconds: 10 },
-                EstHeading: { interval_seconds: 10 },
+                Location: { interval_seconds: 10 },
                 // Speed & driving
                 VehicleSpeed: { interval_seconds: 5 },
                 Odometer: { interval_seconds: 60 },
