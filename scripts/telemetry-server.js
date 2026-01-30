@@ -7,16 +7,20 @@ const WebSocket = require("ws");
 const express = require("express");
 const { createClient } = require("@supabase/supabase-js");
 
-// Configuration
+// Configuration from environment variables
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || "";
 const HTTP_PORT = process.env.HTTP_PORT || 443;
-const USE_HTTPS = fs.existsSync("/etc/letsencrypt/live/tripboard.manojnaikade.com/fullchain.pem");
+const CERT_PATH = "/etc/letsencrypt/live/tripboard.manojnaikade.com";
+const USE_HTTPS = fs.existsSync(`${CERT_PATH}/fullchain.pem`);
 
 // Initialize Supabase client
 const supabase = SUPABASE_URL && SUPABASE_SERVICE_KEY
     ? createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
     : null;
+
+console.log("Supabase URL:", SUPABASE_URL ? "configured" : "missing");
+console.log("Supabase Key:", SUPABASE_SERVICE_KEY ? "configured" : "missing");
 
 // Express app for health checks
 const app = express();
@@ -24,7 +28,7 @@ app.use(express.json());
 
 app.get("/health", (req, res) => res.json({ status: "ok" }));
 app.get("/", (req, res) => res.json({
-    name: "Tesla Fleet Telemetry",
+    name: "Tesla Fleet Telemetry Server",
     status: "running",
     supabase: !!supabase,
     https: USE_HTTPS,
@@ -47,39 +51,45 @@ const activeTrips = new Map();
 
 // Process incoming telemetry data
 async function processTelemetryData(data) {
-    console.log("Received telemetry:", JSON.stringify(data).slice(0, 200));
+    console.log("Received telemetry:", JSON.stringify(data).slice(0, 300));
 
-    const vehicleId = data.vin || data.vehicle_id;
+    const vehicleId = data.vin || data.vehicle_id || data.VIN;
     if (!vehicleId) {
         console.log("No vehicle ID in telemetry data");
         return;
     }
 
-    // Extract relevant fields
-    const telemetryEvent = {
-        vehicle_id: vehicleId,
-        event_type: data.type || "unknown",
-        event_data: data,
-        latitude: data.location?.latitude || data.EstLat,
-        longitude: data.location?.longitude || data.EstLng,
-        speed: data.VehicleSpeed,
-        battery_level: data.BatteryLevel,
-        created_at: new Date().toISOString(),
-    };
+    // Extract common fields from Tesla telemetry format
+    const latitude = data.location?.latitude || data.EstLat || data.Latitude;
+    const longitude = data.location?.longitude || data.EstLng || data.Longitude;
+    const speed = data.VehicleSpeed || data.speed || 0;
+    const batteryLevel = data.BatteryLevel || data.Soc || data.battery_level;
 
-    // Store telemetry event
+    // Store telemetry event in Supabase
     if (supabase) {
+        const telemetryEvent = {
+            vehicle_id: String(vehicleId),
+            event_type: data.type || data.msgType || "unknown",
+            event_data: data,
+            latitude: latitude,
+            longitude: longitude,
+            speed: speed,
+            battery_level: batteryLevel,
+        };
+
         const { error } = await supabase
             .from("telemetry_events")
             .insert(telemetryEvent);
 
         if (error) {
-            console.error("Supabase insert error:", error);
+            console.error("Supabase telemetry insert error:", error);
+        } else {
+            console.log("Telemetry saved for vehicle:", vehicleId);
         }
     }
 
     // Trip detection logic
-    await detectTripState(vehicleId, telemetryEvent);
+    await detectTripState(vehicleId, { latitude, longitude, speed, batteryLevel });
 }
 
 // Detect if vehicle is starting/ending a trip
@@ -94,71 +104,71 @@ async function detectTripState(vehicleId, event) {
         const { data: trip, error } = await supabase
             .from("trips")
             .insert({
-                vehicle_id: vehicleId,
-                started_at: new Date().toISOString(),
+                vehicle_id: String(vehicleId),
+                start_time: new Date().toISOString(),
                 start_latitude: event.latitude,
                 start_longitude: event.longitude,
-                start_battery_level: event.battery_level,
-                status: "in_progress",
+                start_battery_pct: event.batteryLevel,
+                is_complete: false,
             })
             .select()
             .single();
 
-        if (!error && trip) {
+        if (error) {
+            console.error("Trip start error:", error);
+        } else if (trip) {
             activeTrips.set(vehicleId, {
                 tripId: trip.id,
-                startOdometer: event.odometer,
                 maxSpeed: event.speed || 0,
                 speedReadings: [event.speed || 0],
-                lastUpdate: Date.now(),
+                lastMovingTime: Date.now(),
             });
+            console.log("Trip started:", trip.id);
         }
     }
 
-    // Update active trip with telemetry
-    if (hasActiveTrip) {
+    // Update active trip tracking
+    if (hasActiveTrip && isMoving) {
         const tripData = activeTrips.get(vehicleId);
-        tripData.lastUpdate = Date.now();
+        tripData.lastMovingTime = Date.now();
 
         if (event.speed > tripData.maxSpeed) {
             tripData.maxSpeed = event.speed;
         }
-        tripData.speedReadings.push(event.speed || 0);
-
-        // Link telemetry event to trip
-        if (supabase && event.id) {
-            await supabase
-                .from("telemetry_events")
-                .update({ trip_id: tripData.tripId })
-                .eq("id", event.id);
-        }
+        tripData.speedReadings.push(event.speed);
     }
 
     // End trip if not moving for 5+ minutes
-    if (hasActiveTrip && !isMoving) {
+    if (hasActiveTrip) {
         const tripData = activeTrips.get(vehicleId);
-        const idleMinutes = (Date.now() - tripData.lastUpdate) / 60000;
+        const idleMinutes = (Date.now() - tripData.lastMovingTime) / 60000;
 
-        if (idleMinutes >= 5) {
-            console.log(`Ending trip for vehicle ${vehicleId}`);
+        if (idleMinutes >= 5 && !isMoving) {
+            console.log(`Ending trip for vehicle ${vehicleId} (idle ${idleMinutes.toFixed(1)} min)`);
 
             const avgSpeed = tripData.speedReadings.length > 0
                 ? tripData.speedReadings.reduce((a, b) => a + b, 0) / tripData.speedReadings.length
                 : 0;
 
             if (supabase) {
-                await supabase
+                const { error } = await supabase
                     .from("trips")
                     .update({
-                        ended_at: new Date().toISOString(),
+                        end_time: new Date().toISOString(),
                         end_latitude: event.latitude,
                         end_longitude: event.longitude,
-                        end_battery_level: event.battery_level,
-                        max_speed: tripData.maxSpeed,
-                        avg_speed: avgSpeed,
-                        status: "completed",
+                        end_battery_pct: event.batteryLevel,
+                        max_speed_mph: tripData.maxSpeed,
+                        avg_speed_mph: avgSpeed,
+                        is_complete: true,
                     })
                     .eq("id", tripData.tripId);
+
+                if (error) {
+                    console.error("Trip end error:", error);
+                } else {
+                    console.log("Trip ended:", tripData.tripId);
+                }
             }
 
             activeTrips.delete(vehicleId);
@@ -170,8 +180,8 @@ async function detectTripState(vehicleId, event) {
 let server;
 if (USE_HTTPS) {
     const options = {
-        cert: fs.readFileSync("/etc/letsencrypt/live/tripboard.manojnaikade.com/fullchain.pem"),
-        key: fs.readFileSync("/etc/letsencrypt/live/tripboard.manojnaikade.com/privkey.pem"),
+        cert: fs.readFileSync(`${CERT_PATH}/fullchain.pem`),
+        key: fs.readFileSync(`${CERT_PATH}/privkey.pem`),
     };
     server = https.createServer(options, app);
     console.log("Starting HTTPS server...");
@@ -181,7 +191,7 @@ if (USE_HTTPS) {
     console.log("Starting HTTP server (no TLS certs found)...");
 }
 
-// WebSocket server for Tesla telemetry
+// WebSocket server for Tesla telemetry streaming
 const wss = new WebSocket.Server({ server });
 
 wss.on("connection", (ws, req) => {
@@ -190,7 +200,21 @@ wss.on("connection", (ws, req) => {
 
     ws.on("message", async (data) => {
         try {
-            const message = JSON.parse(data.toString());
+            // Tesla sends Protocol Buffers, but may also send JSON
+            let message;
+            if (Buffer.isBuffer(data)) {
+                // Try to parse as JSON first (some implementations use JSON)
+                try {
+                    message = JSON.parse(data.toString());
+                } catch {
+                    // It's likely Protocol Buffers - log raw for now
+                    console.log("Received binary data:", data.length, "bytes");
+                    // TODO: Add protobuf parsing when needed
+                    return;
+                }
+            } else {
+                message = JSON.parse(data.toString());
+            }
             await processTelemetryData(message);
         } catch (err) {
             console.error("WebSocket message error:", err);
@@ -208,9 +232,12 @@ wss.on("connection", (ws, req) => {
 
 // Start server
 server.listen(HTTP_PORT, () => {
-    console.log(`Tesla Telemetry Server running on port ${HTTP_PORT}`);
-    console.log(`Supabase: ${supabase ? "Connected" : "Not configured"}`);
+    console.log(`=================================`);
+    console.log(`Tesla Telemetry Server`);
+    console.log(`Port: ${HTTP_PORT}`);
     console.log(`HTTPS: ${USE_HTTPS ? "Enabled" : "Disabled"}`);
+    console.log(`Supabase: ${supabase ? "Connected" : "Not configured"}`);
+    console.log(`=================================`);
 });
 
 // Graceful shutdown
