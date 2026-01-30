@@ -63,7 +63,7 @@ export async function POST(request: NextRequest) {
         config: {
             hostname: 'tripboard.manojnaikade.com',
             port: 443,
-            ca: null, // Use system CAs (Let's Encrypt)
+            port: 443,
             fields: {
                 // Location tracking
                 Location: { interval_seconds: 10 },
