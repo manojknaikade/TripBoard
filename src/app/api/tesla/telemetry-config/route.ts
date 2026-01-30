@@ -145,6 +145,7 @@ export async function POST(request: NextRequest) {
             vin: targetVin,
             config: telemetryConfig.config,
             response: data,
+            version: '2024.1.30.2', // Update check
         });
     } catch (err) {
         console.error('Telemetry config error:', err);
