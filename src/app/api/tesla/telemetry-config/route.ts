@@ -79,7 +79,6 @@ export async function POST(request: NextRequest) {
                 InsideTemp: { interval_seconds: 60 },
                 OutsideTemp: { interval_seconds: 60 },
                 // State
-                GearSelection: { interval_seconds: 5 },
                 Locked: { interval_seconds: 60 },
                 SentryMode: { interval_seconds: 60 },
             },
