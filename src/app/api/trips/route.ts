@@ -1,10 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+let supabase: SupabaseClient | null = null;
+
+function getSupabase() {
+    if (!supabase) {
+        const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+        const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+        if (!url || !key) {
+            throw new Error('Supabase not configured');
+        }
+        supabase = createClient(url, key);
+    }
+    return supabase;
+}
 
 // GET - List trips for the authenticated user
 export async function GET(request: NextRequest) {
@@ -20,7 +29,7 @@ export async function GET(request: NextRequest) {
     const vehicleId = searchParams.get('vehicleId');
 
     // Query trips - using the original schema structure
-    let query = supabase
+    let query = getSupabase()
         .from('trips')
         .select('*')
         .order('start_time', { ascending: false })
@@ -96,7 +105,7 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Vehicle ID required' }, { status: 400 });
         }
 
-        const { data: trip, error } = await supabase
+        const { data: trip, error } = await getSupabase()
             .from('trips')
             .insert({
                 vehicle_id: vehicleId,
@@ -148,7 +157,7 @@ export async function PATCH(request: NextRequest) {
             return NextResponse.json({ error: 'Trip ID required' }, { status: 400 });
         }
 
-        const { data: trip, error } = await supabase
+        const { data: trip, error } = await getSupabase()
             .from('trips')
             .update({
                 end_time: new Date().toISOString(),
