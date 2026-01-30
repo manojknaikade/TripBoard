@@ -83,7 +83,7 @@ export async function POST(request: NextRequest) {
                 SentryMode: { interval_seconds: 60 },
             },
             alert_types: ['service'],
-            exp: Math.floor(Date.now() / 1000) + 86400 * 365, // 1 year
+            exp: Math.floor(Date.now() / 1000) + 86400 * 30, // 30 days
         },
     };
 
