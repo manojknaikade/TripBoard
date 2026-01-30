@@ -5,6 +5,7 @@ const REGIONAL_ENDPOINTS = {
     eu: 'https://fleet-api.prd.eu.vn.cloud.tesla.com',
     cn: 'https://fleet-api.prd.cn.vn.cloud.tesla.cn',
 };
+const PROXY_URL = 'https://tripboard.manojnaikade.com:4443';
 
 // POST - Configure telemetry for one or more vehicles
 export async function POST(request: NextRequest) {
@@ -90,9 +91,9 @@ export async function POST(request: NextRequest) {
     };
 
     try {
-        // Note: The correct endpoint is /api/1/vehicles/fleet_telemetry_config (no vehicle ID in path)
+        // Use Vehicle Command Proxy for signing
         const response = await fetch(
-            `${baseUrl}/api/1/vehicles/fleet_telemetry_config`,
+            `${PROXY_URL}/api/1/vehicles/fleet_telemetry_config`,
             {
                 method: 'POST',
                 headers: {
