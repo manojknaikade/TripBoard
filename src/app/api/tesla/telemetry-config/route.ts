@@ -126,6 +126,7 @@ export async function POST(request: NextRequest) {
                 skipped: data.response.skipped_vehicles,
                 hint: 'You need to pair the virtual key with your car. Go to car touchscreen > Controls > Locks > Keys > Add Key',
                 details: data,
+                version: '2024.1.30.3', // Debug version
             });
         }
 
@@ -134,6 +135,7 @@ export async function POST(request: NextRequest) {
                 success: false,
                 error: data.error || data.error_description || `Failed to configure telemetry: ${response.status}`,
                 details: data,
+                version: '2024.1.30.3', // Debug version
             }, { status: response.status });
         }
 
