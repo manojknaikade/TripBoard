@@ -32,7 +32,18 @@ export async function GET(request: NextRequest) {
             }
         );
 
-        const data = await response.json();
+        const responseText = await response.text();
+        let data;
+        try {
+            data = JSON.parse(responseText);
+        } catch {
+            console.error('Tesla API returned non-JSON:', responseText);
+            return NextResponse.json({
+                success: false,
+                error: `Tesla API returned invalid JSON (Status ${response.status})`,
+                details: responseText.slice(0, 200) // First 200 chars
+            }, { status: response.status === 200 ? 500 : response.status });
+        }
 
         if (!response.ok) {
             return NextResponse.json({
