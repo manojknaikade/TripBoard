@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 
 export async function GET() {
-    const supabase = createClient()
+    const supabase = await createClient()
 
     // Order by most recent trip first
     const { data, error } = await supabase
