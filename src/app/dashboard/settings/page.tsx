@@ -14,32 +14,73 @@ import {
     Globe,
     Download,
     Check,
+    MapPin,
 } from 'lucide-react';
 import { useSettingsStore } from '@/stores/settingsStore';
+
+
+import dynamic from 'next/dynamic';
+
+const LocationPicker = dynamic(() => import('@/components/settings/LocationPicker'), {
+    loading: () => <div className="h-[400px] w-full animate-pulse rounded-xl bg-slate-800" />,
+    ssr: false
+});
 
 export default function SettingsPage() {
     const [saved, setSaved] = useState(false);
     const [mounted, setMounted] = useState(false);
+    const [savingHome, setSavingHome] = useState(false);
 
     const {
         pollingConfig,
         region,
         units,
         notifications,
+        dataSource,
+        homeLocation,
         setPollingConfig,
         setRegion,
         setUnits,
         setNotifications,
+        setDataSource,
+        setHomeLocation,
     } = useSettingsStore();
 
-    // Handle hydration
+    // Handle hydration and fetch initial home location
     useEffect(() => {
         setMounted(true);
-    }, []);
+        fetch('/api/settings/home-location')
+            .then(res => res.json())
+            .then(data => {
+                if (data.success && data.homeLocation.latitude) {
+                    setHomeLocation(data.homeLocation);
+                }
+            })
+            .catch(err => console.error('Failed to fetch home location:', err));
+    }, [setHomeLocation]);
 
     const showSaved = () => {
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
+    };
+
+    const saveHomeLocation = async () => {
+        setSavingHome(true);
+        try {
+            const res = await fetch('/api/settings/home-location', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(homeLocation),
+            });
+
+            if (res.ok) {
+                showSaved();
+            }
+        } catch (err) {
+            console.error('Failed to save home location:', err);
+        } finally {
+            setSavingHome(false);
+        }
     };
 
     // Show loading while hydrating to avoid hydration mismatch
@@ -152,6 +193,63 @@ export default function SettingsPage() {
                         <p className="mt-4 text-sm text-slate-500">
                             💡 Longer intervals = lower API costs. Vehicle sleep is never interrupted.
                         </p>
+                    </SettingsSection>
+
+                    {/* Data Source */}
+                    <SettingsSection
+                        icon={<Download className="h-5 w-5" />}
+                        title="Data Source"
+                        description="Choose where to get your vehicle data from"
+                    >
+                        <div className="flex gap-3">
+                            {[
+                                { id: 'polling', label: 'Tesla API (Polling)', desc: 'Fetches data directly from Tesla' },
+                                { id: 'telemetry', label: 'Telemetry (Real-time)', desc: 'Uses your own telemetry server' },
+                            ].map((s) => (
+                                <button
+                                    key={s.id}
+                                    onClick={() => {
+                                        setDataSource(s.id as 'polling' | 'telemetry');
+                                        showSaved();
+                                    }}
+                                    className={`flex-1 rounded-lg p-4 text-left transition-colors ${dataSource === s.id
+                                        ? 'bg-red-500/10 text-red-400 ring-1 ring-red-500/30'
+                                        : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
+                                        }`}
+                                >
+                                    <div className="font-medium">{s.label}</div>
+                                    <div className="mt-1 text-xs opacity-70">{s.desc}</div>
+                                </button>
+                            ))}
+                        </div>
+                        <p className="mt-4 text-sm text-slate-500">
+                            📡 Telemetry mode requires a running telemetry server on your VM.
+                        </p>
+                    </SettingsSection>
+
+                    {/* Home Location */}
+                    <SettingsSection
+                        icon={<MapPin className="h-5 w-5" />}
+                        title="Home Location"
+                        description="Set your home coordinates for charging analytics"
+                    >
+                        <LocationPicker
+                            latitude={homeLocation.latitude}
+                            longitude={homeLocation.longitude}
+                            address={homeLocation.address}
+                            onLocationChange={(lat: number, lon: number, address: string) => {
+                                setHomeLocation({ latitude: lat, longitude: lon, address });
+                            }}
+                        />
+                        <div className="mt-4 flex justify-end">
+                            <button
+                                onClick={saveHomeLocation}
+                                disabled={savingHome}
+                                className="flex items-center gap-2 rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-50"
+                            >
+                                {savingHome ? 'Saving...' : 'Save Location'}
+                            </button>
+                        </div>
                     </SettingsSection>
 
                     {/* Region */}

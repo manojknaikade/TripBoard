@@ -1,18 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createClient } from '@/lib/supabase/server';
 
-let supabase: SupabaseClient | null = null;
-
-function getSupabase() {
-    if (!supabase) {
-        const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-        const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-        if (!url || !key) {
-            throw new Error('Supabase not configured');
-        }
-        supabase = createClient(url, key);
-    }
-    return supabase;
+async function getSupabase() {
+    return await createClient();
 }
 
 // GET - List trips for the authenticated user
@@ -28,8 +18,10 @@ export async function GET(request: NextRequest) {
     const offset = parseInt(searchParams.get('offset') || '0');
     const vehicleId = searchParams.get('vehicleId');
 
+    const supabase = await getSupabase();
+
     // Query trips - using the original schema structure
-    let query = getSupabase()
+    let query = supabase
         .from('trips')
         .select('*')
         .order('start_time', { ascending: false })
@@ -47,9 +39,10 @@ export async function GET(request: NextRequest) {
     }
 
     // Transform to match frontend expectations
-    const formattedTrips = (trips || []).map(trip => ({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const formattedTrips = (trips || []).map((trip: any) => ({
         id: trip.id,
-        vehicle_id: trip.vehicle_id,
+        vehicle_id: trip.vehicle_id || trip.vin,
         started_at: trip.start_time,
         ended_at: trip.end_time,
         duration_seconds: trip.end_time
@@ -105,7 +98,8 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Vehicle ID required' }, { status: 400 });
         }
 
-        const { data: trip, error } = await getSupabase()
+        const supabase = await getSupabase();
+        const { data: trip, error } = await supabase
             .from('trips')
             .insert({
                 vehicle_id: vehicleId,
@@ -157,7 +151,8 @@ export async function PATCH(request: NextRequest) {
             return NextResponse.json({ error: 'Trip ID required' }, { status: 400 });
         }
 
-        const { data: trip, error } = await getSupabase()
+        const supabase = await getSupabase();
+        const { data: trip, error } = await supabase
             .from('trips')
             .update({
                 end_time: new Date().toISOString(),

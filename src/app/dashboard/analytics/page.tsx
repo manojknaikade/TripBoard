@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import {
     Zap,
@@ -13,6 +14,8 @@ import {
     Battery,
     Navigation,
     Clock,
+    Calendar,
+    Loader2,
 } from 'lucide-react';
 import {
     AreaChart,
@@ -29,33 +32,82 @@ import {
     Cell,
 } from 'recharts';
 
-// Mock analytics data
-const weeklyData = [
-    { day: 'Mon', distance: 45, energy: 12.5, trips: 4 },
-    { day: 'Tue', distance: 32, energy: 8.2, trips: 3 },
-    { day: 'Wed', distance: 28, energy: 7.1, trips: 2 },
-    { day: 'Thu', distance: 52, energy: 14.3, trips: 5 },
-    { day: 'Fri', distance: 38, energy: 9.8, trips: 3 },
-    { day: 'Sat', distance: 65, energy: 17.2, trips: 6 },
-    { day: 'Sun', distance: 22, energy: 5.5, trips: 2 },
+// Default fallback data
+const defaultWeeklyData = [
+    { day: 'Mon', distance: 0, energy: 0, trips: 0 },
+    { day: 'Tue', distance: 0, energy: 0, trips: 0 },
+    { day: 'Wed', distance: 0, energy: 0, trips: 0 },
+    { day: 'Thu', distance: 0, energy: 0, trips: 0 },
+    { day: 'Fri', distance: 0, energy: 0, trips: 0 },
+    { day: 'Sat', distance: 0, energy: 0, trips: 0 },
+    { day: 'Sun', distance: 0, energy: 0, trips: 0 },
 ];
 
-const efficiencyData = [
-    { time: '6am', efficiency: 248 },
-    { time: '9am', efficiency: 275 },
-    { time: '12pm', efficiency: 262 },
+const defaultEfficiencyData = [
+    { time: '6am', efficiency: 250 },
+    { time: '9am', efficiency: 265 },
+    { time: '12pm', efficiency: 260 },
     { time: '3pm', efficiency: 258 },
-    { time: '6pm', efficiency: 285 },
+    { time: '6pm', efficiency: 275 },
     { time: '9pm', efficiency: 252 },
 ];
 
-const chargingMix = [
+const defaultChargingMix = [
     { name: 'Home', value: 68, color: '#22c55e' },
     { name: 'Supercharger', value: 25, color: '#ef4444' },
     { name: 'Other', value: 7, color: '#6b7280' },
 ];
 
+interface AnalyticsData {
+    summary: {
+        totalDistance: number;
+        totalEnergy: number;
+        avgEfficiency: number;
+        drivingTime: number;
+        tripCount: number;
+    };
+    weeklyData: typeof defaultWeeklyData;
+    efficiencyData: typeof defaultEfficiencyData;
+    chargingMix: typeof defaultChargingMix;
+}
+
 export default function AnalyticsPage() {
+    const [timeframe, setTimeframe] = useState('week');
+    const [customStart, setCustomStart] = useState('');
+    const [customEnd, setCustomEnd] = useState('');
+    const [showCustomPicker, setShowCustomPicker] = useState(false);
+    const [loading, setLoading] = useState(true);
+    const [data, setData] = useState<AnalyticsData | null>(null);
+
+    const fetchAnalytics = useCallback(async () => {
+        setLoading(true);
+        try {
+            let url = `/api/analytics/summary?timeframe=${timeframe}`;
+            if (timeframe === 'custom' && customStart && customEnd) {
+                url += `&startDate=${customStart}&endDate=${customEnd}`;
+            }
+            const res = await fetch(url);
+            const json = await res.json();
+            if (json.success) {
+                setData(json);
+            }
+        } catch (err) {
+            console.error('Failed to fetch analytics:', err);
+        } finally {
+            setLoading(false);
+        }
+    }, [timeframe, customStart, customEnd]);
+
+    useEffect(() => {
+        fetchAnalytics();
+    }, [fetchAnalytics]);
+
+    // Use fetched data or fallbacks
+    const weeklyData = data?.weeklyData || defaultWeeklyData;
+    const efficiencyData = data?.efficiencyData || defaultEfficiencyData;
+    const chargingMix = data?.chargingMix || defaultChargingMix;
+    const summary = data?.summary || { totalDistance: 0, totalEnergy: 0, avgEfficiency: 260, drivingTime: 0, tripCount: 0 };
+
     return (
         <div className="min-h-screen">
             {/* Header */}
@@ -92,39 +144,60 @@ export default function AnalyticsPage() {
 
             {/* Main Content */}
             <main className="mx-auto max-w-7xl px-6 py-8">
-                <div className="mb-8">
-                    <h1 className="text-2xl font-bold">Analytics</h1>
-                    <p className="text-slate-400">Insights into your driving patterns and efficiency</p>
+                <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <h1 className="text-2xl font-bold">Analytics</h1>
+                        <p className="text-slate-400">Insights into your driving patterns and efficiency</p>
+                    </div>
+
+                    {/* Timeframe Selector */}
+                    <TimeframeSelector
+                        selected={timeframe}
+                        onSelect={setTimeframe}
+                        customStart={customStart}
+                        customEnd={customEnd}
+                        onCustomStartChange={setCustomStart}
+                        onCustomEndChange={setCustomEnd}
+                        showCustomPicker={showCustomPicker}
+                        onToggleCustomPicker={() => setShowCustomPicker(!showCustomPicker)}
+                    />
                 </div>
+
+                {/* Loading Overlay */}
+                {loading && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50">
+                        <Loader2 className="h-8 w-8 animate-spin text-red-500" />
+                    </div>
+                )}
 
                 {/* Stats Cards */}
                 <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <StatCard
                         icon={<Navigation className="h-5 w-5" />}
-                        label="This Week"
-                        value="282 mi"
-                        change={12}
+                        label="Distance"
+                        value={`${summary.totalDistance} km`}
+                        change={0}
                         color="blue"
                     />
                     <StatCard
                         icon={<Battery className="h-5 w-5" />}
                         label="Energy Used"
-                        value="74.6 kWh"
-                        change={-5}
+                        value={`${summary.totalEnergy} kWh`}
+                        change={0}
                         color="green"
                     />
                     <StatCard
                         icon={<Gauge className="h-5 w-5" />}
                         label="Avg Efficiency"
-                        value="264 Wh/mi"
-                        change={-3}
+                        value={`${summary.avgEfficiency} Wh/km`}
+                        change={0}
                         color="purple"
                     />
                     <StatCard
                         icon={<Clock className="h-5 w-5" />}
                         label="Driving Time"
-                        value="8.5 hrs"
-                        change={8}
+                        value={`${summary.drivingTime} hrs`}
+                        change={0}
                         color="orange"
                     />
                 </div>
@@ -279,8 +352,8 @@ function NavLink({
         <Link
             href={href}
             className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${active
-                    ? 'bg-red-500/10 text-red-400'
-                    : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                ? 'bg-red-500/10 text-red-400'
+                : 'text-slate-400 hover:bg-slate-800 hover:text-white'
                 }`}
         >
             {icon}
@@ -329,6 +402,86 @@ function StatCard({
                     {Math.abs(change)}%
                 </div>
             </div>
+        </div>
+    );
+}
+
+const timeframeOptions = [
+    { id: 'week', label: 'This Week' },
+    { id: '7days', label: 'Last 7 Days' },
+    { id: 'month', label: 'This Month' },
+    { id: '30days', label: 'Last 30 Days' },
+    { id: '3months', label: 'Last 3 Months' },
+    { id: 'custom', label: 'Custom' },
+];
+
+interface TimeframeSelectorProps {
+    selected: string;
+    onSelect: (id: string) => void;
+    customStart: string;
+    customEnd: string;
+    onCustomStartChange: (date: string) => void;
+    onCustomEndChange: (date: string) => void;
+    showCustomPicker: boolean;
+    onToggleCustomPicker: () => void;
+}
+
+function TimeframeSelector({
+    selected,
+    onSelect,
+    customStart,
+    customEnd,
+    onCustomStartChange,
+    onCustomEndChange,
+    showCustomPicker,
+    onToggleCustomPicker,
+}: TimeframeSelectorProps) {
+    return (
+        <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap gap-2">
+                {timeframeOptions.map((option) => (
+                    <button
+                        key={option.id}
+                        onClick={() => {
+                            onSelect(option.id);
+                            if (option.id === 'custom') {
+                                onToggleCustomPicker();
+                            }
+                        }}
+                        className={`flex items-center gap-1.5 rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${selected === option.id
+                                ? 'bg-red-500 text-white'
+                                : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-white'
+                            }`}
+                    >
+                        {option.id === 'custom' && <Calendar className="h-3.5 w-3.5" />}
+                        {option.label}
+                    </button>
+                ))}
+            </div>
+
+            {/* Custom Date Picker */}
+            {selected === 'custom' && showCustomPicker && (
+                <div className="flex flex-wrap items-center gap-3 rounded-lg bg-slate-800/50 p-3">
+                    <div className="flex items-center gap-2">
+                        <label className="text-sm text-slate-400">From:</label>
+                        <input
+                            type="date"
+                            value={customStart}
+                            onChange={(e) => onCustomStartChange(e.target.value)}
+                            className="rounded-lg border border-slate-600 bg-slate-700 px-3 py-1.5 text-sm text-white focus:border-red-500 focus:outline-none"
+                        />
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <label className="text-sm text-slate-400">To:</label>
+                        <input
+                            type="date"
+                            value={customEnd}
+                            onChange={(e) => onCustomEndChange(e.target.value)}
+                            className="rounded-lg border border-slate-600 bg-slate-700 px-3 py-1.5 text-sm text-white focus:border-red-500 focus:outline-none"
+                        />
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

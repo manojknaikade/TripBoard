@@ -73,6 +73,11 @@ interface VehicleData {
   tpms_pressure_fr: number;
   tpms_pressure_rl: number;
   tpms_pressure_rr: number;
+  // Window states (Closed, PartiallyOpen, Opened)
+  fd_window?: string;
+  fp_window?: string;
+  rd_window?: string;
+  rp_window?: string;
 }
 
 interface CachedData {
@@ -109,8 +114,9 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [isAsleep, setIsAsleep] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+  const [streetAddress, setStreetAddress] = useState<string | null>(null);
 
-  const { units, region } = useSettingsStore();
+  const { units, region, dataSource } = useSettingsStore();
 
   // Load cached data on mount
   useEffect(() => {
@@ -157,7 +163,12 @@ export default function DashboardPage() {
     setIsAsleep(false);
 
     try {
-      const response = await fetch(`/api/tesla/vehicle-data?id=${vehicleId}&region=${region}`);
+      // Use telemetry endpoint if dataSource is 'telemetry'
+      const endpoint = dataSource === 'telemetry'
+        ? '/api/tesla/telemetry-status'
+        : `/api/tesla/vehicle-data?id=${vehicleId}&region=${region}`;
+
+      const response = await fetch(endpoint);
       const data = await response.json();
 
       if (data.success) {
@@ -167,6 +178,7 @@ export default function DashboardPage() {
           // Keep using cached data but don't update it
         } else {
           setVehicleData(data.vehicle);
+          // Use timestamp from API response (properly formatted in telemetry endpoint)
           setLastUpdated(data.timestamp || Date.now());
           setIsAsleep(false);
           // Cache the data
@@ -177,6 +189,9 @@ export default function DashboardPage() {
           setCachedData(cacheEntry);
           localStorage.setItem(CACHE_KEY, JSON.stringify(cacheEntry));
         }
+      } else if (data.status === 'waiting_for_telemetry') {
+        // No telemetry data yet
+        setError('No telemetry data received yet. Make sure your ingester is running.');
       } else {
         setError(data.error);
       }
@@ -185,7 +200,7 @@ export default function DashboardPage() {
     } finally {
       setDataLoading(false);
     }
-  }, [region]);
+  }, [region, dataSource]);
 
   const handleWakeAndRefresh = async () => {
     if (!selectedVehicle) return;
@@ -266,6 +281,28 @@ export default function DashboardPage() {
   // Data to display (current or cached)
   const displayData = vehicleData || (isAsleep && cachedData?.vehicle) || null;
   const displayTimestamp = vehicleData ? lastUpdated : cachedData?.timestamp;
+
+  // Reverse geocode to get street address
+  useEffect(() => {
+    if (!displayData?.latitude || !displayData?.longitude) {
+      setStreetAddress(null);
+      return;
+    }
+    const lat = displayData.latitude;
+    const lon = displayData.longitude;
+
+    fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`)
+      .then(res => res.json())
+      .then(data => {
+        if (data?.display_name) {
+          // Shorten the address: take first 2-3 parts
+          const parts = data.display_name.split(', ');
+          const short = parts.slice(0, 3).join(', ');
+          setStreetAddress(short);
+        }
+      })
+      .catch(() => setStreetAddress(null));
+  }, [displayData?.latitude, displayData?.longitude]);
 
   if (loading) {
     return (
@@ -442,13 +479,13 @@ export default function DashboardPage() {
               <div className="mb-4">
                 <div className="mb-2 flex justify-between text-sm">
                   <span className="text-slate-400">Charge Level</span>
-                  <span className="font-semibold">{displayData.battery_level}%</span>
+                  <span className="font-semibold">{Math.round(displayData.battery_level)}%</span>
                 </div>
                 <div className="h-4 w-full overflow-hidden rounded-full bg-slate-700">
                   <div
-                    className={`h-full rounded-full transition-all ${displayData.battery_level > 20 ? 'bg-green-500' : 'bg-red-500'
+                    className={`h-full rounded-full transition-all ${Math.round(displayData.battery_level) > 20 ? 'bg-green-500' : 'bg-red-500'
                       }`}
-                    style={{ width: `${displayData.battery_level}%` }}
+                    style={{ width: `${Math.round(displayData.battery_level)}%` }}
                   />
                 </div>
                 <div className="mt-2 flex justify-between text-xs text-slate-500">
@@ -482,8 +519,8 @@ export default function DashboardPage() {
               )}
             </div>
 
-            {/* Stats Grid */}
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {/* Stats Grid - Single Row with 5 cards */}
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
               <StatCard
                 icon={<Gauge className="h-5 w-5" />}
                 label="Odometer"
@@ -510,73 +547,33 @@ export default function DashboardPage() {
                 value={displayData.is_climate_on ? 'On' : 'Off'}
                 color="purple"
               />
-            </div>
-
-            {/* Second Row of Stats */}
-            <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <StatCard
-                icon={<Cpu className="h-5 w-5" />}
-                label="Software"
-                value={displayData.car_version?.split(' ')[0] || 'Unknown'}
-                color="blue"
-              />
               <StatCard
                 icon={<BatteryCharging className="h-5 w-5" />}
                 label="Range"
                 value={formatDistance(displayData.battery_range)}
-                subvalue={`${displayData.battery_level}% charged`}
+                subvalue={`${Math.round(displayData.battery_level)}% charged`}
                 color="green"
               />
-              <StatCard
-                icon={<MapPin className="h-5 w-5" />}
-                label="Location"
-                value={displayData.latitude && displayData.longitude
-                  ? `${displayData.latitude.toFixed(3)}, ${displayData.longitude.toFixed(3)}`
-                  : 'Unknown'}
-                color="red"
-              />
             </div>
 
-            {/* Doors & Openings */}
-            <div className="mt-6 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
-              <div className="mb-4 flex items-center gap-3">
-                <Car className="h-5 w-5 text-blue-400" />
-                <span className="font-medium">Doors & Openings</span>
-              </div>
-              <div className="grid grid-cols-3 gap-4 sm:grid-cols-6">
-                <DoorStatus label="Driver Front" isOpen={displayData.df === 1} />
-                <DoorStatus label="Pass. Front" isOpen={displayData.pf === 1} />
-                <DoorStatus label="Driver Rear" isOpen={displayData.dr === 1} />
-                <DoorStatus label="Pass. Rear" isOpen={displayData.pr === 1} />
-                <DoorStatus label="Frunk" isOpen={displayData.ft === 1} />
-                <DoorStatus label="Trunk" isOpen={displayData.rt === 1} />
-              </div>
-            </div>
-
-            {/* Tire Pressure */}
-            <div className="mt-6 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
-              <div className="mb-4 flex items-center gap-3">
-                <Gauge className="h-5 w-5 text-orange-400" />
-                <span className="font-medium">Tire Pressure</span>
-              </div>
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-                <TirePressure label="Front Left" pressure={displayData.tpms_pressure_fl} />
-                <TirePressure label="Front Right" pressure={displayData.tpms_pressure_fr} />
-                <TirePressure label="Rear Left" pressure={displayData.tpms_pressure_rl} />
-                <TirePressure label="Rear Right" pressure={displayData.tpms_pressure_rr} />
-              </div>
-            </div>
-
-            {/* Location Map */}
+            {/* Location Map - Right after stats */}
             {displayData.latitude && displayData.longitude && (
               <div className="mt-6 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
-                <div className="mb-4 flex items-center gap-3">
-                  <MapPin className="h-5 w-5 text-red-400" />
-                  <span className="font-medium">Vehicle Location</span>
-                  {isAsleep && (
-                    <span className="text-xs text-slate-500">(last known)</span>
-                  )}
+                <div className="mb-4 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <MapPin className="h-5 w-5 text-red-400" />
+                    <span className="font-medium">Vehicle Location</span>
+                    {isAsleep && (
+                      <span className="text-xs text-slate-500">(last known)</span>
+                    )}
+                  </div>
+                  <span className="text-xs text-slate-500">
+                    {displayData.latitude.toFixed(5)}, {displayData.longitude.toFixed(5)}
+                  </span>
                 </div>
+                {streetAddress && (
+                  <p className="mb-4 text-slate-300">{streetAddress}</p>
+                )}
                 <VehicleMap
                   latitude={displayData.latitude}
                   longitude={displayData.longitude}
@@ -584,6 +581,42 @@ export default function DashboardPage() {
                 />
               </div>
             )}
+
+            {/* Doors & Openings - Show in both modes */}
+            <div className="mt-6 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+              <div className="mb-4 flex items-center gap-3">
+                <Car className="h-5 w-5 text-blue-400" />
+                <span className="font-medium">Doors & Openings</span>
+              </div>
+              <div className="grid grid-cols-3 gap-4 sm:grid-cols-6">
+                <DoorStatus label="Driver Front" isOpen={displayData.df === 1} windowState={displayData.fd_window} />
+                <DoorStatus label="Pass. Front" isOpen={displayData.pf === 1} windowState={displayData.fp_window} />
+                <DoorStatus label="Driver Rear" isOpen={displayData.dr === 1} windowState={displayData.rd_window} />
+                <DoorStatus label="Pass. Rear" isOpen={displayData.pr === 1} windowState={displayData.rp_window} />
+                <DoorStatus label="Frunk" isOpen={displayData.ft === 1} />
+                <DoorStatus label="Trunk" isOpen={displayData.rt === 1} />
+              </div>
+            </div>
+
+            {/* Tire Pressure - Show in both modes */}
+            <div className="mt-6 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+              <div className="mb-4 flex items-center gap-3">
+                <Gauge className="h-5 w-5 text-orange-400" />
+                <span className="font-medium">Tire Pressure</span>
+              </div>
+              {displayData.tpms_pressure_fl ? (
+                <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                  <TirePressure label="Front Left" pressure={displayData.tpms_pressure_fl} />
+                  <TirePressure label="Front Right" pressure={displayData.tpms_pressure_fr} />
+                  <TirePressure label="Rear Left" pressure={displayData.tpms_pressure_rl} />
+                  <TirePressure label="Rear Right" pressure={displayData.tpms_pressure_rr} />
+                </div>
+              ) : (
+                <p className="text-sm text-slate-500">
+                  Tire pressure data requires expanded telemetry subscription.
+                </p>
+              )}
+            </div>
           </>
         )}
 
@@ -654,11 +687,14 @@ function StatCard({
   );
 }
 
-function DoorStatus({ label, isOpen }: { label: string; isOpen: boolean }) {
+function DoorStatus({ label, isOpen, windowState }: { label: string; isOpen: boolean; windowState?: string }) {
+  const windowOpen = windowState && windowState !== 'Closed';
+  const hasIssue = isOpen || windowOpen;
+
   return (
     <div className="text-center">
       <div
-        className={`mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-full ${isOpen ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'
+        className={`mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-full ${hasIssue ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'
           }`}
       >
         {isOpen ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
@@ -667,6 +703,11 @@ function DoorStatus({ label, isOpen }: { label: string; isOpen: boolean }) {
       <p className={`text-sm font-medium ${isOpen ? 'text-red-400' : 'text-green-400'}`}>
         {isOpen ? 'Open' : 'Closed'}
       </p>
+      {windowState && (
+        <p className={`text-xs mt-0.5 ${windowOpen ? 'text-orange-400' : 'text-slate-500'}`}>
+          🪟 {windowOpen ? 'Open' : 'Closed'}
+        </p>
+      )}
     </div>
   );
 }

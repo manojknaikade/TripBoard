@@ -19,6 +19,13 @@ import {
     Car,
     Loader2,
 } from 'lucide-react';
+import dynamic from 'next/dynamic';
+
+// Dynamic import to avoid SSR issues with Leaflet
+const TripMiniMap = dynamic(() => import('@/components/TripMiniMap'), {
+    ssr: false,
+    loading: () => <div className="h-full w-full bg-slate-700/30 animate-pulse rounded-lg" />
+});
 
 interface Trip {
     id: string;
@@ -239,78 +246,96 @@ export default function TripsPage() {
 
 function TripCard({ trip }: { trip: Trip }) {
     const isInProgress = trip.status === 'in_progress';
+    const hasCoords = trip.start_latitude && trip.start_longitude;
 
     return (
         <Link
             href={`/dashboard/trips/${trip.id}`}
             className="block rounded-xl border border-slate-700/50 bg-slate-800/30 p-4 transition-all hover:border-slate-600 hover:bg-slate-800/50"
         >
-            <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                    {/* Status indicator */}
-                    <div
-                        className={`flex h-10 w-10 items-center justify-center rounded-full ${isInProgress ? 'bg-green-500/20' : 'bg-slate-700/50'
-                            }`}
-                    >
-                        <Car
-                            className={`h-5 w-5 ${isInProgress ? 'text-green-400' : 'text-slate-400'}`}
+            <div className="flex items-stretch gap-4">
+                {/* Mini Map */}
+                {hasCoords && (
+                    <div className="hidden sm:block h-24 w-32 flex-shrink-0 rounded-lg overflow-hidden border border-slate-600/50">
+                        <TripMiniMap
+                            startLat={trip.start_latitude}
+                            startLon={trip.start_longitude}
+                            endLat={trip.end_latitude}
+                            endLon={trip.end_longitude}
                         />
                     </div>
+                )}
 
-                    {/* Trip info */}
-                    <div>
-                        <div className="flex items-center gap-2">
-                            <span className="font-medium">
-                                {trip.start_address || `${trip.start_latitude?.toFixed(3)}, ${trip.start_longitude?.toFixed(3)}`}
-                            </span>
-                            {!isInProgress && trip.end_address && (
-                                <>
-                                    <span className="text-slate-500">→</span>
-                                    <span className="font-medium">{trip.end_address}</span>
-                                </>
-                            )}
-                            {isInProgress && (
-                                <span className="rounded-full bg-green-500/20 px-2 py-0.5 text-xs font-medium text-green-400">
-                                    In Progress
-                                </span>
-                            )}
-                        </div>
-                        <div className="mt-1 flex items-center gap-4 text-sm text-slate-400">
-                            <span className="flex items-center gap-1">
-                                <Clock className="h-3 w-3" />
-                                {formatTime(trip.started_at)}
-                                {trip.duration_seconds && ` • ${formatDuration(trip.duration_seconds)}`}
-                            </span>
-                            {trip.distance_miles && (
-                                <span className="flex items-center gap-1">
-                                    <MapPin className="h-3 w-3" />
-                                    {trip.distance_miles.toFixed(1)} mi
-                                </span>
-                            )}
-                            {trip.energy_used_kwh && (
-                                <span className="flex items-center gap-1">
-                                    <Battery className="h-3 w-3" />
-                                    {trip.energy_used_kwh.toFixed(1)} kWh
-                                </span>
-                            )}
-                        </div>
-                    </div>
-                </div>
+                {/* Trip Info */}
+                <div className="flex flex-1 items-center justify-between">
+                    <div className="flex items-center gap-4">
+                        {/* Status indicator (only on mobile or if no coords) */}
+                        {!hasCoords && (
+                            <div
+                                className={`flex h-10 w-10 items-center justify-center rounded-full ${isInProgress ? 'bg-green-500/20' : 'bg-slate-700/50'
+                                    }`}
+                            >
+                                <Car
+                                    className={`h-5 w-5 ${isInProgress ? 'text-green-400' : 'text-slate-400'}`}
+                                />
+                            </div>
+                        )}
 
-                {/* Battery change */}
-                <div className="flex items-center gap-4">
-                    {trip.start_battery_level && (
-                        <div className="text-right">
-                            <div className="text-sm text-slate-400">Battery</div>
-                            <div className="font-medium">
-                                {trip.start_battery_level}%
-                                {trip.end_battery_level && (
-                                    <span className="text-slate-500"> → {trip.end_battery_level}%</span>
+                        {/* Trip details */}
+                        <div>
+                            <div className="flex items-center gap-2">
+                                <span className="font-medium">
+                                    {trip.start_address || `${trip.start_latitude?.toFixed(3)}, ${trip.start_longitude?.toFixed(3)}`}
+                                </span>
+                                {!isInProgress && trip.end_address && (
+                                    <>
+                                        <span className="text-slate-500">→</span>
+                                        <span className="font-medium">{trip.end_address}</span>
+                                    </>
+                                )}
+                                {isInProgress && (
+                                    <span className="rounded-full bg-green-500/20 px-2 py-0.5 text-xs font-medium text-green-400">
+                                        In Progress
+                                    </span>
+                                )}
+                            </div>
+                            <div className="mt-1 flex items-center gap-4 text-sm text-slate-400">
+                                <span className="flex items-center gap-1">
+                                    <Clock className="h-3 w-3" />
+                                    {formatTime(trip.started_at)}
+                                    {trip.duration_seconds && ` • ${formatDuration(trip.duration_seconds)}`}
+                                </span>
+                                {trip.distance_miles && (
+                                    <span className="flex items-center gap-1">
+                                        <MapPin className="h-3 w-3" />
+                                        {trip.distance_miles.toFixed(1)} mi
+                                    </span>
+                                )}
+                                {trip.energy_used_kwh && (
+                                    <span className="flex items-center gap-1">
+                                        <Battery className="h-3 w-3" />
+                                        {trip.energy_used_kwh.toFixed(1)} kWh
+                                    </span>
                                 )}
                             </div>
                         </div>
-                    )}
-                    <ChevronRight className="h-5 w-5 text-slate-500" />
+                    </div>
+
+                    {/* Battery change */}
+                    <div className="flex items-center gap-4">
+                        {trip.start_battery_level && (
+                            <div className="text-right hidden md:block">
+                                <div className="text-sm text-slate-400">Battery</div>
+                                <div className="font-medium">
+                                    {trip.start_battery_level}%
+                                    {trip.end_battery_level && (
+                                        <span className="text-slate-500"> → {trip.end_battery_level}%</span>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                        <ChevronRight className="h-5 w-5 text-slate-500" />
+                    </div>
                 </div>
             </div>
         </Link>
@@ -332,8 +357,8 @@ function NavLink({
         <Link
             href={href}
             className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${active
-                    ? 'bg-red-500/10 text-red-400'
-                    : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                ? 'bg-red-500/10 text-red-400'
+                : 'text-slate-400 hover:bg-slate-800 hover:text-white'
                 }`}
         >
             {icon}
