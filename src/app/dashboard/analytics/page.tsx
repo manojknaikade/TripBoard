@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
+import { handleSignOut } from '@/lib/utils/auth';
 import {
     Zap,
     Gauge,
@@ -135,7 +136,10 @@ export default function AnalyticsPage() {
                         </NavLink>
                     </nav>
 
-                    <button className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-slate-800 hover:text-white">
+                    <button
+                        onClick={handleSignOut}
+                        className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
+                    >
                         <LogOut className="h-4 w-4" />
                         Sign Out
                     </button>
@@ -449,8 +453,8 @@ function TimeframeSelector({
                             }
                         }}
                         className={`flex items-center gap-1.5 rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${selected === option.id
-                                ? 'bg-red-500 text-white'
-                                : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-white'
+                            ? 'bg-red-500 text-white'
+                            : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-white'
                             }`}
                     >
                         {option.id === 'custom' && <Calendar className="h-3.5 w-3.5" />}

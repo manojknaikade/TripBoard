@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { createClient } from '@/lib/supabase/client';
 import {
     Zap,
     Gauge,
@@ -31,6 +33,7 @@ export default function SettingsPage() {
     const [mounted, setMounted] = useState(false);
     const [savingHome, setSavingHome] = useState(false);
 
+    const router = useRouter();
     const {
         pollingConfig,
         region,
@@ -44,11 +47,18 @@ export default function SettingsPage() {
         setNotifications,
         setDataSource,
         setHomeLocation,
+        loadFromDatabase,
+        saveToDatabase,
     } = useSettingsStore();
 
-    // Handle hydration and fetch initial home location
+    // Handle hydration and load all settings from database
     useEffect(() => {
         setMounted(true);
+
+        // Load general settings
+        loadFromDatabase();
+
+        // Load home location
         fetch('/api/settings/home-location')
             .then(res => res.json())
             .then(data => {
@@ -57,11 +67,19 @@ export default function SettingsPage() {
                 }
             })
             .catch(err => console.error('Failed to fetch home location:', err));
-    }, [setHomeLocation]);
+    }, [setHomeLocation, loadFromDatabase]);
 
     const showSaved = () => {
         setSaved(true);
+        // Auto-save to database
+        saveToDatabase();
         setTimeout(() => setSaved(false), 2000);
+    };
+
+    const handleSignOut = async () => {
+        const supabase = createClient();
+        await supabase.auth.signOut();
+        router.push('/auth/login');
     };
 
     const saveHomeLocation = async () => {
@@ -119,7 +137,10 @@ export default function SettingsPage() {
                         </NavLink>
                     </nav>
 
-                    <button className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-slate-800 hover:text-white">
+                    <button
+                        onClick={handleSignOut}
+                        className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
+                    >
                         <LogOut className="h-4 w-4" />
                         Sign Out
                     </button>

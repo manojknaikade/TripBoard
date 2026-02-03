@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { handleSignOut } from '@/lib/utils/auth';
 import {
     Zap,
     Gauge,
@@ -151,7 +152,10 @@ export default function TripsPage() {
                         </NavLink>
                     </nav>
 
-                    <button className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-slate-800 hover:text-white">
+                    <button
+                        onClick={handleSignOut}
+                        className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
+                    >
                         <LogOut className="h-4 w-4" />
                         Sign Out
                     </button>

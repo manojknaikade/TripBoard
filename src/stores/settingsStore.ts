@@ -28,6 +28,8 @@ interface SettingsStore {
     setNotifications: (enabled: boolean) => void;
     setDataSource: (source: DataSource) => void;
     setHomeLocation: (location: HomeLocation) => void;
+    loadFromDatabase: () => Promise<void>;
+    saveToDatabase: () => Promise<void>;
     resetToDefaults: () => void;
 }
 
@@ -59,6 +61,44 @@ export const useSettingsStore = create<SettingsStore>()(
             setDataSource: (dataSource) => set({ dataSource }),
 
             setHomeLocation: (homeLocation) => set({ homeLocation }),
+
+            loadFromDatabase: async () => {
+                try {
+                    const res = await fetch('/api/settings');
+                    const data = await res.json();
+
+                    if (data.success && data.settings) {
+                        set({
+                            pollingConfig: data.settings.pollingConfig,
+                            region: data.settings.region,
+                            units: data.settings.units,
+                            notifications: data.settings.notifications,
+                            dataSource: data.settings.dataSource,
+                        });
+                    }
+                } catch (err) {
+                    console.error('Failed to load settings from database:', err);
+                }
+            },
+
+            saveToDatabase: async () => {
+                try {
+                    const state = useSettingsStore.getState();
+                    await fetch('/api/settings', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            pollingConfig: state.pollingConfig,
+                            region: state.region,
+                            units: state.units,
+                            notifications: state.notifications,
+                            dataSource: state.dataSource,
+                        }),
+                    });
+                } catch (err) {
+                    console.error('Failed to save settings to database:', err);
+                }
+            },
 
             resetToDefaults: () => set(defaultSettings),
         }),
