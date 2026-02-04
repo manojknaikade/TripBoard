@@ -208,9 +208,9 @@ export default function AnalyticsPage() {
 
                 {/* Charts Grid */}
                 <div className="grid gap-6 lg:grid-cols-2">
-                    {/* Weekly Distance */}
+                    {/* Daily Distance */}
                     <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
-                        <h2 className="mb-6 text-lg font-semibold">Weekly Distance</h2>
+                        <h2 className="mb-6 text-lg font-semibold">Daily Distance</h2>
                         <ResponsiveContainer width="100%" height={250}>
                             <BarChart data={weeklyData}>
                                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
@@ -230,7 +230,10 @@ export default function AnalyticsPage() {
 
                     {/* Efficiency Over Time */}
                     <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
-                        <h2 className="mb-6 text-lg font-semibold">Efficiency by Time of Day</h2>
+                        <div className="mb-6">
+                            <h2 className="text-lg font-semibold">Efficiency by Time of Day</h2>
+                            <p className="text-sm text-slate-400 mt-1">Average Wh/km for trips in selected period</p>
+                        </div>
                         <ResponsiveContainer width="100%" height={250}>
                             <AreaChart data={efficiencyData}>
                                 <defs>
@@ -262,7 +265,7 @@ export default function AnalyticsPage() {
 
                     {/* Energy by Day */}
                     <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
-                        <h2 className="mb-6 text-lg font-semibold">Energy Consumption</h2>
+                        <h2 className="mb-6 text-lg font-semibold">Daily Energy Consumption</h2>
                         <ResponsiveContainer width="100%" height={250}>
                             <AreaChart data={weeklyData}>
                                 <defs>

@@ -10,6 +10,21 @@ export async function GET(request: NextRequest) {
     const startDate = searchParams.get('startDate')
     const endDate = searchParams.get('endDate')
 
+    // Get user settings to determine units
+    const { data: { user } } = await supabase.auth.getUser();
+    let userUnits: 'imperial' | 'metric' = 'metric'; // DEFAULT TO METRIC
+
+    if (user) {
+        const { data: settings } = await supabase
+            .from('user_settings')
+            .select('units')
+            .eq('user_id', user.id)
+            .single();
+
+        if (settings?.units) {
+            userUnits = settings.units as 'imperial' | 'metric';
+        }
+    }
     // Calculate date range based on timeframe
     let fromDate: Date
     const toDate = new Date()
@@ -33,10 +48,11 @@ export async function GET(request: NextRequest) {
                 break
             case 'week':
             default:
-                // Start of current week (Monday)
-                const day = toDate.getDay()
-                const diff = toDate.getDate() - day + (day === 0 ? -6 : 1)
-                fromDate = new Date(toDate.setDate(diff))
+                // Start of current week (Monday) - FIXED: Don't mutate toDate
+                const now = new Date()
+                const day = now.getDay()
+                const diff = now.getDate() - day + (day === 0 ? -6 : 1)
+                fromDate = new Date(now.getFullYear(), now.getMonth(), diff)
                 fromDate.setHours(0, 0, 0, 0)
                 break
         }
@@ -106,14 +122,70 @@ export async function GET(request: NextRequest) {
             }
         }
 
-        // Format daily data for charts
-        const weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-        const weeklyData = weekDays.map(day => ({
-            day,
-            distance: Math.round((dailyData[day]?.distance || 0) * 10) / 10,
-            energy: Math.round((dailyData[day]?.energy || 0) * 10) / 10,
-            trips: dailyData[day]?.trips || 0,
-        }))
+        // Format data for charts based on timeframe
+        const distanceMultiplier = userUnits === 'metric' ? 1.60934 : 1;
+        let weeklyData: Array<{ day: string; distance: number; energy: number; trips: number }>;
+
+        if (timeframe === 'week') {
+            // For weekly view, use weekday names
+            const weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+            weeklyData = weekDays.map(day => {
+                const rawDistance = dailyData[day]?.distance || 0;
+                const convertedDistance = Math.round(rawDistance * distanceMultiplier * 10) / 10;
+                return {
+                    day,
+                    distance: convertedDistance,
+                    energy: Math.round((dailyData[day]?.energy || 0) * 10) / 10,
+                    trips: dailyData[day]?.trips || 0,
+                };
+            });
+        } else {
+            // For month/30days/3months, generate date-based data
+            const dataByDate: Record<string, { distance: number; energy: number; trips: number }> = {};
+
+            for (const trip of trips || []) {
+                const tripDate = new Date(trip.start_time);
+                const dateKey = `${tripDate.getMonth() + 1}/${tripDate.getDate()}`;
+
+                // Get distance (with fallback to odometer)
+                const distance = trip.distance_miles ||
+                    ((trip.end_odometer && trip.start_odometer)
+                        ? trip.end_odometer - trip.start_odometer
+                        : 0);
+
+                // Get energy (with fallback to battery delta)
+                let energy = trip.energy_used_kwh || 0;
+                if (!energy && trip.start_battery_pct && trip.end_battery_pct) {
+                    const delta = trip.start_battery_pct - trip.end_battery_pct;
+                    if (delta > 0) {
+                        energy = (delta / 100) * 75; // Approximate kWh for Tesla
+                    }
+                }
+
+                if (!dataByDate[dateKey]) {
+                    dataByDate[dateKey] = { distance: 0, energy: 0, trips: 0 };
+                }
+                dataByDate[dateKey].distance += distance;
+                dataByDate[dateKey].energy += energy;
+                dataByDate[dateKey].trips += 1;
+            }
+
+            // Generate array with one entry per day in range
+            const currentDate = new Date(fromDate);
+            const endDateCalc = new Date(toDate);
+            weeklyData = [];
+
+            while (currentDate <= endDateCalc) {
+                const dateKey = `${currentDate.getMonth() + 1}/${currentDate.getDate()}`;
+                weeklyData.push({
+                    day: dateKey,
+                    distance: Math.round((dataByDate[dateKey]?.distance || 0) * distanceMultiplier * 10) / 10,
+                    energy: Math.round((dataByDate[dateKey]?.energy || 0) * 10) / 10,
+                    trips: dataByDate[dateKey]?.trips || 0,
+                });
+                currentDate.setDate(currentDate.getDate() + 1);
+            }
+        }
 
         // Format efficiency by time of day
         const efficiencyData = [
@@ -166,9 +238,9 @@ export async function GET(request: NextRequest) {
             fromDate: fromDate.toISOString(),
             toDate: toDate.toISOString(),
             summary: {
-                totalDistance: Math.round(totalDistance * 10) / 10,
+                totalDistance: Math.round(totalDistance * distanceMultiplier * 10) / 10,
                 totalEnergy: Math.round(totalEnergy * 10) / 10,
-                avgEfficiency,
+                avgEfficiency: Math.round(avgEfficiency),
                 drivingTime: Math.round(totalDrivingTime * 10) / 10,
                 tripCount: trips?.length || 0,
                 chargingSessions: chargingSessions?.length || 0,
