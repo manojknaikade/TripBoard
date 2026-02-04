@@ -122,11 +122,15 @@ export default function TripsPage() {
     // Calculate date range based on timeframe
     const getDateRange = () => {
         const toDate = new Date();
+        toDate.setHours(23, 59, 59, 999); // Set to end of day
         let fromDate = new Date();
 
         if (timeframe === 'custom' && customStart && customEnd) {
             fromDate = new Date(customStart);
-            toDate.setTime(new Date(customEnd).getTime());
+            fromDate.setHours(0, 0, 0, 0); // Start of day
+            const customToDate = new Date(customEnd);
+            customToDate.setHours(23, 59, 59, 999); // End of day
+            return { fromDate, toDate: customToDate };
         } else {
             switch (timeframe) {
                 case '7days':
@@ -542,8 +546,8 @@ function TimeframeSelector({
                             }
                         }}
                         className={`flex items-center gap-1.5 rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${selected === option.id
-                                ? 'bg-red-500 text-white'
-                                : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-white'
+                            ? 'bg-red-500 text-white'
+                            : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-white'
                             }`}
                     >
                         {option.id === 'custom' && <Calendar className="h-3.5 w-3.5" />}
