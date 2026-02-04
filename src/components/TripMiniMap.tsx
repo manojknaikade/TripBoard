@@ -33,14 +33,15 @@ export default function TripMiniMap({ startLat, startLon, endLat, endLon }: Trip
     const centerLon = hasEnd ? (startLon + endLon) / 2 : startLon;
 
     // Determine zoom level based on distance
-    let zoom = 14;
+    let zoom = 12; // Reduced from 14 to show more context
     if (hasEnd) {
         const latDiff = Math.abs(startLat - endLat);
         const lonDiff = Math.abs(startLon - endLon);
         const maxDiff = Math.max(latDiff, lonDiff);
-        if (maxDiff > 0.1) zoom = 11;
-        else if (maxDiff > 0.05) zoom = 12;
-        else if (maxDiff > 0.02) zoom = 13;
+        if (maxDiff > 0.1) zoom = 10;  // Reduced from 11
+        else if (maxDiff > 0.05) zoom = 11; // Reduced from 12
+        else if (maxDiff > 0.02) zoom = 12; // Reduced from 13
+        else zoom = 13; // New: for very close start/end points
     }
 
     return (

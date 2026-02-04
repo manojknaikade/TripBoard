@@ -17,8 +17,8 @@ import {
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 
-const TripMiniMap = dynamic(() => import('@/components/TripMiniMap'), {
-    loading: () => <div className="h-full w-full animate-pulse rounded-xl bg-slate-800" />,
+const TripDetailMap = dynamic(() => import('@/components/TripDetailMap'), {
+    loading: () => <div className="h-96 w-full animate-pulse rounded-xl bg-slate-800" />,
     ssr: false
 });
 
@@ -90,6 +90,9 @@ export default function TripDetailPage() {
     const [trip, setTrip] = useState<Trip | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [startAddress, setStartAddress] = useState<string>('');
+    const [endAddress, setEndAddress] = useState<string>('');
+    const [loadingAddresses, setLoadingAddresses] = useState(false);
     const { units } = useSettingsStore();
 
     useEffect(() => {
@@ -117,6 +120,55 @@ export default function TripDetailPage() {
             setLoading(false);
         }
     };
+
+    // Fetch addresses for start and end coordinates
+    const fetchAddresses = async () => {
+        if (!trip) return;
+
+        setLoadingAddresses(true);
+
+        // Use trip addresses if available, otherwise geocode
+        if (trip.start_address) {
+            setStartAddress(trip.start_address);
+        } else if (trip.start_latitude && trip.start_longitude) {
+            try {
+                const res = await fetch(`/api/geocode?lat=${trip.start_latitude}&lng=${trip.start_longitude}`);
+                const data = await res.json();
+                if (data.success) {
+                    setStartAddress(data.address);
+                } else {
+                    setStartAddress(`${trip.start_latitude.toFixed(4)}, ${trip.start_longitude.toFixed(4)}`);
+                }
+            } catch {
+                setStartAddress(`${trip.start_latitude.toFixed(4)}, ${trip.start_longitude.toFixed(4)}`);
+            }
+        }
+
+        if (trip.end_address) {
+            setEndAddress(trip.end_address);
+        } else if (trip.end_latitude && trip.end_longitude) {
+            try {
+                const res = await fetch(`/api/geocode?lat=${trip.end_latitude}&lng=${trip.end_longitude}`);
+                const data = await res.json();
+                if (data.success) {
+                    setEndAddress(data.address);
+                } else {
+                    setEndAddress(`${trip.end_latitude.toFixed(4)}, ${trip.end_longitude.toFixed(4)}`);
+                }
+            } catch {
+                setEndAddress(`${trip.end_latitude.toFixed(4)}, ${trip.end_longitude.toFixed(4)}`);
+            }
+        }
+
+        setLoadingAddresses(false);
+    };
+
+    // Fetch addresses when trip loads
+    useEffect(() => {
+        if (trip) {
+            fetchAddresses();
+        }
+    }, [trip]);
 
     if (loading) {
         return (
@@ -178,12 +230,12 @@ export default function TripDetailPage() {
             <main className="mx-auto max-w-7xl px-6 py-8">
                 {/* Map Section */}
                 {hasCoords && (
-                    <div className="mb-8 h-96 overflow-hidden rounded-2xl border border-slate-700/50">
-                        <TripMiniMap
+                    <div className="mb-8">
+                        <TripDetailMap
                             startLat={trip.start_latitude!}
-                            startLon={trip.start_longitude!}
+                            startLng={trip.start_longitude!}
                             endLat={trip.end_latitude}
-                            endLon={trip.end_longitude}
+                            endLng={trip.end_longitude}
                         />
                     </div>
                 )}
@@ -271,15 +323,15 @@ export default function TripDetailPage() {
                 <div className="mt-8 grid gap-4 md:grid-cols-2">
                     <LocationCard
                         title="Start Location"
-                        address={trip.start_address}
+                        address={startAddress || (loadingAddresses ? 'Loading address...' : undefined) || trip.start_address}
                         lat={trip.start_latitude}
                         lon={trip.start_longitude}
                         color="green"
                     />
-                    {trip.end_address && (
+                    {trip.end_latitude && trip.end_longitude && (
                         <LocationCard
                             title="End Location"
-                            address={trip.end_address}
+                            address={endAddress || (loadingAddresses ? 'Loading address...' : undefined) || trip.end_address}
                             lat={trip.end_latitude}
                             lon={trip.end_longitude}
                             color="red"
