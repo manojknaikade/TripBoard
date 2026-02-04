@@ -1,6 +1,7 @@
 'use client'
 
-import { MapContainer, TileLayer, Marker, Polyline } from 'react-leaflet'
+import { useEffect, useRef, useState } from 'react'
+import { MapContainer, TileLayer, Marker, Polyline, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 
@@ -26,29 +27,42 @@ interface TripMiniMapProps {
     endLon?: number | null;
 }
 
+// Component to fit bounds after map is initialized
+function FitBounds({ bounds }: { bounds: L.LatLngBoundsExpression }) {
+    const map = useMap();
+
+    useEffect(() => {
+        if (bounds) {
+            map.fitBounds(bounds, { padding: [20, 20], maxZoom: 14 });
+        }
+    }, [bounds, map]);
+
+    return null;
+}
+
 export default function TripMiniMap({ startLat, startLon, endLat, endLon }: TripMiniMapProps) {
-    // Calculate center and bounds
     const hasEnd = endLat != null && endLon != null;
+
+    // Calculate center and bounds
     const centerLat = hasEnd ? (startLat + endLat) / 2 : startLat;
     const centerLon = hasEnd ? (startLon + endLon) / 2 : startLon;
 
-    // Determine zoom level based on distance
-    let zoom = 12; // Reduced from 14 to show more context
-    if (hasEnd) {
-        const latDiff = Math.abs(startLat - endLat);
-        const lonDiff = Math.abs(startLon - endLon);
-        const maxDiff = Math.max(latDiff, lonDiff);
-        if (maxDiff > 0.1) zoom = 10;  // Reduced from 11
-        else if (maxDiff > 0.05) zoom = 11; // Reduced from 12
-        else if (maxDiff > 0.02) zoom = 12; // Reduced from 13
-        else zoom = 13; // New: for very close start/end points
-    }
+    // Create bounds for fitBounds
+    const bounds = hasEnd
+        ? L.latLngBounds([
+            [startLat, startLon],
+            [endLat, endLon]
+        ])
+        : L.latLngBounds([
+            [startLat - 0.01, startLon - 0.01],
+            [startLat + 0.01, startLon + 0.01]
+        ]);
 
     return (
         <div className="h-full w-full rounded-lg overflow-hidden">
             <MapContainer
                 center={[centerLat, centerLon]}
-                zoom={zoom}
+                zoom={12}
                 style={{ height: '100%', width: '100%' }}
                 zoomControl={false}
                 dragging={false}
@@ -60,6 +74,9 @@ export default function TripMiniMap({ startLat, startLon, endLat, endLon }: Trip
                 <TileLayer
                     url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
                 />
+
+                {/* Fit bounds to show both markers */}
+                <FitBounds bounds={bounds} />
 
                 {/* Start marker */}
                 <Marker position={[startLat, startLon]} icon={startIcon} />
