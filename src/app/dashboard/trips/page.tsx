@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { handleSignOut } from '@/lib/utils/auth';
+import { useSettingsStore } from '@/stores/settingsStore';
 import {
     Zap,
     Gauge,
@@ -83,10 +84,19 @@ function formatTime(dateString: string): string {
     });
 }
 
+function milesToKm(miles: number): number {
+    return miles * 1.60934;
+}
+
 export default function TripsPage() {
+    const { units } = useSettingsStore();
     const [trips, setTrips] = useState<Trip[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [timeframe, setTimeframe] = useState('week');
+    const [customStart, setCustomStart] = useState('');
+    const [customEnd, setCustomEnd] = useState('');
+    const [showCustomPicker, setShowCustomPicker] = useState(false);
 
     useEffect(() => {
         fetchTrips();
@@ -109,8 +119,50 @@ export default function TripsPage() {
         }
     };
 
+    // Calculate date range based on timeframe
+    const getDateRange = () => {
+        const toDate = new Date();
+        let fromDate = new Date();
+
+        if (timeframe === 'custom' && customStart && customEnd) {
+            fromDate = new Date(customStart);
+            toDate.setTime(new Date(customEnd).getTime());
+        } else {
+            switch (timeframe) {
+                case '7days':
+                    fromDate = new Date(toDate.getTime() - 7 * 24 * 60 * 60 * 1000);
+                    break;
+                case 'month':
+                    fromDate = new Date(toDate.getFullYear(), toDate.getMonth(), 1);
+                    break;
+                case '30days':
+                    fromDate = new Date(toDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+                    break;
+                case '3months':
+                    fromDate = new Date(toDate.getTime() - 90 * 24 * 60 * 60 * 1000);
+                    break;
+                case 'week':
+                default:
+                    const day = toDate.getDay();
+                    const diff = toDate.getDate() - day + (day === 0 ? -6 : 1);
+                    fromDate = new Date(toDate.getFullYear(), toDate.getMonth(), diff);
+                    fromDate.setHours(0, 0, 0, 0);
+                    break;
+            }
+        }
+
+        return { fromDate, toDate };
+    };
+
+    // Filter trips by selected timeframe
+    const { fromDate, toDate } = getDateRange();
+    const filteredTrips = trips.filter(trip => {
+        const tripDate = new Date(trip.started_at);
+        return tripDate >= fromDate && tripDate <= toDate;
+    });
+
     // Group trips by date
-    const tripsByDate = trips.reduce((acc, trip) => {
+    const tripsByDate = filteredTrips.reduce((acc, trip) => {
         const date = formatDate(trip.started_at);
         if (!acc[date]) {
             acc[date] = [];
@@ -120,10 +172,18 @@ export default function TripsPage() {
     }, {} as Record<string, Trip[]>);
 
     // Calculate stats
-    const totalTrips = trips.length;
-    const totalMiles = trips.reduce((sum, t) => sum + (t.distance_miles || 0), 0);
-    const totalEnergy = trips.reduce((sum, t) => sum + (t.energy_used_kwh || 0), 0);
+    const totalTrips = filteredTrips.length;
+    const totalMiles = filteredTrips.reduce((sum, t) => sum + (t.distance_miles || 0), 0);
+    const totalEnergy = filteredTrips.reduce((sum, t) => sum + (t.energy_used_kwh || 0), 0);
     const avgEfficiency = totalMiles > 0 ? (totalEnergy * 1000) / totalMiles : 0;
+
+    // Convert to user's preferred units
+    const displayDistance = units === 'metric' ? milesToKm(totalMiles) : totalMiles;
+    const displayDistanceUnit = units === 'metric' ? 'km' : 'mi';
+    const displayEfficiency = units === 'metric' && totalMiles > 0
+        ? (totalEnergy * 1000) / milesToKm(totalMiles)
+        : avgEfficiency;
+    const efficiencyUnit = units === 'metric' ? 'Wh/km' : 'Wh/mi';
 
     return (
         <div className="min-h-screen">
@@ -164,9 +224,23 @@ export default function TripsPage() {
 
             {/* Main Content */}
             <main className="mx-auto max-w-7xl px-6 py-8">
-                <div className="mb-8">
-                    <h1 className="text-2xl font-bold">Trip History</h1>
-                    <p className="text-slate-400">View and analyze your driving trips</p>
+                <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <h1 className="text-2xl font-bold">Trip History</h1>
+                        <p className="text-slate-400">View and analyze your driving trips</p>
+                    </div>
+
+                    {/* Timeframe Selector */}
+                    <TimeframeSelector
+                        selected={timeframe}
+                        onSelect={setTimeframe}
+                        customStart={customStart}
+                        customEnd={customEnd}
+                        onCustomStartChange={setCustomStart}
+                        onCustomEndChange={setCustomEnd}
+                        showCustomPicker={showCustomPicker}
+                        onToggleCustomPicker={() => setShowCustomPicker(!showCustomPicker)}
+                    />
                 </div>
 
                 {/* Stats Cards */}
@@ -180,7 +254,7 @@ export default function TripsPage() {
                     <StatCard
                         icon={<Navigation className="h-5 w-5" />}
                         label="Total Distance"
-                        value={`${Math.round(totalMiles)} mi`}
+                        value={`${displayDistance.toFixed(1)} ${displayDistanceUnit}`}
                         color="green"
                     />
                     <StatCard
@@ -192,7 +266,7 @@ export default function TripsPage() {
                     <StatCard
                         icon={<TrendingUp className="h-5 w-5" />}
                         label="Avg Efficiency"
-                        value={avgEfficiency > 0 ? `${Math.round(avgEfficiency)} Wh/mi` : '--'}
+                        value={avgEfficiency > 0 ? `${Math.round(displayEfficiency)} ${efficiencyUnit}` : '--'}
                         color="orange"
                     />
                 </div>
@@ -236,7 +310,7 @@ export default function TripsPage() {
                                 </div>
                                 <div className="space-y-3">
                                     {dateTrips.map((trip) => (
-                                        <TripCard key={trip.id} trip={trip} />
+                                        <TripCard key={trip.id} trip={trip} units={units} />
                                     ))}
                                 </div>
                             </div>
@@ -248,7 +322,35 @@ export default function TripsPage() {
     );
 }
 
-function TripCard({ trip }: { trip: Trip }) {
+function getTripName(trip: Trip): string {
+    // If we have addresses, use them
+    if (trip.start_address && trip.end_address) {
+        // Extract city/area names from addresses
+        const startParts = trip.start_address.split(',');
+        const endParts = trip.end_address.split(',');
+        const startName = startParts[0]?.trim() || trip.start_address;
+        const endName = endParts[0]?.trim() || trip.end_address;
+
+        if (startName === endName) {
+            return `${startName} (Round trip)`;
+        }
+        return `${startName} → ${endName}`;
+    }
+
+    // If only start address
+    if (trip.start_address) {
+        const parts = trip.start_address.split(',');
+        return parts[0]?.trim() || trip.start_address;
+    }
+
+    // Improved fallback: use time-based name instead of coordinates
+    const time = new Date(trip.started_at);
+    const timeStr = time.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    const distance = trip.distance_miles ? ` (${trip.distance_miles.toFixed(1)} mi)` : '';
+    return `Trip at ${timeStr}${distance}`;
+}
+
+function TripCard({ trip, units }: { trip: Trip; units: 'imperial' | 'metric' }) {
     const isInProgress = trip.status === 'in_progress';
     const hasCoords = trip.start_latitude && trip.start_longitude;
 
@@ -289,30 +391,29 @@ function TripCard({ trip }: { trip: Trip }) {
                         <div>
                             <div className="flex items-center gap-2">
                                 <span className="font-medium">
-                                    {trip.start_address || `${trip.start_latitude?.toFixed(3)}, ${trip.start_longitude?.toFixed(3)}`}
+                                    {getTripName(trip)}
                                 </span>
-                                {!isInProgress && trip.end_address && (
-                                    <>
-                                        <span className="text-slate-500">→</span>
-                                        <span className="font-medium">{trip.end_address}</span>
-                                    </>
-                                )}
                                 {isInProgress && (
                                     <span className="rounded-full bg-green-500/20 px-2 py-0.5 text-xs font-medium text-green-400">
                                         In Progress
                                     </span>
                                 )}
                             </div>
-                            <div className="mt-1 flex items-center gap-4 text-sm text-slate-400">
+                            <div className="mt-1 flex items-center gap-3 text-sm text-slate-400">
                                 <span className="flex items-center gap-1">
                                     <Clock className="h-3 w-3" />
                                     {formatTime(trip.started_at)}
-                                    {trip.duration_seconds && ` • ${formatDuration(trip.duration_seconds)}`}
                                 </span>
+                                {trip.duration_seconds && (
+                                    <span>{formatDuration(trip.duration_seconds)}</span>
+                                )}
                                 {trip.distance_miles && (
                                     <span className="flex items-center gap-1">
                                         <MapPin className="h-3 w-3" />
-                                        {trip.distance_miles.toFixed(1)} mi
+                                        {units === 'metric'
+                                            ? `${milesToKm(trip.distance_miles).toFixed(1)} km`
+                                            : `${trip.distance_miles.toFixed(1)} mi`
+                                        }
                                     </span>
                                 )}
                                 {trip.energy_used_kwh && (
@@ -331,9 +432,9 @@ function TripCard({ trip }: { trip: Trip }) {
                             <div className="text-right hidden md:block">
                                 <div className="text-sm text-slate-400">Battery</div>
                                 <div className="font-medium">
-                                    {trip.start_battery_level}%
+                                    {trip.start_battery_level.toFixed(2)}%
                                     {trip.end_battery_level && (
-                                        <span className="text-slate-500"> → {trip.end_battery_level}%</span>
+                                        <span className="text-slate-500"> → {trip.end_battery_level.toFixed(2)}%</span>
                                     )}
                                 </div>
                             </div>
@@ -394,6 +495,86 @@ function StatCard({
             <div className={`mb-3 inline-flex rounded-lg p-2 ${colors[color]}`}>{icon}</div>
             <p className="text-sm text-slate-400">{label}</p>
             <p className="text-xl font-bold">{value}</p>
+        </div>
+    );
+}
+// Timeframe selector options and component
+const timeframeOptions = [
+    { id: 'week', label: 'This Week' },
+    { id: '7days', label: 'Last 7 Days' },
+    { id: 'month', label: 'This Month' },
+    { id: '30days', label: 'Last 30 Days' },
+    { id: '3months', label: 'Last 3 Months' },
+    { id: 'custom', label: 'Custom' },
+];
+
+interface TimeframeSelectorProps {
+    selected: string;
+    onSelect: (id: string) => void;
+    customStart: string;
+    customEnd: string;
+    onCustomStartChange: (date: string) => void;
+    onCustomEndChange: (date: string) => void;
+    showCustomPicker: boolean;
+    onToggleCustomPicker: () => void;
+}
+
+function TimeframeSelector({
+    selected,
+    onSelect,
+    customStart,
+    customEnd,
+    onCustomStartChange,
+    onCustomEndChange,
+    showCustomPicker,
+    onToggleCustomPicker,
+}: TimeframeSelectorProps) {
+    return (
+        <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap gap-2">
+                {timeframeOptions.map((option) => (
+                    <button
+                        key={option.id}
+                        onClick={() => {
+                            onSelect(option.id);
+                            if (option.id === 'custom') {
+                                onToggleCustomPicker();
+                            }
+                        }}
+                        className={`flex items-center gap-1.5 rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${selected === option.id
+                                ? 'bg-red-500 text-white'
+                                : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-white'
+                            }`}
+                    >
+                        {option.id === 'custom' && <Calendar className="h-3.5 w-3.5" />}
+                        {option.label}
+                    </button>
+                ))}
+            </div>
+
+            {/* Custom Date Picker */}
+            {selected === 'custom' && showCustomPicker && (
+                <div className="flex flex-wrap items-center gap-3 rounded-lg bg-slate-800/50 p-3">
+                    <div className="flex items-center gap-2">
+                        <label className="text-sm text-slate-400">From:</label>
+                        <input
+                            type="date"
+                            value={customStart}
+                            onChange={(e) => onCustomStartChange(e.target.value)}
+                            className="rounded-lg border border-slate-600 bg-slate-700 px-3 py-1.5 text-sm text-white focus:border-red-500 focus:outline-none"
+                        />
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <label className="text-sm text-slate-400">To:</label>
+                        <input
+                            type="date"
+                            value={customEnd}
+                            onChange={(e) => onCustomEndChange(e.target.value)}
+                            className="rounded-lg border border-slate-600 bg-slate-700 px-3 py-1.5 text-sm text-white focus:border-red-500 focus:outline-none"
+                        />
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
