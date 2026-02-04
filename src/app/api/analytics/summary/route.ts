@@ -26,36 +26,34 @@ export async function GET(request: NextRequest) {
         }
     }
     // Calculate date range based on timeframe
-    let fromDate: Date
-    const toDate = new Date()
+    const toDate = new Date();
+    toDate.setHours(23, 59, 59, 999); // End of day
+    let fromDate = new Date();
 
-    if (timeframe === 'custom' && startDate && endDate) {
-        fromDate = new Date(startDate)
-        toDate.setTime(new Date(endDate).getTime())
-    } else {
-        switch (timeframe) {
-            case '7days':
-                fromDate = new Date(toDate.getTime() - 7 * 24 * 60 * 60 * 1000)
-                break
-            case 'month':
-                fromDate = new Date(toDate.getFullYear(), toDate.getMonth(), 1)
-                break
-            case '30days':
-                fromDate = new Date(toDate.getTime() - 30 * 24 * 60 * 60 * 1000)
-                break
-            case '3months':
-                fromDate = new Date(toDate.getTime() - 90 * 24 * 60 * 60 * 1000)
-                break
-            case 'week':
-            default:
-                // Start of current week (Monday) - FIXED: Don't mutate toDate
-                const now = new Date()
-                const day = now.getDay()
-                const diff = now.getDate() - day + (day === 0 ? -6 : 1)
-                fromDate = new Date(now.getFullYear(), now.getMonth(), diff)
-                fromDate.setHours(0, 0, 0, 0)
-                break
+    if (timeframe === 'custom') {
+        const startDateParam = searchParams.get('startDate');
+        const endDateParam = searchParams.get('endDate');
+        if (startDateParam && endDateParam) {
+            fromDate = new Date(startDateParam);
+            fromDate.setHours(0, 0, 0, 0); // Start of day
+            const customToDate = new Date(endDateParam);
+            customToDate.setHours(23, 59, 59, 999); // End of day
+            toDate.setTime(customToDate.getTime());
         }
+    } else if (timeframe === '7days') {
+        fromDate = new Date(toDate.getTime() - 7 * 24 * 60 * 60 * 1000);
+    } else if (timeframe === 'month') {
+        fromDate = new Date(toDate.getFullYear(), toDate.getMonth(), 1);
+    } else if (timeframe === '30days') {
+        fromDate = new Date(toDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+    } else if (timeframe === '3months') {
+        fromDate = new Date(toDate.getTime() - 90 * 24 * 60 * 60 * 1000);
+    } else {
+        // Default: 'week' - Monday to Sunday of current week
+        const day = toDate.getDay();
+        const diff = toDate.getDate() - day + (day === 0 ? -6 : 1);
+        fromDate = new Date(toDate.getFullYear(), toDate.getMonth(), diff);
+        fromDate.setHours(0, 0, 0, 0);
     }
 
     try {
