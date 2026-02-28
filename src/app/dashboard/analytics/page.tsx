@@ -32,6 +32,7 @@ import {
     Pie,
     Cell,
 } from 'recharts';
+import Header from '@/components/Header';
 
 // Default fallback data
 const defaultWeeklyData = [
@@ -111,40 +112,7 @@ export default function AnalyticsPage() {
 
     return (
         <div className="min-h-screen">
-            {/* Header */}
-            <header className="border-b border-slate-700/50 bg-slate-900/50 backdrop-blur-xl">
-                <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-                    <div className="flex items-center gap-3">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-red-500 to-red-600">
-                            <Zap className="h-5 w-5 text-white" />
-                        </div>
-                        <span className="text-xl font-bold">TripBoard</span>
-                    </div>
-
-                    <nav className="flex items-center gap-2">
-                        <NavLink href="/dashboard" icon={<Gauge className="h-4 w-4" />}>
-                            Dashboard
-                        </NavLink>
-                        <NavLink href="/dashboard/trips" icon={<History className="h-4 w-4" />}>
-                            Trips
-                        </NavLink>
-                        <NavLink href="/dashboard/analytics" icon={<BarChart3 className="h-4 w-4" />} active>
-                            Analytics
-                        </NavLink>
-                        <NavLink href="/dashboard/settings" icon={<Settings className="h-4 w-4" />}>
-                            Settings
-                        </NavLink>
-                    </nav>
-
-                    <button
-                        onClick={handleSignOut}
-                        className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
-                    >
-                        <LogOut className="h-4 w-4" />
-                        Sign Out
-                    </button>
-                </div>
-            </header>
+            <Header />
 
             {/* Main Content */}
             <main className="mx-auto max-w-7xl px-6 py-8">
@@ -344,30 +312,7 @@ export default function AnalyticsPage() {
     );
 }
 
-function NavLink({
-    href,
-    icon,
-    children,
-    active,
-}: {
-    href: string;
-    icon: React.ReactNode;
-    children: React.ReactNode;
-    active?: boolean;
-}) {
-    return (
-        <Link
-            href={href}
-            className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${active
-                ? 'bg-red-500/10 text-red-400'
-                : 'text-slate-400 hover:bg-slate-800 hover:text-white'
-                }`}
-        >
-            {icon}
-            {children}
-        </Link>
-    );
-}
+
 
 function StatCard({
     icon,

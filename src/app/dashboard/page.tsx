@@ -27,6 +27,7 @@ import {
   BatteryCharging,
 } from 'lucide-react';
 import { useSettingsStore } from '@/stores/settingsStore';
+import Header from '@/components/Header';
 import dynamic from 'next/dynamic';
 
 // Dynamic import for map component (client-side only)
@@ -99,9 +100,16 @@ function formatTimeAgo(timestamp: number): string {
   const seconds = Math.floor((Date.now() - timestamp) / 1000);
 
   if (seconds < 60) return 'just now';
-  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)} hours ago`;
-  return `${Math.floor(seconds / 86400)} days ago`;
+  if (seconds < 3600) {
+    const mins = Math.floor(seconds / 60);
+    return mins === 1 ? '1 min ago' : `${mins} mins ago`;
+  }
+  if (seconds < 86400) {
+    const hours = Math.floor(seconds / 3600);
+    return hours === 1 ? '1 hour ago' : `${hours} hours ago`;
+  }
+  const days = Math.floor(seconds / 86400);
+  return days === 1 ? '1 day ago' : `${days} days ago`;
 }
 
 export default function DashboardPage() {
@@ -330,46 +338,13 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen">
-      {/* Header */}
-      <header className="border-b border-slate-700/50 bg-slate-900/50 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-red-500 to-red-600">
-              <Zap className="h-5 w-5 text-white" />
-            </div>
-            <span className="text-xl font-bold">TripBoard</span>
-          </div>
-
-          <nav className="flex items-center gap-2">
-            <NavLink href="/dashboard" icon={<Gauge className="h-4 w-4" />} active>
-              Dashboard
-            </NavLink>
-            <NavLink href="/dashboard/trips" icon={<History className="h-4 w-4" />}>
-              Trips
-            </NavLink>
-            <NavLink href="/dashboard/analytics" icon={<BarChart3 className="h-4 w-4" />}>
-              Analytics
-            </NavLink>
-            <NavLink href="/dashboard/settings" icon={<Settings className="h-4 w-4" />}>
-              Settings
-            </NavLink>
-          </nav>
-
-          <button
-            onClick={handleSignOut}
-            className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
-          >
-            <LogOut className="h-4 w-4" />
-            Sign Out
-          </button>
-        </div>
-      </header>
+      <Header />
 
       {/* Main Content */}
-      <main className="mx-auto max-w-7xl px-6 py-8">
+      <main className="mx-auto max-w-7xl px-6 pb-24 pt-8 md:pb-8">
         {/* Vehicle Selector & Refresh */}
-        <div className="mb-8 flex items-center justify-between">
-          <div className="flex items-center gap-4">
+        <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-4">
             <Car className="h-6 w-6 text-red-400" />
             <select
               value={selectedVehicle?.id || ''}
@@ -632,30 +607,7 @@ export default function DashboardPage() {
   );
 }
 
-function NavLink({
-  href,
-  icon,
-  children,
-  active,
-}: {
-  href: string;
-  icon: React.ReactNode;
-  children: React.ReactNode;
-  active?: boolean;
-}) {
-  return (
-    <Link
-      href={href}
-      className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${active
-        ? 'bg-red-500/10 text-red-400'
-        : 'text-slate-400 hover:bg-slate-800 hover:text-white'
-        }`}
-    >
-      {icon}
-      {children}
-    </Link>
-  );
-}
+
 
 function StatCard({
   icon,

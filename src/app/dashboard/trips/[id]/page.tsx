@@ -15,6 +15,7 @@ import {
     TrendingUp,
     Calendar,
 } from 'lucide-react';
+import Header from '@/components/Header';
 import dynamic from 'next/dynamic';
 
 const TripDetailMap = dynamic(() => import('@/components/TripDetailMap'), {
@@ -202,32 +203,28 @@ export default function TripDetailPage() {
 
     return (
         <div className="min-h-screen">
-            {/* Header */}
-            <header className="border-b border-slate-700/50 bg-slate-900/50 backdrop-blur-xl">
-                <div className="mx-auto flex max-w-7xl items-center gap-4 px-6 py-4">
-                    <Link
-                        href="/dashboard/trips"
-                        className="flex items-center gap-2 text-slate-400 hover:text-white"
-                    >
-                        <ArrowLeft className="h-4 w-4" />
-                        Back
-                    </Link>
-                    <div className="flex items-center gap-3">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-red-500 to-red-600">
-                            <Zap className="h-5 w-5 text-white" />
-                        </div>
-                        <div>
-                            <h1 className="text-xl font-bold">Trip Details</h1>
-                            <p className="text-sm text-slate-400">
-                                {trip.start_address || 'Trip Details'}
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            </header>
+            <Header />
 
             {/* Main Content */}
-            <main className="mx-auto max-w-7xl px-6 py-8">
+            <main className="mx-auto max-w-7xl px-6 pb-24 pt-8 md:pb-8">
+                <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <div className="mb-2">
+                            <Link
+                                href="/dashboard/trips"
+                                className="inline-flex items-center gap-2 text-sm text-slate-400 hover:text-white transition-colors"
+                            >
+                                <ArrowLeft className="h-4 w-4" />
+                                Back to Trips
+                            </Link>
+                        </div>
+                        <h1 className="text-2xl font-bold">Trip Details</h1>
+                        <p className="text-slate-400">
+                            {trip.start_address || `${trip.start_latitude?.toFixed(4)}, ${trip.start_longitude?.toFixed(4)}`}
+                        </p>
+                    </div>
+                </div>
+
                 {/* Map Section */}
                 {hasCoords && (
                     <div className="mb-8">
@@ -351,7 +348,7 @@ function StatBox({
 }: {
     icon: React.ReactNode;
     label: string;
-    value: string;
+    value: React.ReactNode;
     color: string;
 }) {
     const colorClasses = {
@@ -386,9 +383,9 @@ function LocationCard({
     color,
 }: {
     title: string;
-    address: string | null;
-    lat: number | null;
-    lon: number | null;
+    address?: string | null;
+    lat?: number | null;
+    lon?: number | null;
     color: string;
 }) {
     const colorClasses = {

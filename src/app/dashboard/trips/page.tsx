@@ -21,6 +21,7 @@ import {
     Car,
     Loader2,
 } from 'lucide-react';
+import Header from '@/components/Header';
 import dynamic from 'next/dynamic';
 
 // Dynamic import to avoid SSR issues with Leaflet
@@ -191,40 +192,7 @@ export default function TripsPage() {
 
     return (
         <div className="min-h-screen">
-            {/* Header */}
-            <header className="border-b border-slate-700/50 bg-slate-900/50 backdrop-blur-xl">
-                <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-                    <div className="flex items-center gap-3">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-red-500 to-red-600">
-                            <Zap className="h-5 w-5 text-white" />
-                        </div>
-                        <span className="text-xl font-bold">TripBoard</span>
-                    </div>
-
-                    <nav className="flex items-center gap-2">
-                        <NavLink href="/dashboard" icon={<Gauge className="h-4 w-4" />}>
-                            Dashboard
-                        </NavLink>
-                        <NavLink href="/dashboard/trips" icon={<History className="h-4 w-4" />} active>
-                            Trips
-                        </NavLink>
-                        <NavLink href="/dashboard/analytics" icon={<BarChart3 className="h-4 w-4" />}>
-                            Analytics
-                        </NavLink>
-                        <NavLink href="/dashboard/settings" icon={<Settings className="h-4 w-4" />}>
-                            Settings
-                        </NavLink>
-                    </nav>
-
-                    <button
-                        onClick={handleSignOut}
-                        className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
-                    >
-                        <LogOut className="h-4 w-4" />
-                        Sign Out
-                    </button>
-                </div>
-            </header>
+            <Header />
 
             {/* Main Content */}
             <main className="mx-auto max-w-7xl px-6 py-8">
@@ -326,7 +294,7 @@ export default function TripsPage() {
     );
 }
 
-function getTripName(trip: Trip): string {
+function getTripName(trip: Trip, units: 'imperial' | 'metric'): string {
     // If we have addresses, use them
     if (trip.start_address && trip.end_address) {
         // Extract city/area names from addresses
@@ -350,8 +318,16 @@ function getTripName(trip: Trip): string {
     // Improved fallback: use time-based name instead of coordinates
     const time = new Date(trip.started_at);
     const timeStr = time.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-    const distance = trip.distance_miles ? ` (${trip.distance_miles.toFixed(1)} mi)` : '';
-    return `Trip at ${timeStr}${distance}`;
+
+    if (!trip.distance_miles) {
+        return `Trip at ${timeStr}`;
+    }
+
+    const distanceStr = units === 'metric'
+        ? `(${(trip.distance_miles * 1.60934).toFixed(1)} km)`
+        : `(${trip.distance_miles.toFixed(1)} mi)`;
+
+    return `Trip at ${timeStr} ${distanceStr}`;
 }
 
 function TripCard({ trip, units }: { trip: Trip; units: 'imperial' | 'metric' }) {
@@ -395,7 +371,7 @@ function TripCard({ trip, units }: { trip: Trip; units: 'imperial' | 'metric' })
                         <div>
                             <div className="flex items-center gap-2">
                                 <span className="font-medium">
-                                    {getTripName(trip)}
+                                    {getTripName(trip, units)}
                                 </span>
                                 {isInProgress && (
                                     <span className="rounded-full bg-green-500/20 px-2 py-0.5 text-xs font-medium text-green-400">
@@ -443,7 +419,6 @@ function TripCard({ trip, units }: { trip: Trip; units: 'imperial' | 'metric' })
                                 </div>
                             </div>
                         )}
-                        <ChevronRight className="h-5 w-5 text-slate-500" />
                     </div>
                 </div>
             </div>
@@ -451,30 +426,7 @@ function TripCard({ trip, units }: { trip: Trip; units: 'imperial' | 'metric' })
     );
 }
 
-function NavLink({
-    href,
-    icon,
-    children,
-    active,
-}: {
-    href: string;
-    icon: React.ReactNode;
-    children: React.ReactNode;
-    active?: boolean;
-}) {
-    return (
-        <Link
-            href={href}
-            className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${active
-                ? 'bg-red-500/10 text-red-400'
-                : 'text-slate-400 hover:bg-slate-800 hover:text-white'
-                }`}
-        >
-            {icon}
-            {children}
-        </Link>
-    );
-}
+
 
 function StatCard({
     icon,
