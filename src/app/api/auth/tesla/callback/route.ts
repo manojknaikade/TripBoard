@@ -99,7 +99,7 @@ export async function GET(request: NextRequest) {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
             sameSite: 'lax',
-            maxAge: tokens.expires_in || 3600,
+            maxAge: 30 * 24 * 60 * 60, // Extend session to 30 days in the browser
         });
 
         if (tokens.refresh_token) {
