@@ -70,14 +70,16 @@ export async function GET(request: NextRequest) {
             }
         }
 
+        const durationSeconds = trip.end_time
+            ? Math.floor((new Date(trip.end_time).getTime() - new Date(trip.start_time).getTime()) / 1000)
+            : null;
+
         return {
             id: trip.id,
             vehicle_id: trip.vehicle_id || trip.vin,
             started_at: trip.start_time,
             ended_at: trip.end_time,
-            duration_seconds: trip.end_time
-                ? Math.floor((new Date(trip.end_time).getTime() - new Date(trip.start_time).getTime()) / 1000)
-                : null,
+            duration_seconds: durationSeconds,
             start_latitude: trip.start_latitude,
             start_longitude: trip.start_longitude,
             start_address: trip.start_address,
@@ -90,7 +92,9 @@ export async function GET(request: NextRequest) {
             start_battery_level: trip.start_battery_pct,
             end_battery_level: trip.end_battery_pct,
             max_speed: trip.max_speed_mph,
-            avg_speed: trip.avg_speed_mph,
+            avg_speed: trip.avg_speed_mph || (distance && durationSeconds && durationSeconds > 0
+                ? Math.round((distance / (durationSeconds / 3600)) * 10) / 10
+                : null),
             status: trip.is_complete ? 'completed' : 'in_progress',
         };
     });

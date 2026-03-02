@@ -108,6 +108,9 @@ export async function POST(request: NextRequest) {
                 ChargeState: { interval_seconds: 30 },
                 ACChargingPower: { interval_seconds: 30 },
                 DCChargingPower: { interval_seconds: 30 },
+                ACChargingEnergyIn: { interval_seconds: 30 },
+                DCChargingEnergyIn: { interval_seconds: 30 },
+                FastChargerPresent: { interval_seconds: 30 },
                 // Temperature
                 InsideTemp: { interval_seconds: 60 },
                 OutsideTemp: { interval_seconds: 60 },

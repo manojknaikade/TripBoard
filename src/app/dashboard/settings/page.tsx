@@ -32,6 +32,7 @@ const LocationPicker = dynamic(() => import('@/components/settings/LocationPicke
 export default function SettingsPage() {
     const [saved, setSaved] = useState(false);
     const [mounted, setMounted] = useState(false);
+    const [exporting, setExporting] = useState<'csv' | 'json' | null>(null);
     const [savingHome, setSavingHome] = useState(false);
 
     const router = useRouter();
@@ -99,6 +100,28 @@ export default function SettingsPage() {
             console.error('Failed to save home location:', err);
         } finally {
             setSavingHome(false);
+        }
+    };
+
+    const handleExport = async (format: 'csv' | 'json') => {
+        setExporting(format);
+        try {
+            const res = await fetch(`/api/trips/export?format=${format}`);
+            if (!res.ok) throw new Error('Export failed');
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = res.headers.get('Content-Disposition')?.match(/filename="(.+)"/)?.[1]
+                || `tripboard_export.${format}`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error('Export error:', err);
+        } finally {
+            setExporting(null);
         }
     };
 
@@ -329,13 +352,29 @@ export default function SettingsPage() {
                         description="Export your trip history and analytics"
                     >
                         <div className="flex gap-3">
-                            <button className="flex items-center gap-2 rounded-lg bg-slate-700/50 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700">
-                                <Download className="h-4 w-4" />
-                                Export as CSV
+                            <button
+                                onClick={() => handleExport('csv')}
+                                disabled={exporting !== null}
+                                className="flex items-center gap-2 rounded-lg bg-slate-700/50 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700 disabled:opacity-50"
+                            >
+                                {exporting === 'csv' ? (
+                                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-transparent" />
+                                ) : (
+                                    <Download className="h-4 w-4" />
+                                )}
+                                {exporting === 'csv' ? 'Exporting…' : 'Export as CSV'}
                             </button>
-                            <button className="flex items-center gap-2 rounded-lg bg-slate-700/50 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700">
-                                <Download className="h-4 w-4" />
-                                Export as JSON
+                            <button
+                                onClick={() => handleExport('json')}
+                                disabled={exporting !== null}
+                                className="flex items-center gap-2 rounded-lg bg-slate-700/50 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700 disabled:opacity-50"
+                            >
+                                {exporting === 'json' ? (
+                                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-transparent" />
+                                ) : (
+                                    <Download className="h-4 w-4" />
+                                )}
+                                {exporting === 'json' ? 'Exporting…' : 'Export as JSON'}
                             </button>
                         </div>
                     </SettingsSection>

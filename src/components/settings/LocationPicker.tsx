@@ -148,7 +148,7 @@ export default function LocationPicker({ latitude, longitude, address, onLocatio
             </div>
 
             {/* Map */}
-            <div className="h-[400px] w-full overflow-hidden rounded-xl border border-slate-700">
+            <div className="relative z-0 h-[400px] w-full overflow-hidden rounded-xl border border-slate-700">
                 <MapContainer
                     center={[currentLat, currentLon]}
                     zoom={13}

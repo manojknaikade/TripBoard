@@ -314,6 +314,16 @@ export default function TripDetailPage() {
                             color="red"
                         />
                     )}
+                    {trip.avg_speed && (
+                        <StatBox
+                            icon={<Gauge className="h-5 w-5" />}
+                            label="Avg Speed"
+                            value={units === 'metric'
+                                ? `${Math.round(trip.avg_speed * 1.60934)} km/h`
+                                : `${Math.round(trip.avg_speed)} mph`}
+                            color="blue"
+                        />
+                    )}
                 </div>
 
                 {/* Locations */}
