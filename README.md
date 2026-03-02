@@ -26,7 +26,8 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
   - Aggregated stats with **trend percentages** vs. previous period
   - Charging Sources breakdown (pie chart)
 
-- **User Preferences**
+- **User Preferences & Security**
+  - Seamless authentication via **Tesla OAuth** with extended 30-day active sessions
   - Toggle between **Metric** (km, kWh) and **Imperial** (mi, kWh) units
   - Set home address with interactive map picker
   - Settings persisted to **Supabase** (survives browser clears)
