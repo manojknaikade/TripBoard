@@ -2,8 +2,16 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { NextRequest, NextResponse } from 'next/server'
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: NextRequest) {
     const supabase = await createClient()
+
+    // Enforce authentication so this isn't globally exposed and Next.js knows it's dynamic
+    const accessToken = request.cookies.get('tesla_access_token')?.value;
+    if (!accessToken) {
+        return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+    }
 
     // Get timeframe from query params
     const { searchParams } = new URL(request.url)
@@ -14,15 +22,19 @@ export async function GET(request: NextRequest) {
     // Get user settings to determine units
     let userUnits: 'imperial' | 'metric' = 'metric'; // DEFAULT TO METRIC
 
-    const adminClient = createAdminClient();
-    const { data: settings } = await adminClient
-        .from('app_settings')
-        .select('units')
-        .eq('id', 'default')
-        .single();
+    try {
+        const adminClient = createAdminClient();
+        const { data: settings } = await adminClient
+            .from('app_settings')
+            .select('units')
+            .eq('id', 'default')
+            .single();
 
-    if (settings?.units) {
-        userUnits = settings.units as 'imperial' | 'metric';
+        if (settings?.units) {
+            userUnits = settings.units as 'imperial' | 'metric';
+        }
+    } catch (e) {
+        console.warn('Could not fetch user settings (check SUPABASE_SERVICE_ROLE_KEY), defaulting to metric:', e);
     }
     // Calculate date range based on timeframe
     const toDate = new Date();
