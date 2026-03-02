@@ -1,15 +1,13 @@
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { NextRequest, NextResponse } from 'next/server'
 
 export async function GET() {
-    const supabase = await createClient()
+    const supabase = createAdminClient()
 
-    // Get home location from vehicle_status
     const { data, error } = await supabase
-        .from('vehicle_status')
+        .from('app_settings')
         .select('home_latitude, home_longitude, home_address')
-        .ilike('vin', 'vehicle_device.%')
-        .limit(1)
+        .eq('id', 'default')
         .single()
 
     if (error && error.code !== 'PGRST116') {
@@ -27,7 +25,7 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
-    const supabase = await createClient()
+    const supabase = createAdminClient()
 
     try {
         const { latitude, longitude, address } = await request.json()
@@ -36,15 +34,15 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Latitude and longitude required' }, { status: 400 })
         }
 
-        // Update home location in vehicle_status
         const { error } = await supabase
-            .from('vehicle_status')
+            .from('app_settings')
             .update({
                 home_latitude: latitude,
                 home_longitude: longitude,
-                home_address: address
+                home_address: address,
+                updated_at: new Date().toISOString(),
             })
-            .ilike('vin', 'vehicle_device.%')
+            .eq('id', 'default')
 
         if (error) {
             return NextResponse.json({ error: error.message }, { status: 500 })

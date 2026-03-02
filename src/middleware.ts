@@ -24,7 +24,8 @@ export const config = {
          * - favicon.ico (favicon file)
          * - public folder files
          * - api routes (let them handle their own auth)
+         *   EXCEPT api/settings which needs session refresh
          */
-        '/((?!_next/static|_next/image|favicon.ico|api/|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+        '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
     ],
 };

@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { NextRequest, NextResponse } from 'next/server'
 
 export async function GET(request: NextRequest) {
@@ -11,19 +12,17 @@ export async function GET(request: NextRequest) {
     const endDate = searchParams.get('endDate')
 
     // Get user settings to determine units
-    const { data: { user } } = await supabase.auth.getUser();
     let userUnits: 'imperial' | 'metric' = 'metric'; // DEFAULT TO METRIC
 
-    if (user) {
-        const { data: settings } = await supabase
-            .from('user_settings')
-            .select('units')
-            .eq('user_id', user.id)
-            .single();
+    const adminClient = createAdminClient();
+    const { data: settings } = await adminClient
+        .from('app_settings')
+        .select('units')
+        .eq('id', 'default')
+        .single();
 
-        if (settings?.units) {
-            userUnits = settings.units as 'imperial' | 'metric';
-        }
+    if (settings?.units) {
+        userUnits = settings.units as 'imperial' | 'metric';
     }
     // Calculate date range based on timeframe
     const toDate = new Date();
@@ -77,6 +76,7 @@ export async function GET(request: NextRequest) {
         let totalDrivingTime = 0
         const dailyData: Record<string, { distance: number; energy: number; trips: number }> = {}
         const hourlyEfficiency: Record<number, { total: number; count: number }> = {}
+        const distanceMultiplier = userUnits === 'metric' ? 1.60934 : 1;
 
         for (const trip of trips || []) {
             // Distance
@@ -108,20 +108,21 @@ export async function GET(request: NextRequest) {
             dailyData[day].energy += energy
             dailyData[day].trips += 1
 
-            // Hourly efficiency
+            // Bucket trip into 2-hour time slot for efficiency chart
             const hour = new Date(trip.start_time).getHours()
-            const efficiency = distance > 0 ? (energy * 1000) / distance : 0 // Wh/mi
+            const bucket = Math.floor(hour / 2) * 2;
+            const distInUserUnit = distance * distanceMultiplier;
+            const efficiency = distInUserUnit > 0 ? (energy * 1000) / distInUserUnit : 0
             if (efficiency > 0) {
-                if (!hourlyEfficiency[hour]) {
-                    hourlyEfficiency[hour] = { total: 0, count: 0 }
+                if (!hourlyEfficiency[bucket]) {
+                    hourlyEfficiency[bucket] = { total: 0, count: 0 }
                 }
-                hourlyEfficiency[hour].total += efficiency
-                hourlyEfficiency[hour].count += 1
+                hourlyEfficiency[bucket].total += efficiency
+                hourlyEfficiency[bucket].count += 1
             }
         }
 
         // Format data for charts based on timeframe
-        const distanceMultiplier = userUnits === 'metric' ? 1.60934 : 1;
         let weeklyData: Array<{ day: string; distance: number; energy: number; trips: number }>;
 
         if (timeframe === 'week') {
@@ -185,19 +186,26 @@ export async function GET(request: NextRequest) {
             }
         }
 
-        // Format efficiency by time of day
-        const efficiencyData = [
-            { time: '6am', efficiency: Math.round(hourlyEfficiency[6]?.total / (hourlyEfficiency[6]?.count || 1)) || 250 },
-            { time: '9am', efficiency: Math.round(hourlyEfficiency[9]?.total / (hourlyEfficiency[9]?.count || 1)) || 265 },
-            { time: '12pm', efficiency: Math.round(hourlyEfficiency[12]?.total / (hourlyEfficiency[12]?.count || 1)) || 260 },
-            { time: '3pm', efficiency: Math.round(hourlyEfficiency[15]?.total / (hourlyEfficiency[15]?.count || 1)) || 258 },
-            { time: '6pm', efficiency: Math.round(hourlyEfficiency[18]?.total / (hourlyEfficiency[18]?.count || 1)) || 275 },
-            { time: '9pm', efficiency: Math.round(hourlyEfficiency[21]?.total / (hourlyEfficiency[21]?.count || 1)) || 252 },
-        ]
+        // Format efficiency by time of day — 12 slots, 2-hour buckets
+        const timeSlots = [
+            { bucket: 0, label: '12am' }, { bucket: 2, label: '2am' },
+            { bucket: 4, label: '4am' }, { bucket: 6, label: '6am' },
+            { bucket: 8, label: '8am' }, { bucket: 10, label: '10am' },
+            { bucket: 12, label: '12pm' }, { bucket: 14, label: '2pm' },
+            { bucket: 16, label: '4pm' }, { bucket: 18, label: '6pm' },
+            { bucket: 20, label: '8pm' }, { bucket: 22, label: '10pm' },
+        ];
+        const efficiencyData = timeSlots.map(({ bucket, label }) => ({
+            time: label,
+            efficiency: hourlyEfficiency[bucket]
+                ? Math.round(hourlyEfficiency[bucket].total / hourlyEfficiency[bucket].count)
+                : 0,
+        }));
 
-        // Average efficiency
-        const avgEfficiency = totalDistance > 0
-            ? Math.round((totalEnergy * 1000) / totalDistance)
+        // Average efficiency (use converted distance in user units)
+        const totalDistConverted = totalDistance * distanceMultiplier;
+        const avgEfficiency = totalDistConverted > 0
+            ? Math.round((totalEnergy * 1000) / totalDistConverted)
             : 260 // Default
 
         // Fetch charging sessions for the period
@@ -230,6 +238,53 @@ export async function GET(request: NextRequest) {
             { name: 'No Data', value: 100, color: '#334155' },
         ]
 
+        // --- Previous period comparison for trend % ---
+        const periodMs = toDate.getTime() - fromDate.getTime();
+        const prevToDate = new Date(fromDate.getTime() - 1); // 1ms before current period start
+        const prevFromDate = new Date(prevToDate.getTime() - periodMs);
+
+        const { data: prevTrips } = await supabase
+            .from('trips')
+            .select('*')
+            .eq('is_complete', true)
+            .gte('start_time', prevFromDate.toISOString())
+            .lte('start_time', prevToDate.toISOString());
+
+        let prevDistance = 0;
+        let prevEnergy = 0;
+        let prevDrivingTime = 0;
+
+        for (const trip of prevTrips || []) {
+            const d = trip.distance_miles ||
+                ((trip.end_odometer && trip.start_odometer) ? trip.end_odometer - trip.start_odometer : 0);
+            prevDistance += d;
+
+            const e = trip.energy_used_kwh ||
+                ((trip.start_battery_pct && trip.end_battery_pct)
+                    ? (trip.start_battery_pct - trip.end_battery_pct) * 0.75 : 0);
+            prevEnergy += e;
+
+            if (trip.start_time && trip.end_time) {
+                prevDrivingTime += (new Date(trip.end_time).getTime() - new Date(trip.start_time).getTime()) / (1000 * 60 * 60);
+            }
+        }
+
+        const prevDistConverted = prevDistance * distanceMultiplier;
+        const prevEfficiency = prevDistConverted > 0 ? (prevEnergy * 1000) / prevDistConverted : 0;
+
+        // Calculate % change (positive = increase)
+        const pctChange = (curr: number, prev: number) => {
+            if (prev === 0) return curr > 0 ? 100 : 0;
+            return Math.round(((curr - prev) / prev) * 100);
+        };
+
+        const trends = {
+            distance: pctChange(totalDistance * distanceMultiplier, prevDistConverted),
+            energy: pctChange(totalEnergy, prevEnergy),
+            efficiency: pctChange(avgEfficiency, prevEfficiency),
+            drivingTime: pctChange(totalDrivingTime, prevDrivingTime),
+        };
+
         return NextResponse.json({
             success: true,
             timeframe,
@@ -243,6 +298,7 @@ export async function GET(request: NextRequest) {
                 tripCount: trips?.length || 0,
                 chargingSessions: chargingSessions?.length || 0,
                 totalChargingEnergy: Math.round(totalChargingEnergy * 10) / 10,
+                trends,
             },
             weeklyData,
             efficiencyData,

@@ -1,29 +1,17 @@
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { NextRequest, NextResponse } from 'next/server'
 
 export async function GET() {
-    const supabase = await createClient()
+    const supabase = createAdminClient()
 
-    // Get authenticated user
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-        return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
-    }
-
-    // Get user settings
     const { data: settings, error } = await supabase
-        .from('user_settings')
+        .from('app_settings')
         .select('*')
-        .eq('user_id', user.id)
+        .eq('id', 'default')
         .single()
 
-    // If no settings exist, return defaults
     if (error && error.code === 'PGRST116') {
-        return NextResponse.json({
-            success: true,
-            settings: null // Client will use defaults
-        })
+        return NextResponse.json({ success: true, settings: null })
     }
 
     if (error) {
@@ -48,24 +36,16 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
-    const supabase = await createClient()
-
-    // Get authenticated user
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-        return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
-    }
+    const supabase = createAdminClient()
 
     try {
         const body = await request.json()
         const { pollingConfig, region, units, notifications, dataSource } = body
 
-        // Upsert user settings
         const { error } = await supabase
-            .from('user_settings')
+            .from('app_settings')
             .upsert({
-                user_id: user.id,
+                id: 'default',
                 polling_driving: pollingConfig?.driving,
                 polling_charging: pollingConfig?.charging,
                 polling_parked: pollingConfig?.parked,
@@ -74,8 +54,9 @@ export async function POST(request: NextRequest) {
                 units,
                 notifications_enabled: notifications,
                 data_source: dataSource,
+                updated_at: new Date().toISOString(),
             }, {
-                onConflict: 'user_id'
+                onConflict: 'id'
             })
 
         if (error) {

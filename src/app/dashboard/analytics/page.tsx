@@ -33,6 +33,7 @@ import {
     Cell,
 } from 'recharts';
 import Header from '@/components/Header';
+import { useSettingsStore } from '@/stores/settingsStore';
 
 // Default fallback data
 const defaultWeeklyData = [
@@ -67,6 +68,12 @@ interface AnalyticsData {
         avgEfficiency: number;
         drivingTime: number;
         tripCount: number;
+        trends?: {
+            distance: number;
+            energy: number;
+            efficiency: number;
+            drivingTime: number;
+        };
     };
     weeklyData: typeof defaultWeeklyData;
     efficiencyData: typeof defaultEfficiencyData;
@@ -80,6 +87,7 @@ export default function AnalyticsPage() {
     const [showCustomPicker, setShowCustomPicker] = useState(false);
     const [loading, setLoading] = useState(true);
     const [data, setData] = useState<AnalyticsData | null>(null);
+    const { units } = useSettingsStore();
 
     const fetchAnalytics = useCallback(async () => {
         setLoading(true);
@@ -147,29 +155,30 @@ export default function AnalyticsPage() {
                     <StatCard
                         icon={<Navigation className="h-5 w-5" />}
                         label="Distance"
-                        value={`${summary.totalDistance} km`}
-                        change={0}
+                        value={`${summary.totalDistance} ${units === 'metric' ? 'km' : 'mi'}`}
+                        change={summary.trends?.distance ?? 0}
                         color="blue"
                     />
                     <StatCard
                         icon={<Battery className="h-5 w-5" />}
                         label="Energy Used"
                         value={`${summary.totalEnergy} kWh`}
-                        change={0}
+                        change={summary.trends?.energy ?? 0}
                         color="green"
                     />
                     <StatCard
                         icon={<Gauge className="h-5 w-5" />}
                         label="Avg Efficiency"
-                        value={`${summary.avgEfficiency} Wh/km`}
-                        change={0}
+                        value={`${summary.avgEfficiency} ${units === 'metric' ? 'Wh/km' : 'Wh/mi'}`}
+                        change={summary.trends?.efficiency ?? 0}
                         color="purple"
+                        invertColor
                     />
                     <StatCard
                         icon={<Clock className="h-5 w-5" />}
                         label="Driving Time"
                         value={`${summary.drivingTime} hrs`}
-                        change={0}
+                        change={summary.trends?.drivingTime ?? 0}
                         color="orange"
                     />
                 </div>
@@ -200,34 +209,23 @@ export default function AnalyticsPage() {
                     <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
                         <div className="mb-6">
                             <h2 className="text-lg font-semibold">Efficiency by Time of Day</h2>
-                            <p className="text-sm text-slate-400 mt-1">Average Wh/km for trips in selected period</p>
+                            <p className="text-sm text-slate-400 mt-1">Average {units === 'metric' ? 'Wh/km' : 'Wh/mi'} for trips in selected period</p>
                         </div>
                         <ResponsiveContainer width="100%" height={250}>
-                            <AreaChart data={efficiencyData}>
-                                <defs>
-                                    <linearGradient id="efficiencyGradient" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3} />
-                                        <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
-                                    </linearGradient>
-                                </defs>
+                            <BarChart data={efficiencyData}>
                                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
                                 <XAxis dataKey="time" stroke="#94a3b8" fontSize={12} />
-                                <YAxis stroke="#94a3b8" fontSize={12} domain={[240, 300]} />
+                                <YAxis stroke="#94a3b8" fontSize={12} />
                                 <Tooltip
                                     contentStyle={{
                                         backgroundColor: '#1e293b',
                                         border: '1px solid #334155',
                                         borderRadius: '8px',
                                     }}
+                                    formatter={(value: number) => [`${value} ${units === 'metric' ? 'Wh/km' : 'Wh/mi'}`, 'Efficiency']}
                                 />
-                                <Area
-                                    type="monotone"
-                                    dataKey="efficiency"
-                                    stroke="#ef4444"
-                                    fill="url(#efficiencyGradient)"
-                                    strokeWidth={2}
-                                />
-                            </AreaChart>
+                                <Bar dataKey="efficiency" fill="#a855f7" radius={[4, 4, 0, 0]} />
+                            </BarChart>
                         </ResponsiveContainer>
                     </div>
 
@@ -235,13 +233,7 @@ export default function AnalyticsPage() {
                     <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
                         <h2 className="mb-6 text-lg font-semibold">Daily Energy Consumption</h2>
                         <ResponsiveContainer width="100%" height={250}>
-                            <AreaChart data={weeklyData}>
-                                <defs>
-                                    <linearGradient id="energyGradient" x1="0" y1="0" x2="0" y2="1">
-                                        <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3} />
-                                        <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
-                                    </linearGradient>
-                                </defs>
+                            <BarChart data={weeklyData}>
                                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
                                 <XAxis dataKey="day" stroke="#94a3b8" fontSize={12} />
                                 <YAxis stroke="#94a3b8" fontSize={12} />
@@ -251,15 +243,10 @@ export default function AnalyticsPage() {
                                         border: '1px solid #334155',
                                         borderRadius: '8px',
                                     }}
+                                    formatter={(value: number) => [`${value} kWh`, 'Energy']}
                                 />
-                                <Area
-                                    type="monotone"
-                                    dataKey="energy"
-                                    stroke="#22c55e"
-                                    fill="url(#energyGradient)"
-                                    strokeWidth={2}
-                                />
-                            </AreaChart>
+                                <Bar dataKey="energy" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                            </BarChart>
                         </ResponsiveContainer>
                     </div>
 
@@ -320,12 +307,14 @@ function StatCard({
     value,
     change,
     color,
+    invertColor,
 }: {
     icon: React.ReactNode;
     label: string;
     value: string;
     change: number;
     color: 'blue' | 'green' | 'purple' | 'orange';
+    invertColor?: boolean;
 }) {
     const colors = {
         blue: 'bg-blue-500/10 text-blue-400',
@@ -335,6 +324,7 @@ function StatCard({
     };
 
     const isPositive = change > 0;
+    const isGood = invertColor ? !isPositive : isPositive;
 
     return (
         <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
@@ -343,7 +333,7 @@ function StatCard({
             <div className="flex items-end justify-between">
                 <p className="text-2xl font-bold">{value}</p>
                 <div
-                    className={`flex items-center gap-1 text-sm ${isPositive ? 'text-green-400' : 'text-red-400'
+                    className={`flex items-center gap-1 text-sm ${isGood ? 'text-green-400' : 'text-red-400'
                         }`}
                 >
                     {isPositive ? (
