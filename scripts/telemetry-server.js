@@ -131,7 +131,7 @@ async function processTelemetryData(data) {
     const batteryLevel = data.BatteryLevel || data.Soc || data.battery_level;
 
     // Charging specific fields
-    const chargeState = data.ChargeState || data.charge_state || "";
+    const chargeState = data.DetailedChargeState || data.ChargeState || data.charge_state || "";
     const acEnergy = data.ACChargingEnergyIn || data.ac_charging_energy_in || 0;
     const dcEnergy = data.DCChargingEnergyIn || data.dc_charging_energy_in || 0;
     const chargeEnergyAdded = (acEnergy + dcEnergy) || data.ChargeEnergyAdded || data.charge_energy_added || 0;
@@ -264,7 +264,7 @@ async function detectTripState(vehicleId, event) {
 
 // Detect if vehicle is starting/ending a charging session
 async function detectChargingState(vehicleId, event) {
-    const isCharging = event.chargeState === "Charging" || event.chargeState === "Starting";
+    const isCharging = ["Charging", "DetailedChargeStateCharging", "Starting", "DetailedChargeStateStarting"].includes(event.chargeState);
     const hasActiveCharge = activeCharges.has(vehicleId);
 
     // Start new charging session if charging and no active session
@@ -341,7 +341,7 @@ async function detectChargingState(vehicleId, event) {
     if (hasActiveCharge) {
         const chargeData = activeCharges.get(vehicleId);
 
-        const isCompletedOrDisconnected = ["Complete", "Disconnected", "Stopped"].includes(event.chargeState);
+        const isCompletedOrDisconnected = ["Complete", "DetailedChargeStateComplete", "Disconnected", "DetailedChargeStateDisconnected", "Stopped", "DetailedChargeStateStopped"].includes(event.chargeState);
         const idleMinutes = (Date.now() - chargeData.lastChargingTime) / 60000;
 
         // End session if state is expressly done or hasn't received a charge state for 10+ minutes

@@ -233,10 +233,24 @@ export async function GET(request: NextRequest) {
         let totalChargingEnergy = 0
 
         for (const session of chargingSessions || []) {
-            const energy = session.energy_added_kwh || 0
-            totalChargingEnergy += energy
-            const type = session.charging_type || 'other'
-            chargingByType[type] = (chargingByType[type] || 0) + energy
+            const energy = session.energy_added_kwh || 0;
+            if (energy <= 0) continue;
+
+            totalChargingEnergy += energy;
+
+            // Column in DB is `charger_type` (see schema / telemetry server),
+            // not `charging_type`. Fall back to 'other' if missing.
+            const rawType = (session as any).charger_type as string | null | undefined;
+            const typeKey = (rawType ?? 'other').toLowerCase();
+
+            // Normalise to our known buckets
+            const normalisedKey =
+                typeKey.includes('super') ? 'supercharger' :
+                    typeKey.includes('home') ? 'home' :
+                        typeKey.includes('dest') ? 'destination' :
+                            'other';
+
+            chargingByType[normalisedKey] = (chargingByType[normalisedKey] || 0) + energy;
         }
 
         // Calculate percentages
@@ -246,7 +260,7 @@ export async function GET(request: NextRequest) {
             { name: 'Destination', value: Math.round((chargingByType.destination / totalChargingEnergy) * 100), color: '#3b82f6' },
             { name: 'Other', value: Math.round((chargingByType.other / totalChargingEnergy) * 100), color: '#6b7280' },
         ].filter(item => item.value > 0) : [
-            // Default if no charging data
+            // Default if no charging data for this timeframe
             { name: 'No Data', value: 100, color: '#334155' },
         ]
 

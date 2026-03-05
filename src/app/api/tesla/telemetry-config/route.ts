@@ -5,9 +5,11 @@ const REGIONAL_ENDPOINTS = {
     eu: 'https://fleet-api.prd.eu.vn.cloud.tesla.com',
     cn: 'https://fleet-api.prd.cn.vn.cloud.tesla.cn',
 };
+
+// URL to your Vehicle Command Proxy
 const PROXY_URL = 'https://tripboard.manojnaikade.com:4443';
 
-// Let's Encrypt ISRG Root X1
+// The CA cert (public key) from /opt/vehicle-proxy/config/public_key.pem
 const CA_CERT = `-----BEGIN CERTIFICATE-----
 MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
 TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
@@ -40,7 +42,6 @@ mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d
 emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
 -----END CERTIFICATE-----`;
 
-// POST - Configure telemetry for one or more vehicles
 export async function POST(request: NextRequest) {
     const accessToken = request.cookies.get('tesla_access_token')?.value;
     const region = request.nextUrl.searchParams.get('region') || 'eu';
@@ -98,25 +99,30 @@ export async function POST(request: NextRequest) {
             port: 443,
             ca: CA_CERT,
             fields: {
-                // Location tracking
                 Location: { interval_seconds: 10 },
-                // Speed & driving
-                VehicleSpeed: { interval_seconds: 5 },
-                Odometer: { interval_seconds: 60 },
-                // Battery & charging
                 BatteryLevel: { interval_seconds: 30 },
-                ChargeState: { interval_seconds: 30 },
-                ACChargingPower: { interval_seconds: 30 },
-                DCChargingPower: { interval_seconds: 30 },
-                ACChargingEnergyIn: { interval_seconds: 30 },
-                DCChargingEnergyIn: { interval_seconds: 30 },
-                FastChargerPresent: { interval_seconds: 30 },
-                // Temperature
+                Odometer: { interval_seconds: 60 },
+                VehicleSpeed: { interval_seconds: 5 },
+                Gear: { interval_seconds: 2 },
                 InsideTemp: { interval_seconds: 60 },
                 OutsideTemp: { interval_seconds: 60 },
-                // State
-                Locked: { interval_seconds: 60 },
+                Locked: { interval_seconds: 30 },
                 SentryMode: { interval_seconds: 60 },
+                DetailedChargeState: { interval_seconds: 30 },
+                ACChargingPower: { interval_seconds: 30 },
+                DCChargingPower: { interval_seconds: 30 },
+                DoorState: { interval_seconds: 30 },
+                TpmsPressureFl: { interval_seconds: 300 },
+                TpmsPressureFr: { interval_seconds: 300 },
+                TpmsPressureRl: { interval_seconds: 300 },
+                TpmsPressureRr: { interval_seconds: 300 },
+                Version: { interval_seconds: 3600 },
+                EstBatteryRange: { interval_seconds: 60 },
+                RatedRange: { interval_seconds: 60 },
+                FdWindow: { interval_seconds: 30 },
+                FpWindow: { interval_seconds: 30 },
+                RdWindow: { interval_seconds: 30 },
+                RpWindow: { interval_seconds: 30 }
             },
             alert_types: ['service'],
             exp: Math.floor(Date.now() / 1000) + 86400 * 30, // 30 days
@@ -148,131 +154,143 @@ export async function POST(request: NextRequest) {
                 success: false,
                 error: `Tesla API error (${response.status}): returned HTML instead of JSON`,
                 hint: response.status === 401 ? 'Access token may be expired - try signing out and back in' :
-                    response.status === 403 ? 'Access denied - check OAuth scopes' :
-                        response.status === 404 ? 'Endpoint not found - check API version' :
-                            'Check Tesla API status',
-                status: response.status,
-            }, { status: response.status });
-        }
-
-        // Check for skipped vehicles (common with missing virtual key)
-        if (data.response?.skipped_vehicles && Object.keys(data.response.skipped_vehicles).length > 0) {
-            return NextResponse.json({
-                success: false,
-                error: 'Vehicle was skipped - virtual key may not be paired',
-                skipped: data.response.skipped_vehicles,
-                hint: 'You need to pair the virtual key with your car. Go to car touchscreen > Controls > Locks > Keys > Add Key',
-                details: data,
-                version: '2024.1.30.4', // Explicit CA check
-            });
+                    response.status === 403 ? 'Ensure your Vehicle Command Proxy is running and correctly configured' :
+                        'Check the proxy server logs at tripboard.manojnaikade.com',
+                details: responseText.slice(0, 200)
+            }, { status: response.status === 200 ? 500 : response.status });
         }
 
         if (!response.ok) {
+            console.error('Tesla API error configuration:', data);
             return NextResponse.json({
                 success: false,
                 error: data.error || data.error_description || `Failed to configure telemetry: ${response.status}`,
-                details: data,
-                version: '2024.1.30.4', // Explicit CA check
+                details: data
             }, { status: response.status });
         }
 
         return NextResponse.json({
             success: true,
-            message: 'Telemetry configuration sent to vehicle',
-            vin: targetVin,
-            config: telemetryConfig.config,
-            response: data,
-            version: '2024.1.30.4', // Explicit CA check
+            status: data.response || data
         });
+
     } catch (err) {
-        console.error('Telemetry config error:', err);
+        console.error('Telemetry config API error:', err);
         return NextResponse.json({
             success: false,
-            error: err instanceof Error ? err.message : 'Failed to configure telemetry',
+            error: err instanceof Error ? err.message : 'Unknown error during telemetry configuration'
         }, { status: 500 });
     }
 }
 
-// GET - Check current telemetry config for a vehicle
 export async function GET(request: NextRequest) {
     const accessToken = request.cookies.get('tesla_access_token')?.value;
-    const vehicleId = request.nextUrl.searchParams.get('id');
+    const vehicleId = request.nextUrl.searchParams.get('vehicleId');
     const region = request.nextUrl.searchParams.get('region') || 'eu';
 
     if (!accessToken) {
-        return NextResponse.json(
-            { error: 'Not authenticated with Tesla' },
-            { status: 401 }
-        );
+        return NextResponse.json({ error: 'Not authenticated with Tesla' }, { status: 401 });
     }
 
     if (!vehicleId) {
-        return NextResponse.json(
-            { error: 'Vehicle ID is required' },
-            { status: 400 }
-        );
+        return NextResponse.json({ error: 'Vehicle ID required' }, { status: 400 });
     }
 
     const baseUrl = REGIONAL_ENDPOINTS[region as keyof typeof REGIONAL_ENDPOINTS] || REGIONAL_ENDPOINTS.eu;
 
     try {
+        // We first need the VIN 
+        const vehicleRes = await fetch(`${baseUrl}/api/1/vehicles/${vehicleId}`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+        });
+
+        if (!vehicleRes.ok) {
+            return NextResponse.json({ error: 'Failed to fetch vehicle details' }, { status: vehicleRes.status });
+        }
+
+        const vehicleData = await vehicleRes.json();
+        const vin = vehicleData.response?.vin;
+
+        if (!vin) {
+            return NextResponse.json({ error: 'Could not determine VIN' }, { status: 400 });
+        }
+
+        // Fetch telemetry config through proxy
         const response = await fetch(
-            `${baseUrl}/api/1/vehicles/${vehicleId}/fleet_telemetry_config`,
+            `${PROXY_URL}/api/1/vehicles/${vin}/fleet_telemetry_config`,
             {
                 headers: {
                     Authorization: `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json',
                 },
             }
         );
 
         const responseText = await response.text();
+
         let data;
         try {
             data = JSON.parse(responseText);
         } catch {
             return NextResponse.json({
                 success: false,
-                error: `Tesla API error (${response.status})`,
+                error: `Error parsing configuration: ${response.status}`,
+                details: responseText.slice(0, 200)
+            }, { status: 500 });
+        }
+
+        if (!response.ok) {
+            return NextResponse.json({
+                success: false,
+                error: data.error || 'Failed to fetch config',
+                details: data
             }, { status: response.status });
         }
 
         return NextResponse.json({
-            success: response.ok,
-            config: data,
+            success: true,
+            config: data.response || data
         });
+
     } catch (err) {
         return NextResponse.json({
             success: false,
-            error: err instanceof Error ? err.message : 'Failed to get telemetry config',
+            error: err instanceof Error ? err.message : 'Unknown error'
         }, { status: 500 });
     }
 }
 
-// DELETE - Remove telemetry config
 export async function DELETE(request: NextRequest) {
     const accessToken = request.cookies.get('tesla_access_token')?.value;
-    const vehicleId = request.nextUrl.searchParams.get('id');
+    const vehicleId = request.nextUrl.searchParams.get('vehicleId');
     const region = request.nextUrl.searchParams.get('region') || 'eu';
 
     if (!accessToken) {
-        return NextResponse.json(
-            { error: 'Not authenticated with Tesla' },
-            { status: 401 }
-        );
+        return NextResponse.json({ error: 'Not authenticated with Tesla' }, { status: 401 });
     }
 
     if (!vehicleId) {
-        return NextResponse.json(
-            { error: 'Vehicle ID is required' },
-            { status: 400 }
-        );
+        return NextResponse.json({ error: 'Vehicle ID required' }, { status: 400 });
     }
 
     const baseUrl = REGIONAL_ENDPOINTS[region as keyof typeof REGIONAL_ENDPOINTS] || REGIONAL_ENDPOINTS.eu;
 
     try {
+        // We first need the VIN 
+        const vehicleRes = await fetch(`${baseUrl}/api/1/vehicles/${vehicleId}`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+        });
+
+        const vehicleData = await vehicleRes.json();
+        const vin = vehicleData.response?.vin;
+
+        if (!vin) {
+            return NextResponse.json({ error: 'Could not determine VIN' }, { status: 400 });
+        }
+
+        // Delete telemetry config through proxy
         const response = await fetch(
-            `${baseUrl}/api/1/vehicles/${vehicleId}/fleet_telemetry_config`,
+            `${PROXY_URL}/api/1/vehicles/${vin}/fleet_telemetry_config`,
             {
                 method: 'DELETE',
                 headers: {
@@ -281,26 +299,20 @@ export async function DELETE(request: NextRequest) {
             }
         );
 
-        const responseText = await response.text();
-        let data;
-        try {
-            data = JSON.parse(responseText);
-        } catch {
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
             return NextResponse.json({
                 success: false,
-                error: `Tesla API error (${response.status})`,
+                error: data.error || 'Failed to delete config',
             }, { status: response.status });
         }
 
-        return NextResponse.json({
-            success: response.ok,
-            message: 'Telemetry configuration removed',
-            response: data,
-        });
+        return NextResponse.json({ success: true });
+
     } catch (err) {
         return NextResponse.json({
             success: false,
-            error: err instanceof Error ? err.message : 'Failed to delete telemetry config',
+            error: err instanceof Error ? err.message : 'Unknown error'
         }, { status: 500 });
     }
 }

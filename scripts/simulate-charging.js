@@ -34,7 +34,7 @@ async function runSimulation() {
         vin,
         location: { latitude: 37.7749, longitude: -122.4194 },
         BatteryLevel: 40,
-        ChargeState: "Disconnected",
+        DetailedChargeState: "DetailedChargeStateDisconnected",
         VehicleSpeed: 0
     });
     await sleep(2000);
@@ -45,7 +45,7 @@ async function runSimulation() {
         vin,
         location: { latitude: 37.7749, longitude: -122.4194 },
         BatteryLevel: 40,
-        ChargeState: "Starting",
+        DetailedChargeState: "DetailedChargeStateStarting",
         ChargeEnergyAdded: 0,
         ChargerPower: 11.5,
         FastChargerPresent: false,
@@ -59,7 +59,7 @@ async function runSimulation() {
         vin,
         location: { latitude: 37.7749, longitude: -122.4194 },
         BatteryLevel: 45,
-        ChargeState: "Charging",
+        DetailedChargeState: "DetailedChargeStateCharging",
         ChargeEnergyAdded: 3.2,
         ChargerPower: 11.5,
         FastChargerPresent: false,
@@ -73,7 +73,7 @@ async function runSimulation() {
         vin,
         location: { latitude: 37.7749, longitude: -122.4194 },
         BatteryLevel: 80,
-        ChargeState: "Complete",
+        DetailedChargeState: "DetailedChargeStateComplete",
         ChargeEnergyAdded: 28.5,
         ChargerPower: 0,
         FastChargerPresent: false,

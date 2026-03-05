@@ -84,3 +84,24 @@ go build -o ingest main.go
 - **Latency:** Real-time (<500ms).
 - **Data:** Full vehicle telemetry (Speed, Location, Battery, Temperature).
 - **Stability:** Handles disconnects and auto-restarts via systemd.
+- **DetailedChargeState:** Migrated to the modern `DetailedChargeState` for robust charging analytics.
+
+## 7. Key Learnings (DetailedChargeState Migration)
+
+During our migration to `DetailedChargeState`, we discovered several critical aspects of Tesla's telemetry:
+
+### A. Field Deprecation
+
+Tesla has deprecated the standard `ChargeState` field in favor of `DetailedChargeState`. Using the legacy field may result in `invalid` or missing data in the stream.
+
+### B. Enum Format Discrepancies
+
+The new `DetailedChargeState` uses prefixed string values in its Protobuf definitions. While the old field sent `"Charging"`, the new one sends `"DetailedChargeStateCharging"`. Our `telemetry-server.js` and database triggers must handle both for backward compatibility.
+
+### C. Active Configuration Pushing
+
+Updating the code logic *does not* automatically change what the car streams. A explicit `POST` to the `fleet-telemetry-config-create` endpoint is required to update the car's field list. We integrated a **"Push Configuration"** button in the App Settings to automate this process.
+
+### D. Dual Processing Logic
+
+While a Go ingester handles the high-performance binary-to-JSON conversion and raw storage, we use a separate **Node.js Telemetry Processor** on the VPS to handle complex state transitions (like identifying the start and end of a charging session and updating the `charging_sessions` table).

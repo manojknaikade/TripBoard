@@ -34,6 +34,10 @@ export default function SettingsPage() {
     const [mounted, setMounted] = useState(false);
     const [exporting, setExporting] = useState<'csv' | 'json' | null>(null);
     const [savingHome, setSavingHome] = useState(false);
+    const [vehicles, setVehicles] = useState<any[]>([]);
+    const [selectedVehicleId, setSelectedVehicleId] = useState<string>('');
+    const [pushingConfig, setPushingConfig] = useState(false);
+    const [configStatus, setConfigStatus] = useState<{ success: boolean; message: string } | null>(null);
 
     const router = useRouter();
     const {
@@ -59,6 +63,17 @@ export default function SettingsPage() {
 
         // Load general settings
         loadFromDatabase();
+
+        // Load vehicles
+        fetch('/api/tesla/test')
+            .then(res => res.json())
+            .then(data => {
+                if (data.success && data.vehicles.length > 0) {
+                    setVehicles(data.vehicles);
+                    setSelectedVehicleId(data.vehicles[0].id.toString());
+                }
+            })
+            .catch(err => console.error('Failed to fetch vehicles:', err));
 
         // Load home location
         fetch('/api/settings/home-location')
@@ -122,6 +137,34 @@ export default function SettingsPage() {
             console.error('Export error:', err);
         } finally {
             setExporting(null);
+        }
+    };
+
+    const handlePushConfig = async () => {
+        if (!selectedVehicleId) return;
+        setPushingConfig(true);
+        setConfigStatus(null);
+
+        try {
+            const res = await fetch('/api/tesla/telemetry-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    vehicleId: selectedVehicleId,
+                    region: region
+                }),
+            });
+            const data = await res.json();
+
+            if (data.success) {
+                setConfigStatus({ success: true, message: 'Telemetry configuration pushed successfully!' });
+            } else {
+                setConfigStatus({ success: false, message: data.error || 'Failed to push configuration' });
+            }
+        } catch (err) {
+            setConfigStatus({ success: false, message: 'Network error pushing configuration' });
+        } finally {
+            setPushingConfig(false);
         }
     };
 
@@ -237,6 +280,38 @@ export default function SettingsPage() {
                         <p className="mt-4 text-sm text-slate-500">
                             📡 Telemetry mode requires a running telemetry server on your VM.
                         </p>
+
+                        {dataSource === 'telemetry' && vehicles.length > 0 && (
+                            <div className="mt-6 border-t border-slate-700/50 pt-6">
+                                <h3 className="mb-2 text-sm font-medium text-slate-300">Push Configuration</h3>
+                                <p className="mb-4 text-xs text-slate-500">
+                                    Send latest field definitions (DetailedChargeState, TPMS, Doors) to your car.
+                                </p>
+                                <div className="flex flex-col gap-3 sm:flex-row">
+                                    <select
+                                        value={selectedVehicleId}
+                                        onChange={(e) => setSelectedVehicleId(e.target.value)}
+                                        className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-red-500"
+                                    >
+                                        {vehicles.map(v => (
+                                            <option key={v.id} value={v.id}>{v.display_name} ({v.vin.slice(-6)})</option>
+                                        ))}
+                                    </select>
+                                    <button
+                                        onClick={handlePushConfig}
+                                        disabled={pushingConfig}
+                                        className="rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-50"
+                                    >
+                                        {pushingConfig ? 'Pushing...' : 'Update Car Config'}
+                                    </button>
+                                </div>
+                                {configStatus && (
+                                    <p className={`mt-3 text-xs ${configStatus.success ? 'text-green-400' : 'text-red-400'}`}>
+                                        {configStatus.success ? '✓' : '✗'} {configStatus.message}
+                                    </p>
+                                )}
+                            </div>
+                        )}
                     </SettingsSection>
 
                     {/* Home Location */}

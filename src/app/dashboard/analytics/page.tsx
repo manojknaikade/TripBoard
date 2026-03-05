@@ -118,6 +118,10 @@ export default function AnalyticsPage() {
     const chargingMix = data?.chargingMix || defaultChargingMix;
     const summary = data?.summary || { totalDistance: 0, totalEnergy: 0, avgEfficiency: 260, drivingTime: 0, tripCount: 0 };
 
+    const hasRealChargingData =
+        chargingMix.length > 0 &&
+        !(chargingMix.length === 1 && chargingMix[0].name === 'No Data');
+
     return (
         <div className="min-h-screen">
             <Header />
@@ -252,7 +256,12 @@ export default function AnalyticsPage() {
 
                     {/* Charging Mix */}
                     <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
-                        <h2 className="mb-6 text-lg font-semibold">Charging Sources</h2>
+                        <h2 className="mb-2 text-lg font-semibold">Charging Sources</h2>
+                        {!hasRealChargingData && (
+                            <p className="mb-4 text-sm text-slate-400">
+                                No charging sessions found for the selected period. Start a charge to see this chart populate.
+                            </p>
+                        )}
                         <div className="flex items-center justify-center">
                             <ResponsiveContainer width="100%" height={200}>
                                 <PieChart>
