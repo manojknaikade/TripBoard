@@ -97,9 +97,13 @@ export default function AnalyticsPage() {
                 url += `&startDate=${customStart}&endDate=${customEnd}`;
             }
             const res = await fetch(url);
-            const json = await res.json();
+            const text = await res.text();
+            const json = JSON.parse(text);
+
             if (json.success) {
                 setData(json);
+            } else {
+                console.error('API returned success=false:', json);
             }
         } catch (err) {
             console.error('Failed to fetch analytics:', err);
@@ -110,13 +114,15 @@ export default function AnalyticsPage() {
 
     useEffect(() => {
         fetchAnalytics();
-    }, [fetchAnalytics]);
+        // Ignoring fetchAnalytics in deps to prevent infinite loops if it changes
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [timeframe, customStart, customEnd]);
 
-    // Use fetched data or fallbacks
-    const weeklyData = data?.weeklyData || defaultWeeklyData;
-    const efficiencyData = data?.efficiencyData || defaultEfficiencyData;
-    const chargingMix = data?.chargingMix || defaultChargingMix;
-    const summary = data?.summary || { totalDistance: 0, totalEnergy: 0, avgEfficiency: 260, drivingTime: 0, tripCount: 0 };
+    // Use fetched data directly (remove fallbacks that mask real data)
+    const weeklyData = data?.weeklyData || [];
+    const efficiencyData = data?.efficiencyData || [];
+    const chargingMix = data?.chargingMix || [];
+    const summary = data?.summary || { totalDistance: 0, totalEnergy: 0, avgEfficiency: 0, drivingTime: 0, tripCount: 0 };
 
     const hasRealChargingData =
         chargingMix.length > 0 &&
