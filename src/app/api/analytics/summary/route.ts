@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from 'next/server'
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
-    const supabase = await createClient()
+    const supabase = createAdminClient()
 
     // Enforce authentication so this isn't globally exposed and Next.js knows it's dynamic
     const accessToken = request.cookies.get('tesla_access_token')?.value;
@@ -229,7 +229,7 @@ export async function GET(request: NextRequest) {
             .lte('start_time', toDate.toISOString())
 
         // Calculate charging mix from real data
-        const chargingByType: Record<string, number> = { home: 0, supercharger: 0, destination: 0, other: 0 }
+        const chargingByType: Record<string, number> = { home: 0, supercharger: 0, destination: 0, '3rd_party_fast': 0, other: 0 }
         let totalChargingEnergy = 0
 
         for (const session of chargingSessions || []) {
@@ -245,10 +245,11 @@ export async function GET(request: NextRequest) {
 
             // Normalise to our known buckets
             const normalisedKey =
-                typeKey.includes('super') ? 'supercharger' :
-                    typeKey.includes('home') ? 'home' :
-                        typeKey.includes('dest') ? 'destination' :
-                            'other';
+                typeKey.includes('3rd_party_fast') ? '3rd_party_fast' :
+                    typeKey.includes('super') ? 'supercharger' :
+                        typeKey.includes('home') ? 'home' :
+                            typeKey.includes('dest') ? 'destination' :
+                                'other';
 
             chargingByType[normalisedKey] = (chargingByType[normalisedKey] || 0) + energy;
         }
@@ -257,6 +258,7 @@ export async function GET(request: NextRequest) {
         const chargingMix = totalChargingEnergy > 0 ? [
             { name: 'Home', value: Math.round((chargingByType.home / totalChargingEnergy) * 100), color: '#22c55e' },
             { name: 'Supercharger', value: Math.round((chargingByType.supercharger / totalChargingEnergy) * 100), color: '#ef4444' },
+            { name: '3rd Party DC', value: Math.round((chargingByType['3rd_party_fast'] / totalChargingEnergy) * 100), color: '#f97316' }, // Orange slice
             { name: 'Destination', value: Math.round((chargingByType.destination / totalChargingEnergy) * 100), color: '#3b82f6' },
             { name: 'Other', value: Math.round((chargingByType.other / totalChargingEnergy) * 100), color: '#6b7280' },
         ].filter(item => item.value > 0) : [
