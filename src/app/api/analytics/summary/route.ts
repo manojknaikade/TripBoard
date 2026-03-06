@@ -71,7 +71,7 @@ export async function GET(request: NextRequest) {
         // Fetch completed trips in the date range
         const { data: trips, error } = await supabase
             .from('trips')
-            .select('*')
+            .select('id, start_time, end_time, distance_miles, start_odometer, end_odometer, energy_used_kwh, start_battery_pct, end_battery_pct')
             .eq('is_complete', true)
             .gte('start_time', fromDate.toISOString())
             .lte('start_time', toDate.toISOString())
@@ -223,7 +223,7 @@ export async function GET(request: NextRequest) {
         // Fetch charging sessions for the period
         const { data: chargingSessions } = await supabase
             .from('charging_sessions')
-            .select('*')
+            .select('id, energy_added_kwh, charger_type')
             .eq('is_complete', true)
             .gte('start_time', fromDate.toISOString())
             .lte('start_time', toDate.toISOString())
@@ -273,7 +273,7 @@ export async function GET(request: NextRequest) {
 
         const { data: prevTrips } = await supabase
             .from('trips')
-            .select('*')
+            .select('distance_miles, start_odometer, end_odometer, energy_used_kwh, start_battery_pct, end_battery_pct, start_time, end_time')
             .eq('is_complete', true)
             .gte('start_time', prevFromDate.toISOString())
             .lte('start_time', prevToDate.toISOString());
