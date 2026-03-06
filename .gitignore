@@ -36,3 +36,4 @@ next-env.d.ts
 
 # research and debug scripts
 docs/research/
+supabase/.temp/cli-latest
