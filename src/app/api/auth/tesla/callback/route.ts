@@ -95,9 +95,12 @@ export async function GET(request: NextRequest) {
         response.cookies.delete('tesla_code_verifier');
 
         // Set token cookies (temporary - in production use encrypted DB storage)
+        const isLocalhost = request.nextUrl.hostname === 'localhost';
+        const isSecure = process.env.NODE_ENV === 'production' && !isLocalhost;
+
         response.cookies.set('tesla_access_token', tokens.access_token, {
             httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
+            secure: isSecure,
             sameSite: 'lax',
             maxAge: 30 * 24 * 60 * 60, // Extend session to 30 days in the browser
         });
@@ -105,7 +108,7 @@ export async function GET(request: NextRequest) {
         if (tokens.refresh_token) {
             response.cookies.set('tesla_refresh_token', tokens.refresh_token, {
                 httpOnly: true,
-                secure: process.env.NODE_ENV === 'production',
+                secure: isSecure,
                 sameSite: 'lax',
                 maxAge: 30 * 24 * 60 * 60, // 30 days
             });

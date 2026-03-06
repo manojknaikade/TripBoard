@@ -10,6 +10,7 @@ export async function GET(request: NextRequest) {
     // Enforce authentication so this isn't globally exposed and Next.js knows it's dynamic
     const accessToken = request.cookies.get('tesla_access_token')?.value;
     if (!accessToken) {
+        console.warn('Analytics API: No tesla_access_token found in cookies. This may be due to the "secure" flag on localhost in prod build.');
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
@@ -23,8 +24,7 @@ export async function GET(request: NextRequest) {
     let userUnits: 'imperial' | 'metric' = 'metric'; // DEFAULT TO METRIC
 
     try {
-        const adminClient = createAdminClient();
-        const { data: settings } = await adminClient
+        const { data: settings } = await supabase
             .from('app_settings')
             .select('units')
             .eq('id', 'default')
