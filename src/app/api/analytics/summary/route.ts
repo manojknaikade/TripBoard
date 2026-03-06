@@ -5,69 +5,69 @@ import { NextRequest, NextResponse } from 'next/server'
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
-    const supabase = createAdminClient()
-
-    // Enforce authentication so this isn't globally exposed and Next.js knows it's dynamic
-    const accessToken = request.cookies.get('tesla_access_token')?.value;
-    if (!accessToken) {
-        console.warn('Analytics API: No tesla_access_token found in cookies. This may be due to the "secure" flag on localhost in prod build.');
-        return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
-    }
-
-    // Get timeframe from query params
-    const { searchParams } = new URL(request.url)
-    const timeframe = searchParams.get('timeframe') || 'week'
-    const startDate = searchParams.get('startDate')
-    const endDate = searchParams.get('endDate')
-
-    // Get user settings to determine units
-    let userUnits: 'imperial' | 'metric' = 'metric'; // DEFAULT TO METRIC
-
     try {
-        const { data: settings } = await supabase
-            .from('app_settings')
-            .select('units')
-            .eq('id', 'default')
-            .single();
+        const supabase = createAdminClient()
 
-        if (settings?.units) {
-            userUnits = settings.units as 'imperial' | 'metric';
+        // Enforce authentication so this isn't globally exposed and Next.js knows it's dynamic
+        const accessToken = request.cookies.get('tesla_access_token')?.value;
+        if (!accessToken) {
+            console.warn('Analytics API: No tesla_access_token found in cookies. This may be due to the "secure" flag on localhost in prod build.');
+            return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
         }
-    } catch (e) {
-        console.warn('Could not fetch user settings (check SUPABASE_SERVICE_ROLE_KEY), defaulting to metric:', e);
-    }
-    // Calculate date range based on timeframe
-    const toDate = new Date();
-    toDate.setHours(23, 59, 59, 999); // End of day
-    let fromDate = new Date();
 
-    if (timeframe === 'custom') {
-        const startDateParam = searchParams.get('startDate');
-        const endDateParam = searchParams.get('endDate');
-        if (startDateParam && endDateParam) {
-            fromDate = new Date(startDateParam);
-            fromDate.setHours(0, 0, 0, 0); // Start of day
-            const customToDate = new Date(endDateParam);
-            customToDate.setHours(23, 59, 59, 999); // End of day
-            toDate.setTime(customToDate.getTime());
+        // Get timeframe from query params
+        const { searchParams } = new URL(request.url)
+        const timeframe = searchParams.get('timeframe') || 'week'
+        const startDate = searchParams.get('startDate')
+        const endDate = searchParams.get('endDate')
+
+        // Get user settings to determine units
+        let userUnits: 'imperial' | 'metric' = 'metric'; // DEFAULT TO METRIC
+
+        try {
+            const { data: settings } = await supabase
+                .from('app_settings')
+                .select('units')
+                .eq('id', 'default')
+                .single();
+
+            if (settings?.units) {
+                userUnits = settings.units as 'imperial' | 'metric';
+            }
+        } catch (e) {
+            console.warn('Could not fetch user settings (check SUPABASE_SERVICE_ROLE_KEY), defaulting to metric:', e);
         }
-    } else if (timeframe === '7days') {
-        fromDate = new Date(toDate.getTime() - 7 * 24 * 60 * 60 * 1000);
-    } else if (timeframe === 'month') {
-        fromDate = new Date(toDate.getFullYear(), toDate.getMonth(), 1);
-    } else if (timeframe === '30days') {
-        fromDate = new Date(toDate.getTime() - 30 * 24 * 60 * 60 * 1000);
-    } else if (timeframe === '3months') {
-        fromDate = new Date(toDate.getTime() - 90 * 24 * 60 * 60 * 1000);
-    } else {
-        // Default: 'week' - Monday to Sunday of current week
-        const day = toDate.getDay();
-        const diff = toDate.getDate() - day + (day === 0 ? -6 : 1);
-        fromDate = new Date(toDate.getFullYear(), toDate.getMonth(), diff);
-        fromDate.setHours(0, 0, 0, 0);
-    }
+        // Calculate date range based on timeframe
+        const toDate = new Date();
+        toDate.setHours(23, 59, 59, 999); // End of day
+        let fromDate = new Date();
 
-    try {
+        if (timeframe === 'custom') {
+            const startDateParam = searchParams.get('startDate');
+            const endDateParam = searchParams.get('endDate');
+            if (startDateParam && endDateParam) {
+                fromDate = new Date(startDateParam);
+                fromDate.setHours(0, 0, 0, 0); // Start of day
+                const customToDate = new Date(endDateParam);
+                customToDate.setHours(23, 59, 59, 999); // End of day
+                toDate.setTime(customToDate.getTime());
+            }
+        } else if (timeframe === '7days') {
+            fromDate = new Date(toDate.getTime() - 7 * 24 * 60 * 60 * 1000);
+        } else if (timeframe === 'month') {
+            fromDate = new Date(toDate.getFullYear(), toDate.getMonth(), 1);
+        } else if (timeframe === '30days') {
+            fromDate = new Date(toDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+        } else if (timeframe === '3months') {
+            fromDate = new Date(toDate.getTime() - 90 * 24 * 60 * 60 * 1000);
+        } else {
+            // Default: 'week' - Monday to Sunday of current week
+            const day = toDate.getDay();
+            const diff = toDate.getDate() - day + (day === 0 ? -6 : 1);
+            fromDate = new Date(toDate.getFullYear(), toDate.getMonth(), diff);
+            fromDate.setHours(0, 0, 0, 0);
+        }
+
         // Fetch completed trips in the date range
         const { data: trips, error } = await supabase
             .from('trips')
@@ -332,8 +332,8 @@ export async function GET(request: NextRequest) {
             efficiencyData,
             chargingMix,
         })
-    } catch (err) {
-        console.error('Analytics error:', err)
-        return NextResponse.json({ error: 'Failed to fetch analytics' }, { status: 500 })
+    } catch (err: any) {
+        console.error('CRITICAL Analytics error:', err);
+        return NextResponse.json({ success: false, error: err.message || 'Failed to fetch analytics', stack: err.stack }, { status: 500 });
     }
 }
