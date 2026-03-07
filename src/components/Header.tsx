@@ -42,7 +42,10 @@ export default function Header() {
                     <NavLink href="/dashboard/trips" icon={<History className="h-4 w-4" />} active={pathname?.startsWith('/dashboard/trips')}>
                         Trips
                     </NavLink>
-                    <NavLink href="/dashboard/analytics" icon={<BarChart3 className="h-4 w-4" />} active={pathname === '/dashboard/analytics'}>
+                    <NavLink href="/dashboard/charging" icon={<Zap className="h-4 w-4" />} active={pathname?.startsWith('/dashboard/charging')}>
+                        Charging
+                    </NavLink>
+                    <NavLink href="/dashboard/analytics" icon={<BarChart3 className="h-4 w-4" />} active={pathname?.startsWith('/dashboard/analytics')}>
                         Analytics
                     </NavLink>
                     <NavLink href="/dashboard/settings" icon={<Settings className="h-4 w-4" />} active={pathname === '/dashboard/settings'}>
@@ -90,9 +93,17 @@ export default function Header() {
                             Trips
                         </MobileNavLink>
                         <MobileNavLink
+                            href="/dashboard/charging"
+                            icon={<Zap className="h-5 w-5" />}
+                            active={pathname?.startsWith('/dashboard/charging')}
+                            onClick={toggleMobileMenu}
+                        >
+                            Charging
+                        </MobileNavLink>
+                        <MobileNavLink
                             href="/dashboard/analytics"
                             icon={<BarChart3 className="h-5 w-5" />}
-                            active={pathname === '/dashboard/analytics'}
+                            active={pathname?.startsWith('/dashboard/analytics')}
                             onClick={toggleMobileMenu}
                         >
                             Analytics

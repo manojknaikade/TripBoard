@@ -86,8 +86,10 @@ export default function TripDetailMap({ startLat, startLng, endLat, endLng }: Tr
                 .addTo(mapRef.current)
                 .bindPopup(`Start: ${startLat.toFixed(4)}, ${startLng.toFixed(4)}`);
 
-            // Add end marker and line if we have end coordinates
-            if (hasEnd) {
+            // Add end marker and line if we have end coordinates and it's not a single point
+            const isSinglePoint = hasEnd && startLat === endLat && startLng === endLng;
+
+            if (hasEnd && !isSinglePoint) {
                 endMarkerRef.current = L.marker([endLat, endLng], { icon: endIcon })
                     .addTo(mapRef.current)
                     .bindPopup(`End: ${endLat.toFixed(4)}, ${endLng.toFixed(4)}`);
@@ -109,6 +111,9 @@ export default function TripDetailMap({ startLat, startLng, endLat, endLng }: Tr
                     [endLat, endLng]
                 ]);
                 mapRef.current.fitBounds(bounds, { padding: [50, 50] });
+            } else if (isSinglePoint) {
+                // It's a charging session. Just zoom to 14 around the spot.
+                mapRef.current.setZoom(14);
             }
         }
 

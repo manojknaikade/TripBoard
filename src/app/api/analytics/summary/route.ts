@@ -21,18 +21,21 @@ export async function GET(request: NextRequest) {
         const startDate = searchParams.get('startDate')
         const endDate = searchParams.get('endDate')
 
-        // Get user settings to determine units
         let userUnits: 'imperial' | 'metric' = 'metric'; // DEFAULT TO METRIC
+        let userDateFormat: 'DD/MM' | 'MM/DD' = 'DD/MM';
 
         try {
             const { data: settings } = await supabase
                 .from('app_settings')
-                .select('units')
+                .select('units, date_format')
                 .eq('id', 'default')
                 .single();
 
             if (settings?.units) {
                 userUnits = settings.units as 'imperial' | 'metric';
+            }
+            if (settings?.date_format) {
+                userDateFormat = settings.date_format as 'DD/MM' | 'MM/DD';
             }
         } catch (e) {
             console.warn('Could not fetch user settings (check SUPABASE_SERVICE_ROLE_KEY), defaulting to metric:', e);
@@ -156,7 +159,9 @@ export async function GET(request: NextRequest) {
 
             for (const trip of trips || []) {
                 const tripDate = new Date(trip.start_time);
-                const dateKey = `${tripDate.getMonth() + 1}/${tripDate.getDate()}`;
+                const m = tripDate.getMonth() + 1;
+                const d = tripDate.getDate();
+                const dateKey = userDateFormat === 'MM/DD' ? `${m}/${d}` : `${d}/${m}`;
 
                 // Get distance (with fallback to odometer)
                 const distance = trip.distance_miles ||
@@ -187,7 +192,9 @@ export async function GET(request: NextRequest) {
             weeklyData = [];
 
             while (currentDate <= endDateCalc) {
-                const dateKey = `${currentDate.getMonth() + 1}/${currentDate.getDate()}`;
+                const m = currentDate.getMonth() + 1;
+                const d = currentDate.getDate();
+                const dateKey = userDateFormat === 'MM/DD' ? `${m}/${d}` : `${d}/${m}`;
                 weeklyData.push({
                     day: dateKey,
                     distance: Math.round((dataByDate[dateKey]?.distance || 0) * distanceMultiplier * 10) / 10,
@@ -221,12 +228,16 @@ export async function GET(request: NextRequest) {
             : 260 // Default
 
         // Fetch charging sessions for the period
-        const { data: chargingSessions } = await supabase
+        const { data: chargingSessions, error: chargingError } = await supabase
             .from('charging_sessions')
-            .select('id, energy_added_kwh, charger_type')
+            .select('id, energy_added_kwh, charger_type, cost_user_entered, currency, start_time')
             .eq('is_complete', true)
             .gte('start_time', fromDate.toISOString())
             .lte('start_time', toDate.toISOString())
+
+        if (chargingError) {
+            console.error('Error fetching charging sessions:', chargingError);
+        }
 
         // Calculate charging mix from real data
         const chargingByType: Record<string, number> = { home: 0, supercharger: 0, destination: 0, '3rd_party_fast': 0, other: 0 }
@@ -253,6 +264,52 @@ export async function GET(request: NextRequest) {
 
             chargingByType[normalisedKey] = (chargingByType[normalisedKey] || 0) + energy;
         }
+
+        // --- NEW: Calculate Total Cost & Daily Charging Data ---
+        let totalChargingCost = 0;
+        const dailyChargingData: Record<string, { energy: number; cost: number; sessions: number }> = {};
+
+        for (const session of chargingSessions || []) {
+            // Aggregate Total Cost (simple sum here, ignoring currency conversion complexity for MVP)
+            const cost = session.cost_user_entered || 0;
+            totalChargingCost += cost;
+
+            // Group by Day (using the same 'day' keys as weeklyData depending on timeframe)
+            const d = new Date(session.start_time);
+            let dayKey = d.toLocaleDateString('en-US', { weekday: 'short' });
+            if (timeframe !== 'week') {
+                const m = d.getMonth() + 1;
+                const dNum = d.getDate();
+                dayKey = userDateFormat === 'MM/DD' ? `${m}/${dNum}` : `${dNum}/${m}`;
+            }
+
+            if (!dailyChargingData[dayKey]) {
+                dailyChargingData[dayKey] = { energy: 0, cost: 0, sessions: 0 };
+            }
+
+            dailyChargingData[dayKey].energy += (session.energy_added_kwh || 0);
+            dailyChargingData[dayKey].cost += cost;
+            dailyChargingData[dayKey].sessions += 1;
+        }
+
+        // Format daily charging array to match weeklyData exactly
+        const formattedDailyChargingData = timeframe === 'week'
+            ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => ({
+                day,
+                energy: Math.round((dailyChargingData[day]?.energy || 0) * 10) / 10,
+                cost: Math.round((dailyChargingData[day]?.cost || 0) * 100) / 100,
+                sessions: dailyChargingData[day]?.sessions || 0,
+            }))
+            : weeklyData.map(w => ({
+                day: w.day,
+                energy: Math.round((dailyChargingData[w.day]?.energy || 0) * 10) / 10,
+                cost: Math.round((dailyChargingData[w.day]?.cost || 0) * 100) / 100,
+                sessions: dailyChargingData[w.day]?.sessions || 0,
+            }));
+
+        // Calculate average cost per kwh
+        const avgCostPerKwh = totalChargingEnergy > 0 ? totalChargingCost / totalChargingEnergy : 0;
+
 
         // Calculate percentages
         const chargingMix = totalChargingEnergy > 0 ? [
@@ -326,11 +383,14 @@ export async function GET(request: NextRequest) {
                 tripCount: trips?.length || 0,
                 chargingSessions: chargingSessions?.length || 0,
                 totalChargingEnergy: Math.round(totalChargingEnergy * 10) / 10,
+                totalChargingCost: Math.round(totalChargingCost * 100) / 100,
+                avgCostPerKwh: Math.round(avgCostPerKwh * 100) / 100,
                 trends,
             },
             weeklyData,
             efficiencyData,
             chargingMix,
+            dailyChargingData: formattedDailyChargingData,
         })
     } catch (err: any) {
         console.error('CRITICAL Analytics error:', err);

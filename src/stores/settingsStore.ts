@@ -5,6 +5,8 @@ import { PollingConfig, DEFAULT_POLLING_CONFIG } from '@/lib/utils/polling';
 type Region = 'na' | 'eu' | 'cn';
 type Units = 'imperial' | 'metric';
 type DataSource = 'polling' | 'telemetry';
+type Currency = 'CHF' | 'USD' | 'EUR' | 'GBP' | string;
+type DateFormat = 'DD/MM' | 'MM/DD';
 
 interface HomeLocation {
     latitude: number | null;
@@ -17,6 +19,8 @@ interface SettingsStore {
     pollingConfig: PollingConfig;
     region: Region;
     units: Units;
+    currency: Currency;
+    dateFormat: DateFormat;
     notifications: boolean;
     dataSource: DataSource;
     homeLocation: HomeLocation;
@@ -25,6 +29,8 @@ interface SettingsStore {
     setPollingConfig: (config: Partial<PollingConfig>) => void;
     setRegion: (region: Region) => void;
     setUnits: (units: Units) => void;
+    setCurrency: (currency: Currency) => void;
+    setDateFormat: (format: DateFormat) => void;
     setNotifications: (enabled: boolean) => void;
     setDataSource: (source: DataSource) => void;
     setHomeLocation: (location: HomeLocation) => void;
@@ -37,6 +43,8 @@ const defaultSettings = {
     pollingConfig: DEFAULT_POLLING_CONFIG,
     region: 'eu' as Region,
     units: 'imperial' as Units,
+    currency: 'CHF' as Currency,
+    dateFormat: 'DD/MM' as DateFormat,
     notifications: true,
     dataSource: 'polling' as DataSource,
     homeLocation: { latitude: null, longitude: null } as HomeLocation,
@@ -56,6 +64,10 @@ export const useSettingsStore = create<SettingsStore>()(
 
             setUnits: (units) => set({ units }),
 
+            setCurrency: (currency) => set({ currency }),
+
+            setDateFormat: (dateFormat) => set({ dateFormat }),
+
             setNotifications: (notifications) => set({ notifications }),
 
             setDataSource: (dataSource) => set({ dataSource }),
@@ -72,6 +84,8 @@ export const useSettingsStore = create<SettingsStore>()(
                             pollingConfig: data.settings.pollingConfig,
                             region: data.settings.region,
                             units: data.settings.units,
+                            currency: data.settings.currency || 'CHF',
+                            dateFormat: data.settings.dateFormat || 'DD/MM',
                             notifications: data.settings.notifications,
                             dataSource: data.settings.dataSource,
                         });
@@ -91,6 +105,8 @@ export const useSettingsStore = create<SettingsStore>()(
                             pollingConfig: state.pollingConfig,
                             region: state.region,
                             units: state.units,
+                            currency: state.currency,
+                            dateFormat: state.dateFormat,
                             notifications: state.notifications,
                             dataSource: state.dataSource,
                         }),

@@ -105,3 +105,8 @@ Updating the code logic *does not* automatically change what the car streams. A 
 ### D. Dual Processing Logic
 
 While a Go ingester handles the high-performance binary-to-JSON conversion and raw storage, we use a separate **Node.js Telemetry Processor** on the VPS to handle complex state transitions (like identifying the start and end of a charging session and updating the `charging_sessions` table).
+
+### E. Extracting Location Names (Reverse Geocoding)
+
+Tesla's raw telemetry stream only transmits raw `Latitude` and `Longitude` coordinates. There is no string representing the town or physical address. To resolve this, our Node.js VPS script (`vps-telemetry-server.js`) utilizes the **OpenStreetMap Nominatim API**.
+When a new charging session begins, the VPS executes an internal `https.get` request (supplying the essential `User-Agent` header) to reverse-geocode those coordinates back into a city or street name. This derived string is then permanently written directly to the Supabase `location_name` column, ensuring the web application's Charging grid displays meaningful human-readable addresses instantly without front-end rate limiting!

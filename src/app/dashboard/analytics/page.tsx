@@ -118,15 +118,9 @@ export default function AnalyticsPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [timeframe, customStart, customEnd]);
 
-    // Use fetched data directly (remove fallbacks that mask real data)
     const weeklyData = data?.weeklyData || [];
     const efficiencyData = data?.efficiencyData || [];
-    const chargingMix = data?.chargingMix || [];
     const summary = data?.summary || { totalDistance: 0, totalEnergy: 0, avgEfficiency: 0, drivingTime: 0, tripCount: 0 };
-
-    const hasRealChargingData =
-        chargingMix.length > 0 &&
-        !(chargingMix.length === 1 && chargingMix[0].name === 'No Data');
 
     return (
         <div className="min-h-screen">
@@ -136,7 +130,10 @@ export default function AnalyticsPage() {
             <main className="mx-auto max-w-7xl px-6 py-8">
                 <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                     <div>
-                        <h1 className="text-2xl font-bold">Analytics</h1>
+                        <h1 className="text-2xl font-bold flex items-center gap-2">
+                            <Gauge className="h-6 w-6 text-red-500" />
+                            Driving Analytics
+                        </h1>
                         <p className="text-slate-400">Insights into your driving patterns and efficiency</p>
                     </div>
 
@@ -159,6 +156,16 @@ export default function AnalyticsPage() {
                         <Loader2 className="h-8 w-8 animate-spin text-red-500" />
                     </div>
                 )}
+
+                {/* Secondary navigation for analytics types */}
+                <div className="mb-8 flex gap-4 border-b border-slate-700/50 pb-4">
+                    <span className="text-sm font-medium text-white border-b-2 border-red-500 pb-4 -mb-[18px]">
+                        Driving Activity
+                    </span>
+                    <Link href="/dashboard/analytics/charging" className="text-sm font-medium text-slate-400 hover:text-white transition-colors">
+                        Charging
+                    </Link>
+                </div>
 
                 {/* Stats Cards */}
                 <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -258,55 +265,6 @@ export default function AnalyticsPage() {
                                 <Bar dataKey="energy" fill="#22c55e" radius={[4, 4, 0, 0]} />
                             </BarChart>
                         </ResponsiveContainer>
-                    </div>
-
-                    {/* Charging Mix */}
-                    <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
-                        <h2 className="mb-2 text-lg font-semibold">Charging Sources</h2>
-                        {!hasRealChargingData && (
-                            <p className="mb-4 text-sm text-slate-400">
-                                No charging sessions found for the selected period. Start a charge to see this chart populate.
-                            </p>
-                        )}
-                        <div className="flex items-center justify-center">
-                            <ResponsiveContainer width="100%" height={200}>
-                                <PieChart>
-                                    <Pie
-                                        data={chargingMix}
-                                        cx="50%"
-                                        cy="50%"
-                                        innerRadius={60}
-                                        outerRadius={80}
-                                        paddingAngle={4}
-                                        dataKey="value"
-                                    >
-                                        {chargingMix.map((entry, index) => (
-                                            <Cell key={`cell-${index}`} fill={entry.color} />
-                                        ))}
-                                    </Pie>
-                                    <Tooltip
-                                        contentStyle={{
-                                            backgroundColor: '#1e293b',
-                                            border: '1px solid #334155',
-                                            borderRadius: '8px',
-                                        }}
-                                    />
-                                </PieChart>
-                            </ResponsiveContainer>
-                        </div>
-                        <div className="mt-4 flex justify-center gap-6">
-                            {chargingMix.map((item) => (
-                                <div key={item.name} className="flex items-center gap-2">
-                                    <div
-                                        className="h-3 w-3 rounded-full"
-                                        style={{ backgroundColor: item.color }}
-                                    />
-                                    <span className="text-sm text-slate-400">
-                                        {item.name} ({item.value}%)
-                                    </span>
-                                </div>
-                            ))}
-                        </div>
                     </div>
                 </div>
             </main>

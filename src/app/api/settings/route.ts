@@ -31,6 +31,8 @@ export async function GET() {
             },
             region: settings.region,
             units: settings.units,
+            currency: settings.currency || 'CHF',
+            dateFormat: settings.date_format || 'DD/MM',
             notifications: settings.notifications_enabled,
             dataSource: settings.data_source,
         }
@@ -42,7 +44,7 @@ export async function POST(request: NextRequest) {
 
     try {
         const body = await request.json()
-        const { pollingConfig, region, units, notifications, dataSource } = body
+        const { pollingConfig, region, units, currency, dateFormat, notifications, dataSource } = body
 
         const { error } = await supabase
             .from('app_settings')
@@ -54,6 +56,8 @@ export async function POST(request: NextRequest) {
                 polling_sleeping: pollingConfig?.sleeping,
                 region,
                 units,
+                currency,
+                date_format: dateFormat,
                 notifications_enabled: notifications,
                 data_source: dataSource,
                 updated_at: new Date().toISOString(),

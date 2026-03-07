@@ -9,7 +9,7 @@ import {
     Gauge,
     History,
     BarChart3,
-    Settings,
+    Settings as SettingsIcon,
     LogOut,
     Clock,
     Bell,
@@ -17,6 +17,7 @@ import {
     Download,
     Check,
     MapPin,
+    Banknote,
 } from 'lucide-react';
 import { useSettingsStore } from '@/stores/settingsStore';
 import Header from '@/components/Header';
@@ -44,12 +45,15 @@ export default function SettingsPage() {
         pollingConfig,
         region,
         units,
+        currency,
         notifications,
         dataSource,
         homeLocation,
         setPollingConfig,
         setRegion,
         setUnits,
+        setCurrency,
+        setDateFormat,
         setNotifications,
         setDataSource,
         setHomeLocation,
@@ -391,6 +395,64 @@ export default function SettingsPage() {
                                         }`}
                                 >
                                     {u.label}
+                                </button>
+                            ))}
+                        </div>
+                    </SettingsSection>
+
+                    {/* Date Format */}
+                    <SettingsSection
+                        icon={<Clock className="h-5 w-5" />}
+                        title="Date Format"
+                        description="Choose how dates are displayed in graphs and lists"
+                    >
+                        <div className="flex gap-3">
+                            {[
+                                { id: 'DD/MM', label: 'Day / Month' },
+                                { id: 'MM/DD', label: 'Month / Day' },
+                            ].map((d) => (
+                                <button
+                                    key={d.id}
+                                    onClick={() => {
+                                        setDateFormat(d.id as 'DD/MM' | 'MM/DD');
+                                        showSaved();
+                                    }}
+                                    className={`rounded-lg px-4 py-2 text-sm transition-colors ${useSettingsStore.getState().dateFormat === d.id
+                                            ? 'bg-red-500/10 text-red-400 ring-1 ring-red-500/30'
+                                            : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
+                                        }`}
+                                >
+                                    {d.label}
+                                </button>
+                            ))}
+                        </div>
+                    </SettingsSection>
+
+                    {/* Currency */}
+                    <SettingsSection
+                        icon={<Banknote className="h-5 w-5" />}
+                        title="Currency"
+                        description="Choose your preferred currency for charging costs"
+                    >
+                        <div className="flex flex-wrap gap-3">
+                            {[
+                                { id: 'CHF', label: 'CHF (₣)' },
+                                { id: 'USD', label: 'USD ($)' },
+                                { id: 'EUR', label: 'EUR (€)' },
+                                { id: 'GBP', label: 'GBP (£)' },
+                            ].map((c) => (
+                                <button
+                                    key={c.id}
+                                    onClick={() => {
+                                        setCurrency(c.id);
+                                        showSaved();
+                                    }}
+                                    className={`rounded-lg px-4 py-2 text-sm transition-colors ${currency === c.id
+                                        ? 'bg-red-500/10 text-red-400 ring-1 ring-red-500/30'
+                                        : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
+                                        }`}
+                                >
+                                    {c.label}
                                 </button>
                             ))}
                         </div>

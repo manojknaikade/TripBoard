@@ -42,20 +42,21 @@ function FitBounds({ bounds }: { bounds: L.LatLngBoundsExpression }) {
 
 export default function TripMiniMap({ startLat, startLon, endLat, endLon }: TripMiniMapProps) {
     const hasEnd = endLat != null && endLon != null;
+    const isSinglePoint = !hasEnd || (startLat === endLat && startLon === endLon);
 
     // Calculate center and bounds
     const centerLat = hasEnd ? (startLat + endLat) / 2 : startLat;
     const centerLon = hasEnd ? (startLon + endLon) / 2 : startLon;
 
-    // Create bounds for fitBounds
-    const bounds = hasEnd
+    // Create bounds for fitBounds. If it's a single point (like a charging session), box it out nicely to zoom out more
+    const bounds = isSinglePoint
         ? L.latLngBounds([
-            [startLat, startLon],
-            [endLat, endLon]
+            [startLat - 0.02, startLon - 0.02],
+            [startLat + 0.02, startLon + 0.02]
         ])
         : L.latLngBounds([
-            [startLat - 0.01, startLon - 0.01],
-            [startLat + 0.01, startLon + 0.01]
+            [startLat, startLon],
+            [endLat!, endLon!]
         ]);
 
     return (
@@ -81,12 +82,12 @@ export default function TripMiniMap({ startLat, startLon, endLat, endLon }: Trip
                 {/* Start marker */}
                 <Marker position={[startLat, startLon]} icon={startIcon} />
 
-                {/* End marker and line */}
-                {hasEnd && (
+                {/* End marker and line (only if it's an actual trip with distance) */}
+                {hasEnd && !isSinglePoint && (
                     <>
-                        <Marker position={[endLat, endLon]} icon={endIcon} />
+                        <Marker position={[endLat!, endLon!]} icon={endIcon} />
                         <Polyline
-                            positions={[[startLat, startLon], [endLat, endLon]]}
+                            positions={[[startLat, startLon], [endLat, endLon!]]}
                             pathOptions={{ color: '#3b82f6', weight: 2, opacity: 0.7, dashArray: '5, 5' }}
                         />
                     </>

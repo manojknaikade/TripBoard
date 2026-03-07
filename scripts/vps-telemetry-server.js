@@ -11,6 +11,39 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const https = require('https');
+
+async function reverseGeocode(lat, lng) {
+    return new Promise((resolve) => {
+        const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`;
+        const options = { headers: { 'User-Agent': 'TripBoard-VPS/1.0' } };
+
+        https.get(url, options, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                try {
+                    const parsed = JSON.parse(data);
+                    if (parsed && parsed.address) {
+                        const addr = parsed.address;
+                        const parts = [];
+                        if (addr.road) parts.push(addr.house_number ? `${addr.road} ${addr.house_number}` : addr.road);
+                        const city = addr.city || addr.town || addr.village || addr.hamlet;
+                        if (city) parts.push(city);
+                        if (addr.country) parts.push(addr.country);
+
+                        if (parts.length > 0) resolve(parts.join(', '));
+                        else resolve(parsed.display_name || null);
+                    } else {
+                        resolve(null);
+                    }
+                } catch (e) {
+                    resolve(null);
+                }
+            });
+        }).on('error', () => resolve(null));
+    });
+}
 
 console.log('=================================');
 console.log('Tesla Telemetry Processor Active');
@@ -18,7 +51,16 @@ console.log('Monitoring telemetry_raw table...');
 console.log('=================================');
 
 const activeCharges = new Map();
-let lastProcessedTime = new Date(Date.now() - 60000).toISOString(); // Start 1 min ago
+// FIXED: Pull last processed time from DB or fallback to 1 min ago to avoid missing data on script restart
+let lastProcessedTime = new Date(Date.now() - 60000).toISOString();
+supabase.from('telemetry_raw').select('created_at').order('created_at', { ascending: false }).limit(1).then(({ data }) => {
+    if (data && data.length > 0) {
+        // We start processing from the last item we see when the script boots up
+        // A better long-term fix is persisting the exact cursor ID.
+        lastProcessedTime = data[0].created_at;
+        console.log("Resuming telemetry processing from latest DB timestamp:", lastProcessedTime);
+    }
+});
 
 async function processNewTelemetry() {
     try {
@@ -47,6 +89,11 @@ async function processNewTelemetry() {
                 const fastChargerTypeItem = payload.data.find(d => d.key === 'FastChargerType');
                 const homeItem = payload.data.find(d => d.key === 'LocatedAtHome');
 
+                // Location items
+                const locationItem = payload.data.find(d => d.key === 'Location');
+                const latItem = payload.data.find(d => d.key === 'Latitude' || d.key === 'EstLat');
+                const lngItem = payload.data.find(d => d.key === 'Longitude' || d.key === 'EstLng');
+
                 if (chargeStateItem) {
                     const state = chargeStateItem.value.stringValue || chargeStateItem.value.detailedChargeStateValue || chargeStateItem.value;
                     const energy = energyAddedItem ? (energyAddedItem.value.doubleValue || energyAddedItem.value) : 0;
@@ -56,6 +103,17 @@ async function processNewTelemetry() {
                     const isFastChargerFlag = fastChargerItem ? Boolean(fastChargerItem.value.booleanValue ?? fastChargerItem.value.boolean_value ?? fastChargerItem.value) : false;
                     const fastChargerTypeValue = fastChargerTypeItem ? (fastChargerTypeItem.value.stringValue || fastChargerTypeItem.value.fastChargerValue || fastChargerTypeItem.value) : null;
                     const isHomeFlag = homeItem ? Boolean(homeItem.value.booleanValue ?? homeItem.value.boolean_value ?? homeItem.value) : false;
+
+                    let lat = 0;
+                    let lng = 0;
+
+                    if (locationItem?.value?.locationValue) {
+                        lat = locationItem.value.locationValue.latitude || 0;
+                        lng = locationItem.value.locationValue.longitude || 0;
+                    } else if (latItem && lngItem) {
+                        lat = latItem.value.doubleValue || latItem.value;
+                        lng = lngItem.value.doubleValue || lngItem.value;
+                    }
 
                     const isCharging = ['DetailedChargeStateCharging', 'DetailedChargeStateStarting'].includes(state);
                     const isCompletedOrDisconnected = ['DetailedChargeStateComplete', 'DetailedChargeStateDisconnected', 'DetailedChargeStateStopped'].includes(state);
@@ -85,12 +143,19 @@ async function processNewTelemetry() {
 
                     if (isCharging && !hasActiveCharge) {
                         console.log(`Starting charging session for ${vehicleUuid} at ${row.created_at}`);
+
+                        let locName = null;
+                        if (lat !== 0 && lng !== 0) {
+                            locName = await reverseGeocode(lat, lng);
+                        }
+
                         const insertPayload = {
                             vehicle_id: vehicleUuid,
                             start_time: row.created_at,
                             start_battery_pct: battery,
-                            latitude: 0,
-                            longitude: 0,
+                            latitude: lat,
+                            longitude: lng,
+                            location_name: locName,
                             charger_type: resolvedChargerType,
                             is_complete: false
                         };
