@@ -60,7 +60,7 @@ function formatDistance(miles: number | null, units: 'imperial' | 'metric'): str
 
 function formatBattery(pct: number | null): string {
     if (pct === null || pct === undefined) return 'N/A';
-    return `${pct.toFixed(1)}%`;
+    return `${pct.toFixed(2)}%`;
 }
 
 function formatDuration(seconds: number): string {

@@ -42,3 +42,31 @@ This document records severe bugs, crashes, and pitfalls previously encountered 
 
 - Ensure auth scripts (like `tesla/callback/route.ts`) conditionally disable the `secure` flag if evaluating against localhost, even if `NODE_ENV === 'production'`.
 - `secure: process.env.NODE_ENV === 'production' && !request.url.includes('localhost')`
+
+## 5. Supabase RLS Blocking Server-Side Data Exports
+
+**Symptom:** API routes fetch trip data successfully, but charging session data returns empty arrays — even though data exists in the database.
+**Root Cause:** The standard Supabase client (`createClient`) respects Row-Level Security. If no Supabase Auth user session is attached (e.g., auth is handled via Tesla OAuth cookies, not Supabase Auth), RLS silently returns zero rows.
+**Solution:**
+
+- Use `createAdminClient()` (service role key) for export or analytics routes where the user is already authenticated via other means (Tesla OAuth).
+- Never use the admin client for user-facing write operations without additional authorization checks.
+
+## 6. Client-Side Date Filtering With Hard Fetch Limits
+
+**Symptom:** Date filters like "Last 30 Days" or "Last 3 Months" show empty or incomplete results, but shorter ranges like "Last 7 Days" work fine.
+**Root Cause:** The frontend fetches a fixed number of records (e.g., `?limit=50`) and then filters client-side by date. When data grows, older records fall outside the fetch window.
+**Solution:**
+
+- Move date filtering **server-side**: pass `from` and `to` ISO date params to the API, and use `.gte('start_time', from).lte('start_time', to)` in the Supabase query.
+- Only apply `.range()` pagination if no date range is provided (backward-compatible).
+- The frontend should re-fetch (via `useEffect` dependency on `timeframe`) whenever the user switches filters.
+
+## 7. Leaflet Map Thumbnails Overlapping Sticky Headers
+
+**Symptom:** Mini-map thumbnails in list cards render on top of the sticky navigation bar when scrolling.
+**Root Cause:** Leaflet injects its own high `z-index` values on map tiles and containers, which override the app's stacking context.
+**Solution:**
+
+- Wrap the map div with `z-0 relative` to create a new stacking context that contains Leaflet's z-indices.
+- Ensure the sticky header uses a sufficiently high z-index (e.g., `z-50`).

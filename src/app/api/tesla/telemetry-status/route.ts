@@ -45,7 +45,7 @@ export async function GET() {
             vin: data.vin,
             display_name: data.vin?.split('.')[1] || 'Tesla',
             state: state,
-            battery_level: Math.round(data.battery_level || 0),
+            battery_level: data.battery_level || 0,
             battery_range: Math.round(data.rated_range || data.est_battery_range || (data.battery_level || 0) * 4),
             charging_state: data.charge_state || 'Disconnected',
             charge_limit_soc: 80,

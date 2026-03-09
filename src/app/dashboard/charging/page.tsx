@@ -73,7 +73,7 @@ export default function ChargingPage() {
     const [sessions, setSessions] = useState<ChargingSession[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [timeframe, setTimeframe] = useState('month');
+    const [timeframe, setTimeframe] = useState('7days');
     const [customStart, setCustomStart] = useState('');
     const [customEnd, setCustomEnd] = useState('');
     const [showCustomPicker, setShowCustomPicker] = useState(false);
@@ -84,25 +84,34 @@ export default function ChargingPage() {
     const [currencyInput, setCurrencyInput] = useState(preferredCurrency);
     const [savingCost, setSavingCost] = useState(false);
 
-    useEffect(() => {
-        fetchSessions();
-    }, []);
+    // Calculate date range
+    const getDateRange = () => {
+        const toDate = new Date();
+        toDate.setHours(23, 59, 59, 999);
+        let fromDate = new Date();
 
-    const fetchSessions = async () => {
-        try {
-            const response = await fetch('/api/charging?limit=50');
-            const data = await response.json();
-
-            if (data.success) {
-                setSessions(data.sessions || []);
-            } else {
-                setError(data.error || 'Failed to load charging sessions');
+        if (timeframe === 'custom' && customStart && customEnd) {
+            fromDate = new Date(customStart);
+            fromDate.setHours(0, 0, 0, 0);
+            const customToDate = new Date(customEnd);
+            customToDate.setHours(23, 59, 59, 999);
+            return { fromDate, toDate: customToDate };
+        } else {
+            switch (timeframe) {
+                case '7days': fromDate = new Date(toDate.getTime() - 7 * 24 * 60 * 60 * 1000); break;
+                case 'month': fromDate = new Date(toDate.getFullYear(), toDate.getMonth(), 1); break;
+                case '30days': fromDate = new Date(toDate.getTime() - 30 * 24 * 60 * 60 * 1000); break;
+                case '3months': fromDate = new Date(toDate.getTime() - 90 * 24 * 60 * 60 * 1000); break;
+                case 'week':
+                default:
+                    const day = toDate.getDay();
+                    const diff = toDate.getDate() - day + (day === 0 ? -6 : 1);
+                    fromDate = new Date(toDate.getFullYear(), toDate.getMonth(), diff);
+                    fromDate.setHours(0, 0, 0, 0);
+                    break;
             }
-        } catch {
-            setError('Failed to load charging sessions');
-        } finally {
-            setLoading(false);
         }
+        return { fromDate, toDate };
     };
 
     const handleSaveCost = async () => {
@@ -137,41 +146,36 @@ export default function ChargingPage() {
         }
     };
 
-    // Calculate date range
-    const getDateRange = () => {
-        const toDate = new Date();
-        toDate.setHours(23, 59, 59, 999);
-        let fromDate = new Date();
+    const fetchSessions = async () => {
+        setLoading(true);
+        setError(null);
+        try {
+            const { fromDate, toDate } = getDateRange();
+            const params = new URLSearchParams({
+                from: fromDate.toISOString(),
+                to: toDate.toISOString(),
+            });
+            const response = await fetch(`/api/charging?${params}`);
+            const data = await response.json();
 
-        if (timeframe === 'custom' && customStart && customEnd) {
-            fromDate = new Date(customStart);
-            fromDate.setHours(0, 0, 0, 0);
-            const customToDate = new Date(customEnd);
-            customToDate.setHours(23, 59, 59, 999);
-            return { fromDate, toDate: customToDate };
-        } else {
-            switch (timeframe) {
-                case '7days': fromDate = new Date(toDate.getTime() - 7 * 24 * 60 * 60 * 1000); break;
-                case 'month': fromDate = new Date(toDate.getFullYear(), toDate.getMonth(), 1); break;
-                case '30days': fromDate = new Date(toDate.getTime() - 30 * 24 * 60 * 60 * 1000); break;
-                case '3months': fromDate = new Date(toDate.getTime() - 90 * 24 * 60 * 60 * 1000); break;
-                case 'week':
-                default:
-                    const day = toDate.getDay();
-                    const diff = toDate.getDate() - day + (day === 0 ? -6 : 1);
-                    fromDate = new Date(toDate.getFullYear(), toDate.getMonth(), diff);
-                    fromDate.setHours(0, 0, 0, 0);
-                    break;
+            if (data.success) {
+                setSessions(data.sessions || []);
+            } else {
+                setError(data.error || 'Failed to load charging sessions');
             }
+        } catch {
+            setError('Failed to load charging sessions');
+        } finally {
+            setLoading(false);
         }
-        return { fromDate, toDate };
     };
 
-    const { fromDate, toDate } = getDateRange();
-    const filteredSessions = sessions.filter(session => {
-        const d = new Date(session.start_time);
-        return d >= fromDate && d <= toDate;
-    });
+    // Re-fetch when timeframe or custom dates change
+    useEffect(() => {
+        fetchSessions();
+    }, [timeframe, customStart, customEnd]);
+
+    const filteredSessions = sessions;
 
     const sessionsByDate = filteredSessions.reduce((acc, session) => {
         const date = formatDate(session.start_time);
@@ -350,7 +354,7 @@ function SessionCard({ session, preferredCurrency, onAddCost }: { session: Charg
         >
             <div className="flex items-stretch gap-4">
                 {hasLocation && (
-                    <div className="hidden sm:block h-24 w-32 flex-shrink-0 rounded-lg overflow-hidden border border-slate-600/50">
+                    <div className="hidden sm:block h-24 w-32 flex-shrink-0 rounded-lg overflow-hidden border border-slate-600/50 z-0 relative">
                         <TripMiniMap
                             startLat={session.latitude!}
                             startLon={session.longitude!}
@@ -435,35 +439,36 @@ function SessionCard({ session, preferredCurrency, onAddCost }: { session: Charg
                             )}
                         </div>
                     </div>
-
-                    <div className="mt-4 flex items-center gap-4 border-t border-slate-700/50 pt-3">
-                        {session.start_battery_pct != null && (
-                            <div className="flex flex-1 items-center gap-3">
-                                <div className="text-sm font-medium">Battery</div>
-                                <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-700 relative">
-                                    <div
-                                        className="absolute left-0 top-0 h-full bg-slate-500"
-                                        style={{ width: `${session.start_battery_pct}%` }}
-                                    />
-                                    {session.end_battery_pct && (
-                                        <div
-                                            className="absolute top-0 h-full bg-green-500"
-                                            style={{
-                                                left: `${session.start_battery_pct}%`,
-                                                width: `${session.end_battery_pct - session.start_battery_pct}%`
-                                            }}
-                                        />
-                                    )}
-                                </div>
-                                <div className="text-sm font-mono text-slate-400">
-                                    {session.start_battery_pct.toFixed(0)}%
-                                    {session.end_battery_pct ? ` → ${session.end_battery_pct.toFixed(0)}%` : ''}
-                                </div>
-                            </div>
-                        )}
-                    </div>
                 </div>
             </div>
+
+            {/* Battery bar - separate full-width row */}
+            {session.start_battery_pct != null && (
+                <div className="mt-4 flex items-center gap-4 border-t border-slate-700/50 pt-3">
+                    <div className="flex flex-1 items-center gap-3">
+                        <div className="text-sm font-medium">Battery</div>
+                        <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-700 relative">
+                            <div
+                                className="absolute left-0 top-0 h-full bg-slate-500"
+                                style={{ width: `${session.start_battery_pct}%` }}
+                            />
+                            {session.end_battery_pct && (
+                                <div
+                                    className="absolute top-0 h-full bg-green-500"
+                                    style={{
+                                        left: `${session.start_battery_pct}%`,
+                                        width: `${session.end_battery_pct - session.start_battery_pct}%`
+                                    }}
+                                />
+                            )}
+                        </div>
+                        <div className="text-sm font-mono text-slate-400 whitespace-nowrap">
+                            {session.start_battery_pct.toFixed(2)}%
+                            {session.end_battery_pct ? ` → ${session.end_battery_pct.toFixed(2)}%` : ''}
+                        </div>
+                    </div>
+                </div>
+            )}
         </Link>
     );
 }

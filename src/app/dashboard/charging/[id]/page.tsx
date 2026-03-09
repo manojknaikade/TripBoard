@@ -366,7 +366,7 @@ export default function ChargingDetailPage() {
                         <StatBox
                             icon={<Battery className="h-5 w-5" />}
                             label="Battery Start"
-                            value={`${session.start_battery_pct.toFixed(0)}%`}
+                            value={`${session.start_battery_pct.toFixed(2)}%`}
                             color="red"
                         />
                     )}
@@ -374,7 +374,7 @@ export default function ChargingDetailPage() {
                         <StatBox
                             icon={<Battery className="h-5 w-5" />}
                             label="Battery End"
-                            value={`${session.end_battery_pct.toFixed(0)}%`}
+                            value={`${session.end_battery_pct.toFixed(2)}%`}
                             color="green"
                         />
                     )}

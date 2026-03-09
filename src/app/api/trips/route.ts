@@ -17,6 +17,8 @@ export async function GET(request: NextRequest) {
     const limit = parseInt(searchParams.get('limit') || '20');
     const offset = parseInt(searchParams.get('offset') || '0');
     const vehicleId = searchParams.get('vehicleId');
+    const from = searchParams.get('from');
+    const to = searchParams.get('to');
 
     const supabase = await getSupabase();
 
@@ -24,11 +26,21 @@ export async function GET(request: NextRequest) {
     let query = supabase
         .from('trips')
         .select('*')
-        .order('start_time', { ascending: false })
-        .range(offset, offset + limit - 1);
+        .order('start_time', { ascending: false });
 
+    if (from) {
+        query = query.gte('start_time', from);
+    }
+    if (to) {
+        query = query.lte('start_time', to);
+    }
     if (vehicleId) {
         query = query.eq('vehicle_id', vehicleId);
+    }
+
+    // Only apply pagination if no date range is provided
+    if (!from && !to) {
+        query = query.range(offset, offset + limit - 1);
     }
 
     const { data: trips, error, count } = await query;

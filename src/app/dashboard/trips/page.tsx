@@ -94,43 +94,22 @@ export default function TripsPage() {
     const [trips, setTrips] = useState<Trip[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [timeframe, setTimeframe] = useState('week');
+    const [timeframe, setTimeframe] = useState('7days');
     const [customStart, setCustomStart] = useState('');
     const [customEnd, setCustomEnd] = useState('');
     const [showCustomPicker, setShowCustomPicker] = useState(false);
 
-    useEffect(() => {
-        fetchTrips();
-    }, []);
-
-    const fetchTrips = async () => {
-        try {
-            const response = await fetch('/api/trips?limit=50');
-            const data = await response.json();
-
-            if (data.success) {
-                setTrips(data.trips || []);
-            } else {
-                setError(data.error || 'Failed to load trips');
-            }
-        } catch {
-            setError('Failed to load trips');
-        } finally {
-            setLoading(false);
-        }
-    };
-
     // Calculate date range based on timeframe
     const getDateRange = () => {
         const toDate = new Date();
-        toDate.setHours(23, 59, 59, 999); // Set to end of day
+        toDate.setHours(23, 59, 59, 999);
         let fromDate = new Date();
 
         if (timeframe === 'custom' && customStart && customEnd) {
             fromDate = new Date(customStart);
-            fromDate.setHours(0, 0, 0, 0); // Start of day
+            fromDate.setHours(0, 0, 0, 0);
             const customToDate = new Date(customEnd);
-            customToDate.setHours(23, 59, 59, 999); // End of day
+            customToDate.setHours(23, 59, 59, 999);
             return { fromDate, toDate: customToDate };
         } else {
             switch (timeframe) {
@@ -159,12 +138,37 @@ export default function TripsPage() {
         return { fromDate, toDate };
     };
 
-    // Filter trips by selected timeframe
-    const { fromDate, toDate } = getDateRange();
-    const filteredTrips = trips.filter(trip => {
-        const tripDate = new Date(trip.started_at);
-        return tripDate >= fromDate && tripDate <= toDate;
-    });
+    const fetchTrips = async () => {
+        setLoading(true);
+        setError(null);
+        try {
+            const { fromDate, toDate } = getDateRange();
+            const params = new URLSearchParams({
+                from: fromDate.toISOString(),
+                to: toDate.toISOString(),
+            });
+            const response = await fetch(`/api/trips?${params}`);
+            const data = await response.json();
+
+            if (data.success) {
+                setTrips(data.trips || []);
+            } else {
+                setError(data.error || 'Failed to load trips');
+            }
+        } catch {
+            setError('Failed to load trips');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Re-fetch when timeframe or custom dates change
+    useEffect(() => {
+        fetchTrips();
+    }, [timeframe, customStart, customEnd]);
+
+    // Trips are already filtered server-side
+    const filteredTrips = trips;
 
     // Group trips by date
     const tripsByDate = filteredTrips.reduce((acc, trip) => {
@@ -342,7 +346,7 @@ function TripCard({ trip, units }: { trip: Trip; units: 'imperial' | 'metric' })
             <div className="flex items-stretch gap-4">
                 {/* Mini Map */}
                 {hasCoords && (
-                    <div className="hidden sm:block h-24 w-32 flex-shrink-0 rounded-lg overflow-hidden border border-slate-600/50">
+                    <div className="hidden sm:block h-24 w-32 flex-shrink-0 rounded-lg overflow-hidden border border-slate-600/50 z-0 relative">
                         <TripMiniMap
                             startLat={trip.start_latitude}
                             startLon={trip.start_longitude}
@@ -402,26 +406,52 @@ function TripCard({ trip, units }: { trip: Trip; units: 'imperial' | 'metric' })
                                         {trip.energy_used_kwh.toFixed(1)} kWh
                                     </span>
                                 )}
+                                {trip.efficiency_wh_mi && (
+                                    <span className="flex items-center gap-1">
+                                        <TrendingUp className="h-3 w-3" />
+                                        {units === 'metric'
+                                            ? `${Math.round(trip.efficiency_wh_mi / 1.60934)} Wh/km`
+                                            : `${Math.round(trip.efficiency_wh_mi)} Wh/mi`
+                                        }
+                                    </span>
+                                )}
                             </div>
                         </div>
                     </div>
-
-                    {/* Battery change */}
-                    <div className="flex items-center gap-4">
-                        {trip.start_battery_level && (
-                            <div className="text-right hidden md:block">
-                                <div className="text-sm text-slate-400">Battery</div>
-                                <div className="font-medium">
-                                    {trip.start_battery_level.toFixed(2)}%
-                                    {trip.end_battery_level && (
-                                        <span className="text-slate-500"> → {trip.end_battery_level.toFixed(2)}%</span>
-                                    )}
-                                </div>
-                            </div>
-                        )}
-                    </div>
                 </div>
             </div>
+
+            {/* Battery bar - full width bottom section like charging card */}
+            {trip.start_battery_level != null && (
+                <div className="mt-4 flex items-center gap-4 border-t border-slate-700/50 pt-3">
+                    <div className="flex flex-1 items-center gap-3">
+                        <div className="text-sm font-medium">Battery</div>
+                        <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-700 relative">
+                            {trip.end_battery_level != null && (
+                                <div
+                                    className="absolute left-0 top-0 h-full bg-green-500"
+                                    style={{ width: `${trip.end_battery_level}%` }}
+                                />
+                            )}
+                            {trip.end_battery_level != null && trip.end_battery_level < trip.start_battery_level && (
+                                <div
+                                    className="absolute top-0 h-full bg-red-500/60"
+                                    style={{
+                                        left: `${trip.end_battery_level}%`,
+                                        width: `${trip.start_battery_level - trip.end_battery_level}%`
+                                    }}
+                                />
+                            )}
+                        </div>
+                        <div className="text-sm font-mono text-slate-400 whitespace-nowrap">
+                            {trip.start_battery_level.toFixed(2)}%
+                            {trip.end_battery_level != null && (
+                                <span> → {trip.end_battery_level.toFixed(2)}%</span>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
         </Link>
     );
 }

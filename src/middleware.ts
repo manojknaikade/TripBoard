@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { updateSession } from '@/lib/supabase/middleware';
+import { handleTeslaTokenRefresh } from '@/lib/tesla/auth-server';
 
 export async function middleware(request: NextRequest) {
     // Skip middleware if Supabase is not configured
@@ -8,7 +9,12 @@ export async function middleware(request: NextRequest) {
     }
 
     try {
-        return await updateSession(request);
+        let response = await updateSession(request);
+
+        // Refresh Tesla token if needed
+        response = await handleTeslaTokenRefresh(request, response);
+
+        return response;
     } catch (error) {
         console.error('Middleware error:', error);
         return NextResponse.next();
