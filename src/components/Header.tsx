@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { handleSignOut } from '@/lib/utils/auth';
+import NotificationBell from '@/components/NotificationBell';
 import {
     Zap,
     Gauge,
@@ -53,14 +54,17 @@ export default function Header() {
                     </NavLink>
                 </nav>
 
-                {/* Desktop Sign Out */}
-                <button
-                    onClick={handleSignOut}
-                    className="hidden md:flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
-                >
-                    <LogOut className="h-4 w-4" />
-                    <span>Sign Out</span>
-                </button>
+                {/* Desktop Notification Bell + Sign Out */}
+                <div className="hidden md:flex shrink-0 items-center gap-2">
+                    <NotificationBell />
+                    <button
+                        onClick={handleSignOut}
+                        className="flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
+                    >
+                        <LogOut className="h-4 w-4" />
+                        <span>Sign Out</span>
+                    </button>
+                </div>
 
                 {/* Mobile Hamburger Button */}
                 <button

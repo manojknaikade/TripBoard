@@ -166,6 +166,7 @@ async function processNewTelemetry() {
                                 maxEnergy: energy,
                                 maxPower: power,
                                 charger_type: insertPayload.charger_type,
+                                location_name: locName,
                                 lastChargingTime: Date.now()
                             });
                         }
@@ -184,6 +185,7 @@ async function processNewTelemetry() {
 
                         if (isCompletedOrDisconnected || (Date.now() - chargeData.lastChargingTime) / 60000 >= 10) {
                             console.log(`Ending charging session for ${vehicleUuid} at ${row.created_at}`);
+                            const locName = chargeData.location_name || 'Unknown location';
                             await supabase.from('charging_sessions').update({
                                 end_time: row.created_at,
                                 end_battery_pct: battery,
@@ -192,6 +194,23 @@ async function processNewTelemetry() {
                                 charger_type: chargeData.charger_type,
                                 is_complete: true
                             }).eq('id', chargeData.id);
+
+                            // Create notification for charging complete
+                            const energyStr = chargeData.maxEnergy > 0 ? ` (+${chargeData.maxEnergy.toFixed(1)} kWh)` : '';
+                            await supabase.from('notifications').insert({
+                                vehicle_id: vehicleUuid,
+                                type: 'charging_complete',
+                                title: 'Charging Complete',
+                                message: `Charged to ${battery}% at ${locName}${energyStr}`,
+                                data: {
+                                    session_id: chargeData.id,
+                                    battery_pct: battery,
+                                    energy_kwh: chargeData.maxEnergy,
+                                    location: locName,
+                                    charger_type: chargeData.charger_type
+                                }
+                            });
+
                             activeCharges.delete(vehicleUuid);
                         }
                     }
