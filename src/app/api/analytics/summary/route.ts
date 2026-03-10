@@ -63,6 +63,9 @@ export async function GET(request: NextRequest) {
             fromDate = new Date(toDate.getTime() - 30 * 24 * 60 * 60 * 1000);
         } else if (timeframe === '3months') {
             fromDate = new Date(toDate.getTime() - 90 * 24 * 60 * 60 * 1000);
+        } else if (timeframe === 'year') {
+            fromDate = new Date(toDate.getFullYear(), 0, 1);
+            fromDate.setHours(0, 0, 0, 0);
         } else {
             // Default: 'week' - Monday to Sunday of current week
             const day = toDate.getDay();

@@ -455,6 +455,7 @@ const timeframeOptions = [
     { id: 'month', label: 'This Month' },
     { id: '30days', label: 'Last 30 Days' },
     { id: '3months', label: 'Last 3 Months' },
+    { id: 'year', label: 'This Year' },
     { id: 'custom', label: 'Custom' },
 ];
 

@@ -102,6 +102,7 @@ export default function ChargingPage() {
                 case 'month': fromDate = new Date(toDate.getFullYear(), toDate.getMonth(), 1); break;
                 case '30days': fromDate = new Date(toDate.getTime() - 30 * 24 * 60 * 60 * 1000); break;
                 case '3months': fromDate = new Date(toDate.getTime() - 90 * 24 * 60 * 60 * 1000); break;
+                case 'year': fromDate = new Date(toDate.getFullYear(), 0, 1); fromDate.setHours(0, 0, 0, 0); break;
                 case 'week':
                 default:
                     const day = toDate.getDay();
@@ -494,7 +495,7 @@ function TimeframeSelector({ selected, onSelect, customStart, customEnd, onCusto
     const options = [
         { id: 'week', label: 'This Week' }, { id: '7days', label: 'Last 7 Days' },
         { id: 'month', label: 'This Month' }, { id: '30days', label: 'Last 30 Days' },
-        { id: '3months', label: 'Last 3 Months' }, { id: 'custom', label: 'Custom' },
+        { id: '3months', label: 'Last 3 Months' }, { id: 'year', label: 'This Year' }, { id: 'custom', label: 'Custom' },
     ];
     return (
         <div className="flex flex-col gap-3">
