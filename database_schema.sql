@@ -1,13 +1,32 @@
 -- WARNING: This schema is for context only and is not meant to be run.
 -- Table order and constraints may not be valid for execution.
 
+CREATE TABLE public.app_settings (
+  id text NOT NULL DEFAULT 'default'::text,
+  region text DEFAULT 'eu'::text,
+  units text DEFAULT 'metric'::text,
+  notifications_enabled boolean DEFAULT true,
+  data_source text DEFAULT 'telemetry'::text,
+  polling_driving integer DEFAULT 30,
+  polling_charging integer DEFAULT 60,
+  polling_parked integer DEFAULT 300,
+  polling_sleeping integer DEFAULT 600,
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  home_latitude double precision,
+  home_longitude double precision,
+  home_address text,
+  currency text DEFAULT 'CHF'::text,
+  date_format text DEFAULT 'DD/MM'::text,
+  CONSTRAINT app_settings_pkey PRIMARY KEY (id)
+);
 CREATE TABLE public.charging_sessions (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   vehicle_id uuid NOT NULL,
   start_time timestamp with time zone NOT NULL,
   end_time timestamp with time zone,
-  start_battery_pct integer,
-  end_battery_pct integer,
+  start_battery_pct double precision,
+  end_battery_pct double precision,
   energy_added_kwh double precision,
   charge_rate_kw double precision,
   latitude double precision,
@@ -17,8 +36,22 @@ CREATE TABLE public.charging_sessions (
   cost_estimate double precision,
   is_complete boolean DEFAULT false,
   created_at timestamp with time zone DEFAULT now(),
+  cost_user_entered double precision,
+  currency text DEFAULT 'CHF'::text,
   CONSTRAINT charging_sessions_pkey PRIMARY KEY (id),
   CONSTRAINT charging_sessions_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES public.vehicles(id)
+);
+CREATE TABLE public.notifications (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  vehicle_id uuid NOT NULL,
+  type text NOT NULL,
+  title text NOT NULL,
+  message text NOT NULL,
+  data jsonb DEFAULT '{}'::jsonb,
+  is_read boolean NOT NULL DEFAULT false,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT notifications_pkey PRIMARY KEY (id),
+  CONSTRAINT notifications_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES public.vehicles(id)
 );
 CREATE TABLE public.polling_settings (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
