@@ -14,6 +14,7 @@ import {
     Navigation,
     TrendingUp,
     Calendar,
+    Thermometer,
 } from 'lucide-react';
 import Header from '@/components/Header';
 import dynamic from 'next/dynamic';
@@ -42,6 +43,9 @@ interface Trip {
     end_battery_level: number | null;
     max_speed: number | null;
     avg_speed: number | null;
+    min_outside_temp: number | null;
+    max_outside_temp: number | null;
+    avg_outside_temp: number | null;
     status: string;
 }
 
@@ -322,6 +326,32 @@ export default function TripDetailPage() {
                                 ? `${Math.round(trip.avg_speed * 1.60934)} km/h`
                                 : `${Math.round(trip.avg_speed)} mph`}
                             color="blue"
+                        />
+                    )}
+
+                    {/* Temperature */}
+                    {trip.avg_outside_temp != null && (
+                        <StatBox
+                            icon={<Thermometer className="h-5 w-5" />}
+                            label="Avg Temperature"
+                            value={`${Math.round(trip.avg_outside_temp)}°C`}
+                            color="blue"
+                        />
+                    )}
+                    {trip.min_outside_temp != null && (
+                        <StatBox
+                            icon={<Thermometer className="h-5 w-5" />}
+                            label="Min Temperature"
+                            value={`${Math.round(trip.min_outside_temp)}°C`}
+                            color="blue"
+                        />
+                    )}
+                    {trip.max_outside_temp != null && (
+                        <StatBox
+                            icon={<Thermometer className="h-5 w-5" />}
+                            label="Max Temperature"
+                            value={`${Math.round(trip.max_outside_temp)}°C`}
+                            color="orange"
                         />
                     )}
                 </div>

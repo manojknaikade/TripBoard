@@ -34,10 +34,11 @@ interface AnalyticsData {
     };
     dailyChargingData: Array<{ day: string; energy: number; cost: number; sessions: number; }>;
     chargingMix: Array<{ name: string; value: number; color: string; }>;
+    costBySource: Array<{ name: string; cost: number; color: string; }>;
 }
 
 export default function ChargingAnalyticsPage() {
-    const [timeframe, setTimeframe] = useState('month');
+    const [timeframe, setTimeframe] = useState('7days');
     const [customStart, setCustomStart] = useState('');
     const [customEnd, setCustomEnd] = useState('');
     const [showCustomPicker, setShowCustomPicker] = useState(false);
@@ -74,6 +75,7 @@ export default function ChargingAnalyticsPage() {
 
     const dailyData = data?.dailyChargingData || [];
     const chargingMix = data?.chargingMix || [];
+    const costBySource = data?.costBySource || [];
     const summary = data?.summary || { chargingSessions: 0, totalChargingEnergy: 0, totalChargingCost: 0, avgCostPerKwh: 0 };
 
     const hasRealChargingData =
@@ -189,7 +191,7 @@ export default function ChargingAnalyticsPage() {
                     </div>
 
                     {/* Charging Mix */}
-                    <div className="lg:col-span-2 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+                    <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
                         <h2 className="mb-2 text-lg font-semibold text-center">Charging Sources Match</h2>
                         {!hasRealChargingData && (
                             <p className="mb-4 text-sm text-slate-400 text-center">
@@ -229,6 +231,44 @@ export default function ChargingAnalyticsPage() {
                                 </div>
                             ))}
                         </div>
+                    </div>
+
+                    {/* Cost by Source */}
+                    <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+                        <h2 className="mb-2 text-lg font-semibold">Cost by Charging Source</h2>
+                        {costBySource.length === 0 ? (
+                            <p className="text-sm text-slate-400 text-center py-8">
+                                No cost data available. Add costs to individual charging sessions to see this breakdown.
+                            </p>
+                        ) : (
+                            <div className="space-y-4 mt-4">
+                                {costBySource.map((source) => {
+                                    const maxCost = Math.max(...costBySource.map(s => s.cost));
+                                    const pct = maxCost > 0 ? (source.cost / maxCost) * 100 : 0;
+                                    return (
+                                        <div key={source.name} className="flex items-center gap-4">
+                                            <div className="w-28 text-sm font-medium text-slate-300 shrink-0">{source.name}</div>
+                                            <div className="flex-1 h-8 bg-slate-700/50 rounded-lg overflow-hidden relative">
+                                                <div
+                                                    className="h-full rounded-lg transition-all duration-500 flex items-center px-3"
+                                                    style={{ width: `${Math.max(pct, 8)}%`, backgroundColor: source.color }}
+                                                >
+                                                    <span className="text-xs font-bold text-white whitespace-nowrap drop-shadow">
+                                                        {source.cost.toFixed(2)} {preferredCurrency}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                                <div className="mt-4 pt-4 border-t border-slate-700/50 flex justify-between text-sm">
+                                    <span className="text-slate-400">Total</span>
+                                    <span className="font-bold text-white">
+                                        {costBySource.reduce((sum, s) => sum + s.cost, 0).toFixed(2)} {preferredCurrency}
+                                    </span>
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                 </div>

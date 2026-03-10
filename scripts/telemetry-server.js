@@ -1,5 +1,6 @@
 // Tesla Fleet Telemetry Server
 // Receives streaming data from Tesla vehicles and stores in Supabase
+//Manoj - this is depricated, trips table is generated in supbase by a database-level trigger converting raw telemetry into trip records. go server igest raw telemetry data to supbase.
 
 const https = require("https");
 const fs = require("fs");
@@ -141,6 +142,7 @@ async function processTelemetryData(data) {
     const chargerPower = (acPower + dcPower) || data.ChargerPower || data.charger_power || 0;
 
     const fastChargerPresent = data.FastChargerPresent || data.fast_charger_present || data.FastChargerType !== undefined || false;
+    const outsideTemp = data.OutsideTemp || data.outside_temp || data.OutsideTemp_C || null;
 
     // Store telemetry event in Supabase
     if (supabase) {
@@ -166,7 +168,7 @@ async function processTelemetryData(data) {
     }
 
     // Trip and Charging detection logic
-    await detectTripState(vehicleId, { latitude, longitude, speed, batteryLevel });
+    await detectTripState(vehicleId, { latitude, longitude, speed, batteryLevel, outsideTemp });
     await detectChargingState(vehicleId, {
         latitude,
         longitude,
@@ -208,6 +210,7 @@ async function detectTripState(vehicleId, event) {
                 maxSpeed: event.speed || 0,
                 speedReadings: [event.speed || 0],
                 lastMovingTime: Date.now(),
+                tempReadings: event.outsideTemp !== null ? [event.outsideTemp] : [],
             });
             console.log("Trip started:", trip.id);
         }
@@ -222,6 +225,9 @@ async function detectTripState(vehicleId, event) {
             tripData.maxSpeed = event.speed;
         }
         tripData.speedReadings.push(event.speed);
+        if (event.outsideTemp !== null && event.outsideTemp !== undefined) {
+            tripData.tempReadings.push(event.outsideTemp);
+        }
     }
 
     // End trip if not moving for 5+ minutes
@@ -237,6 +243,11 @@ async function detectTripState(vehicleId, event) {
                 : 0;
 
             if (supabase) {
+                const temps = tripData.tempReadings;
+                const minTemp = temps.length > 0 ? Math.min(...temps) : null;
+                const maxTemp = temps.length > 0 ? Math.max(...temps) : null;
+                const avgTemp = temps.length > 0 ? temps.reduce((a, b) => a + b, 0) / temps.length : null;
+
                 const { error } = await supabase
                     .from("trips")
                     .update({
@@ -246,6 +257,9 @@ async function detectTripState(vehicleId, event) {
                         end_battery_pct: event.batteryLevel,
                         max_speed_mph: tripData.maxSpeed,
                         avg_speed_mph: avgSpeed,
+                        min_outside_temp: minTemp,
+                        max_outside_temp: maxTemp,
+                        avg_outside_temp: avgTemp,
                         is_complete: true,
                     })
                     .eq("id", tripData.tripId);
@@ -253,7 +267,7 @@ async function detectTripState(vehicleId, event) {
                 if (error) {
                     console.error("Trip end error:", error);
                 } else {
-                    console.log("Trip ended:", tripData.tripId);
+                    console.log("Trip ended with temp stats:", tripData.tripId, { avgTemp });
                 }
             }
 

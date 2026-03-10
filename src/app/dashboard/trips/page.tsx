@@ -20,6 +20,7 @@ import {
     ChevronRight,
     Car,
     Loader2,
+    Thermometer,
 } from 'lucide-react';
 import Header from '@/components/Header';
 import dynamic from 'next/dynamic';
@@ -47,6 +48,7 @@ interface Trip {
     efficiency_wh_mi: number | null;
     start_battery_level: number;
     end_battery_level: number | null;
+    avg_outside_temp: number | null;
     status: string;
 }
 
@@ -413,6 +415,12 @@ function TripCard({ trip, units }: { trip: Trip; units: 'imperial' | 'metric' })
                                             ? `${Math.round(trip.efficiency_wh_mi / 1.60934)} Wh/km`
                                             : `${Math.round(trip.efficiency_wh_mi)} Wh/mi`
                                         }
+                                    </span>
+                                )}
+                                {trip.avg_outside_temp != null && (
+                                    <span className="flex items-center gap-1">
+                                        <Thermometer className="h-3 w-3" />
+                                        {Math.round(trip.avg_outside_temp)}°C
                                     </span>
                                 )}
                             </div>

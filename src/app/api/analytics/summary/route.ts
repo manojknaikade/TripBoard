@@ -74,7 +74,7 @@ export async function GET(request: NextRequest) {
         // Fetch completed trips in the date range
         const { data: trips, error } = await supabase
             .from('trips')
-            .select('id, start_time, end_time, distance_miles, start_odometer, end_odometer, energy_used_kwh, start_battery_pct, end_battery_pct')
+            .select('id, start_time, end_time, distance_miles, start_odometer, end_odometer, energy_used_kwh, start_battery_pct, end_battery_pct, min_outside_temp, max_outside_temp, avg_outside_temp')
             .eq('is_complete', true)
             .gte('start_time', fromDate.toISOString())
             .lte('start_time', toDate.toISOString())
@@ -207,12 +207,12 @@ export async function GET(request: NextRequest) {
 
         // Format efficiency by time of day — 12 slots, 2-hour buckets
         const timeSlots = [
-            { bucket: 0, label: '12am' }, { bucket: 2, label: '2am' },
-            { bucket: 4, label: '4am' }, { bucket: 6, label: '6am' },
-            { bucket: 8, label: '8am' }, { bucket: 10, label: '10am' },
-            { bucket: 12, label: '12pm' }, { bucket: 14, label: '2pm' },
-            { bucket: 16, label: '4pm' }, { bucket: 18, label: '6pm' },
-            { bucket: 20, label: '8pm' }, { bucket: 22, label: '10pm' },
+            { bucket: 0, label: '00' }, { bucket: 2, label: '02' },
+            { bucket: 4, label: '04' }, { bucket: 6, label: '06' },
+            { bucket: 8, label: '08' }, { bucket: 10, label: '10' },
+            { bucket: 12, label: '12' }, { bucket: 14, label: '14' },
+            { bucket: 16, label: '16' }, { bucket: 18, label: '18' },
+            { bucket: 20, label: '20' }, { bucket: 22, label: '22' },
         ];
         const efficiencyData = timeSlots.map(({ bucket, label }) => ({
             time: label,
@@ -241,14 +241,10 @@ export async function GET(request: NextRequest) {
 
         // Calculate charging mix from real data
         const chargingByType: Record<string, number> = { home: 0, supercharger: 0, destination: 0, '3rd_party_fast': 0, other: 0 }
+        const costByType: Record<string, number> = {};
         let totalChargingEnergy = 0
 
         for (const session of chargingSessions || []) {
-            const energy = session.energy_added_kwh || 0;
-            if (energy <= 0) continue;
-
-            totalChargingEnergy += energy;
-
             // Column in DB is `charger_type` (see schema / telemetry server),
             // not `charging_type`. Fall back to 'other' if missing.
             const rawType = (session as any).charger_type as string | null | undefined;
@@ -262,6 +258,15 @@ export async function GET(request: NextRequest) {
                             typeKey.includes('dest') ? 'destination' :
                                 'other';
 
+            // Accumulate cost by type (for ALL sessions, even without energy)
+            const sessionCost = (session as any).cost_user_entered || 0;
+            if (!costByType[normalisedKey]) costByType[normalisedKey] = 0;
+            costByType[normalisedKey] += sessionCost;
+
+            const energy = session.energy_added_kwh || 0;
+            if (energy <= 0) continue;
+
+            totalChargingEnergy += energy;
             chargingByType[normalisedKey] = (chargingByType[normalisedKey] || 0) + energy;
         }
 
@@ -323,6 +328,23 @@ export async function GET(request: NextRequest) {
             { name: 'No Data', value: 100, color: '#334155' },
         ]
 
+        // Cost by source breakdown
+        const sourceColorMap: Record<string, { name: string; color: string }> = {
+            home: { name: 'Home', color: '#22c55e' },
+            supercharger: { name: 'Supercharger', color: '#ef4444' },
+            '3rd_party_fast': { name: '3rd Party DC', color: '#f97316' },
+            destination: { name: 'Destination', color: '#3b82f6' },
+            other: { name: 'Other', color: '#6b7280' },
+        };
+        const costBySource = Object.entries(costByType)
+            .filter(([, cost]) => cost > 0)
+            .map(([key, cost]) => ({
+                name: sourceColorMap[key]?.name || key,
+                cost: Math.round(cost * 100) / 100,
+                color: sourceColorMap[key]?.color || '#6b7280',
+            }))
+            .sort((a, b) => b.cost - a.cost);
+
         // --- Previous period comparison for trend % ---
         const periodMs = toDate.getTime() - fromDate.getTime();
         const prevToDate = new Date(fromDate.getTime() - 1); // 1ms before current period start
@@ -370,6 +392,138 @@ export async function GET(request: NextRequest) {
             drivingTime: pctChange(totalDrivingTime, prevDrivingTime),
         };
 
+        // --- NEW: ADVANCED ANALYTICS ---
+
+        // 1. Top Trips Leaderboard
+        const validTrips = (trips || []).map(t => {
+            const dist = t.distance_miles ||
+            ((t.end_odometer && t.start_odometer) ? t.end_odometer - t.start_odometer : 0);
+            const energy = t.energy_used_kwh ||
+            ((t.start_battery_pct && t.end_battery_pct) ? (t.start_battery_pct - t.end_battery_pct) * 0.75 : 0);
+            
+            const distInUnits = dist * distanceMultiplier;
+            const efficiency = distInUnits > 0 ? (energy * 1000) / distInUnits : 0;
+            
+            return { ...t, calculatedDistance: dist, calculatedEnergy: energy, calculatedEfficiency: efficiency };
+        }).filter(t => t.calculatedDistance > 0.1 && t.calculatedEfficiency > 0);
+
+        const topTrips = {
+            longest: validTrips.length > 0 ? validTrips.reduce((prev, curr) => curr.calculatedDistance > prev.calculatedDistance ? curr : prev) : null,
+            shortest: validTrips.length > 0 ? validTrips.reduce((prev, curr) => curr.calculatedDistance < prev.calculatedDistance ? curr : prev) : null,
+            mostEfficient: validTrips.length > 0 ? validTrips.reduce((prev, curr) => {
+                return (curr.calculatedEfficiency < prev.calculatedEfficiency) ? curr : prev;
+            }) : null,
+        };
+
+        const formatTripForLeaderboard = (trip: any) => {
+            if (!trip) return null;
+            const dist = trip.calculatedDistance * distanceMultiplier;
+            return {
+                id: trip.id,
+                date: new Date(trip.start_time).toLocaleDateString('en-US', { day: 'numeric', month: 'short' }),
+                distance: Math.round(dist * 10) / 10,
+                efficiency: Math.round(trip.calculatedEfficiency),
+            };
+        };
+
+        // 2. Fetch Snapshots for Vampire Drain & Temperature Impact
+        const { data: snapshots } = await supabase
+            .from('vehicle_snapshots')
+            .select('timestamp, battery_level, battery_range, outside_temp, charging_state, shift_state')
+            .gte('timestamp', fromDate.toISOString())
+            .lte('timestamp', toDate.toISOString())
+            .order('timestamp', { ascending: true });
+
+        console.log(`[Analytics] Found ${trips?.length || 0} trips and ${snapshots?.length || 0} snapshots`);
+
+        // Calculate Vampire Drain (trip-to-trip estimation)
+        // We look at the battery drop between consecutive trips (End of Trip N to Start of Trip N+1)
+        let vampireDrainKwh = 0;
+        const allTripsForDrain = trips || [];
+        if (allTripsForDrain.length > 1) {
+            for (let i = 1; i < allTripsForDrain.length; i++) {
+                const prevTrip = allTripsForDrain[i - 1];
+                const currTrip = allTripsForDrain[i];
+                
+                if (prevTrip.end_battery_pct !== null && currTrip.start_battery_pct !== null) {
+                    const batteryDrop = prevTrip.end_battery_pct - currTrip.start_battery_pct;
+                    
+                    // If battery dropped between trips, and it's a reasonable drop (ignore charging or weird resets)
+                    if (batteryDrop > 0.1 && batteryDrop < 15) {
+                        // Check if there was a charging session in between to avoid counting charging as drain
+                        const hasChargingBetween = (chargingSessions || []).some(s => {
+                            const sessionStart = new Date(s.start_time).getTime();
+                            const prevEnd = new Date(prevTrip.end_time || '').getTime();
+                            const currStart = new Date(currTrip.start_time || '').getTime();
+                            return sessionStart > prevEnd && sessionStart < currStart;
+                        });
+
+                        if (!hasChargingBetween) {
+                            vampireDrainKwh += (batteryDrop / 100) * 75; // Approx 75kWh pack
+                        }
+                    }
+                }
+            }
+        }
+        
+        console.log(`[Analytics] Trip-based Vampire Drain calculated: ${vampireDrainKwh.toFixed(2)} kWh`);
+
+        // Calculate Temperature Impact
+        const tempBuckets: Record<number, { totalEff: number, count: number }> = {};
+        for (const trip of validTrips) {
+            const start = new Date(trip.start_time).getTime();
+            const end = new Date(trip.end_time).getTime();
+            const tripSnapshots = (snapshots || []).filter(s => {
+                const t = new Date(s.timestamp).getTime();
+                return t >= start && t <= end;
+            });
+
+            if (tripSnapshots.length > 0) {
+                const avgTemp = tripSnapshots.reduce((acc, s) => acc + (s.outside_temp || 0), 0) / tripSnapshots.length;
+                const bucket = Math.round(avgTemp / 5) * 5; // 5 degree buckets
+                
+                const dist = (trip.distance_miles || 0) * distanceMultiplier;
+                const efficiency = dist > 0 ? ((trip.energy_used_kwh || 0) * 1000) / dist : 0;
+
+                if (efficiency > 100 && efficiency < 600) {
+                    if (!tempBuckets[bucket]) tempBuckets[bucket] = { totalEff: 0, count: 0 };
+                    tempBuckets[bucket].totalEff += efficiency;
+                    tempBuckets[bucket].count += 1;
+                }
+            }
+        }
+
+        let temperatureImpact = Object.keys(tempBuckets)
+            .map(temp => ({
+                temp: parseInt(temp),
+                efficiency: Math.round(tempBuckets[parseInt(temp)].totalEff / tempBuckets[parseInt(temp)].count)
+            }))
+            .sort((a, b) => a.temp - b.temp);
+
+        // Fallback: If snapshots provided no temp data, use the aggregated columns from the trips table
+        if (temperatureImpact.length === 0) {
+            const fallbackBuckets: Record<number, { totalEff: number, count: number }> = {};
+            // Only use trips that actually have temperature data
+            const tripsWithTemp = validTrips.filter(t => t.avg_outside_temp !== null && t.avg_outside_temp !== undefined);
+            for (const trip of tripsWithTemp) {
+                const bucket = Math.round(trip.avg_outside_temp / 5) * 5;
+                const efficiency = trip.calculatedEfficiency;
+                
+                if (efficiency > 100 && efficiency < 600) {
+                    if (!fallbackBuckets[bucket]) fallbackBuckets[bucket] = { totalEff: 0, count: 0 };
+                    fallbackBuckets[bucket].totalEff += efficiency;
+                    fallbackBuckets[bucket].count += 1;
+                }
+            }
+            
+            temperatureImpact = Object.keys(fallbackBuckets)
+                .map(temp => ({
+                    temp: parseInt(temp),
+                    efficiency: Math.round(fallbackBuckets[parseInt(temp)].totalEff / fallbackBuckets[parseInt(temp)].count)
+                }))
+                .sort((a, b) => a.temp - b.temp);
+        }
+
         return NextResponse.json({
             success: true,
             timeframe,
@@ -385,12 +539,20 @@ export async function GET(request: NextRequest) {
                 totalChargingEnergy: Math.round(totalChargingEnergy * 10) / 10,
                 totalChargingCost: Math.round(totalChargingCost * 100) / 100,
                 avgCostPerKwh: Math.round(avgCostPerKwh * 100) / 100,
+                vampireDrainKwh: Math.round(vampireDrainKwh * 10) / 10,
                 trends,
             },
             weeklyData,
             efficiencyData,
             chargingMix,
             dailyChargingData: formattedDailyChargingData,
+            leaderboard: {
+                longest: formatTripForLeaderboard(topTrips.longest),
+                shortest: formatTripForLeaderboard(topTrips.shortest),
+                mostEfficient: formatTripForLeaderboard(topTrips.mostEfficient),
+            },
+            temperatureImpact,
+            costBySource,
         })
     } catch (err: any) {
         console.error('CRITICAL Analytics error:', err);

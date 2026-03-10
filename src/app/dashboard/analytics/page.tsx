@@ -17,6 +17,9 @@ import {
     Clock,
     Calendar,
     Loader2,
+    Trophy,
+    ThermometerSnowflake,
+    ShieldAlert
 } from 'lucide-react';
 import {
     AreaChart,
@@ -31,6 +34,8 @@ import {
     PieChart,
     Pie,
     Cell,
+    LineChart,
+    Line
 } from 'recharts';
 import Header from '@/components/Header';
 import { useSettingsStore } from '@/stores/settingsStore';
@@ -61,6 +66,13 @@ const defaultChargingMix = [
     { name: 'Other', value: 7, color: '#6b7280' },
 ];
 
+interface AnalyticTrip {
+    id: string;
+    date: string;
+    distance: number;
+    efficiency: number;
+}
+
 interface AnalyticsData {
     summary: {
         totalDistance: number;
@@ -68,6 +80,7 @@ interface AnalyticsData {
         avgEfficiency: number;
         drivingTime: number;
         tripCount: number;
+        vampireDrainKwh: number;
         trends?: {
             distance: number;
             energy: number;
@@ -78,10 +91,16 @@ interface AnalyticsData {
     weeklyData: typeof defaultWeeklyData;
     efficiencyData: typeof defaultEfficiencyData;
     chargingMix: typeof defaultChargingMix;
+    leaderboard: {
+        longest: AnalyticTrip | null;
+        shortest: AnalyticTrip | null;
+        mostEfficient: AnalyticTrip | null;
+    };
+    temperatureImpact: Array<{ temp: number; efficiency: number }>;
 }
 
 export default function AnalyticsPage() {
-    const [timeframe, setTimeframe] = useState('week');
+    const [timeframe, setTimeframe] = useState('7days');
     const [customStart, setCustomStart] = useState('');
     const [customEnd, setCustomEnd] = useState('');
     const [showCustomPicker, setShowCustomPicker] = useState(false);
@@ -120,7 +139,7 @@ export default function AnalyticsPage() {
 
     const weeklyData = data?.weeklyData || [];
     const efficiencyData = data?.efficiencyData || [];
-    const summary = data?.summary || { totalDistance: 0, totalEnergy: 0, avgEfficiency: 0, drivingTime: 0, tripCount: 0 };
+    const summary = data?.summary || { totalDistance: 0, totalEnergy: 0, avgEfficiency: 0, drivingTime: 0, tripCount: 0, vampireDrainKwh: 0 };
 
     return (
         <div className="min-h-screen">
@@ -168,7 +187,7 @@ export default function AnalyticsPage() {
                 </div>
 
                 {/* Stats Cards */}
-                <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="mb-8 grid gap-4 sm:grid-cols-3 lg:grid-cols-5">
                     <StatCard
                         icon={<Navigation className="h-5 w-5" />}
                         label="Distance"
@@ -178,14 +197,20 @@ export default function AnalyticsPage() {
                     />
                     <StatCard
                         icon={<Battery className="h-5 w-5" />}
-                        label="Energy Used"
+                        label="Used"
                         value={`${summary.totalEnergy} kWh`}
                         change={summary.trends?.energy ?? 0}
                         color="green"
                     />
                     <StatCard
+                        icon={<ShieldAlert className="h-5 w-5" />}
+                        label="Vampire Drain"
+                        value={`${summary.vampireDrainKwh} kWh`}
+                        color="orange"
+                    />
+                    <StatCard
                         icon={<Gauge className="h-5 w-5" />}
-                        label="Avg Efficiency"
+                        label="Efficiency"
                         value={`${summary.avgEfficiency} ${units === 'metric' ? 'Wh/km' : 'Wh/mi'}`}
                         change={summary.trends?.efficiency ?? 0}
                         color="purple"
@@ -193,11 +218,39 @@ export default function AnalyticsPage() {
                     />
                     <StatCard
                         icon={<Clock className="h-5 w-5" />}
-                        label="Driving Time"
+                        label="Driving"
                         value={`${summary.drivingTime} hrs`}
                         change={summary.trends?.drivingTime ?? 0}
-                        color="orange"
+                        color="blue"
                     />
+                </div>
+
+                {/* Leaderboard Section */}
+                <div className="mb-8">
+                    <h2 className="mb-4 text-xl font-bold flex items-center gap-2">
+                        <Trophy className="h-5 w-5 text-yellow-500" />
+                        Period Top Trips
+                    </h2>
+                    <div className="grid gap-4 sm:grid-cols-3">
+                        <LeaderboardCard
+                            title="Longest Trip"
+                            trip={data?.leaderboard?.longest || null}
+                            units={units}
+                            type="distance"
+                        />
+                        <LeaderboardCard
+                            title="Shortest Trip"
+                            trip={data?.leaderboard?.shortest || null}
+                            units={units}
+                            type="distance"
+                        />
+                        <LeaderboardCard
+                            title="Most Efficient"
+                            trip={data?.leaderboard?.mostEfficient || null}
+                            units={units}
+                            type="efficiency"
+                        />
+                    </div>
                 </div>
 
                 {/* Charts Grid */}
@@ -222,30 +275,6 @@ export default function AnalyticsPage() {
                         </ResponsiveContainer>
                     </div>
 
-                    {/* Efficiency Over Time */}
-                    <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
-                        <div className="mb-6">
-                            <h2 className="text-lg font-semibold">Efficiency by Time of Day</h2>
-                            <p className="text-sm text-slate-400 mt-1">Average {units === 'metric' ? 'Wh/km' : 'Wh/mi'} for trips in selected period</p>
-                        </div>
-                        <ResponsiveContainer width="100%" height={250}>
-                            <BarChart data={efficiencyData}>
-                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                                <XAxis dataKey="time" stroke="#94a3b8" fontSize={12} />
-                                <YAxis stroke="#94a3b8" fontSize={12} />
-                                <Tooltip
-                                    contentStyle={{
-                                        backgroundColor: '#1e293b',
-                                        border: '1px solid #334155',
-                                        borderRadius: '8px',
-                                    }}
-                                    formatter={(value: number) => [`${value} ${units === 'metric' ? 'Wh/km' : 'Wh/mi'}`, 'Efficiency']}
-                                />
-                                <Bar dataKey="efficiency" fill="#a855f7" radius={[4, 4, 0, 0]} />
-                            </BarChart>
-                        </ResponsiveContainer>
-                    </div>
-
                     {/* Energy by Day */}
                     <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
                         <h2 className="mb-6 text-lg font-semibold">Daily Energy Consumption</h2>
@@ -266,13 +295,110 @@ export default function AnalyticsPage() {
                             </BarChart>
                         </ResponsiveContainer>
                     </div>
+
+                    {/* Efficiency Over Time */}
+                    <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+                        <div className="mb-6">
+                            <h2 className="text-lg font-semibold">Efficiency by Time of Day</h2>
+                            <p className="text-sm text-slate-400 mt-1">Average {units === 'metric' ? 'Wh/km' : 'Wh/mi'} for trips in selected period</p>
+                        </div>
+                        <ResponsiveContainer width="100%" height={250}>
+                            <BarChart data={efficiencyData}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                                <XAxis dataKey="time" stroke="#94a3b8" fontSize={10} interval={0} />
+                                <YAxis stroke="#94a3b8" fontSize={12} />
+                                <Tooltip
+                                    contentStyle={{
+                                        backgroundColor: '#1e293b',
+                                        border: '1px solid #334155',
+                                        borderRadius: '8px',
+                                    }}
+                                    formatter={(value: number) => [`${value} ${units === 'metric' ? 'Wh/km' : 'Wh/mi'}`, 'Efficiency']}
+                                />
+                                <Bar dataKey="efficiency" fill="#a855f7" radius={[4, 4, 0, 0]} />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </div>
+
+                    {/* Temperature Impact */}
+                    <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+                        <div className="mb-6">
+                            <h2 className="text-lg font-semibold flex items-center gap-2">
+                                <ThermometerSnowflake className="h-5 w-5 text-blue-400" />
+                                Temperature Impact
+                            </h2>
+                            <p className="text-sm text-slate-400 mt-1">Efficiency ({units === 'metric' ? 'Wh/km' : 'Wh/mi'}) vs External Temperature</p>
+                        </div>
+                        <div className="h-[250px] w-100% flex items-center justify-center relative">
+                            {data?.temperatureImpact && data.temperatureImpact.length > 0 ? (
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <AreaChart data={data.temperatureImpact}>
+                                        <defs>
+                                            <linearGradient id="colorTemp" x1="0" y1="0" x2="0" y2="1">
+                                                <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
+                                                <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                                            </linearGradient>
+                                        </defs>
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                                        <XAxis
+                                            dataKey="temp"
+                                            stroke="#94a3b8"
+                                            fontSize={12}
+                                            label={{ value: 'Temp (°C)', position: 'insideBottom', offset: -5, fill: '#64748b', fontSize: 10 }}
+                                        />
+                                        <YAxis stroke="#94a3b8" fontSize={12} />
+                                        <Tooltip
+                                            contentStyle={{
+                                                backgroundColor: '#1e293b',
+                                                border: '1px solid #334155',
+                                                borderRadius: '8px',
+                                            }}
+                                            formatter={(val) => [`${val} ${units === 'metric' ? 'Wh/km' : 'Wh/mi'}`, 'Avg Efficiency']}
+                                            labelFormatter={(label) => `${label}°C Outside`}
+                                        />
+                                        <Area type="monotone" dataKey="efficiency" stroke="#3b82f6" fillOpacity={1} fill="url(#colorTemp)" />
+                                    </AreaChart>
+                                </ResponsiveContainer>
+                            ) : (
+                                <p className="text-sm text-slate-500 italic">Not enough data to calculate temperature impact for this period.</p>
+                            )}
+                        </div>
+                    </div>
                 </div>
             </main>
         </div>
     );
 }
 
-
+function LeaderboardCard({ title, trip, units, type }: { title: string, trip: AnalyticTrip | null, units: string, type: 'distance' | 'efficiency' }) {
+    return (
+        <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
+            <p className="text-xs font-medium text-slate-400 uppercase tracking-wider mb-2">{title}</p>
+            {trip ? (
+                <div className="flex items-center justify-between gap-2">
+                    <div>
+                        <p className="text-lg font-bold">
+                            {type === 'distance' ? `${trip.distance} ${units === 'metric' ? 'km' : 'mi'}` : `${trip.efficiency} Wh/k`}
+                        </p>
+                        <p className="text-xs text-slate-500">{trip.date}</p>
+                    </div>
+                    <div className="text-right">
+                        <p className="text-xs font-semibold text-slate-300">
+                            {type === 'distance' ? `${trip.efficiency} Wh/k` : `${trip.distance} km`}
+                        </p>
+                        <p className="text-[10px] text-slate-500 uppercase">
+                            {type === 'distance' ? 'Efficiency' : 'Distance'}
+                        </p>
+                    </div>
+                </div>
+            ) : (
+                <div className="py-2">
+                    <p className="text-sm text-slate-500 italic">No qualifying trips</p>
+                </div>
+            )}
+        </div>
+    );
+}
 
 function StatCard({
     icon,
@@ -285,7 +411,7 @@ function StatCard({
     icon: React.ReactNode;
     label: string;
     value: string;
-    change: number;
+    change?: number;
     color: 'blue' | 'green' | 'purple' | 'orange';
     invertColor?: boolean;
 }) {
@@ -296,26 +422,28 @@ function StatCard({
         orange: 'bg-orange-500/10 text-orange-400',
     };
 
-    const isPositive = change > 0;
+    const isPositive = (change || 0) > 0;
     const isGood = invertColor ? !isPositive : isPositive;
 
     return (
         <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
             <div className={`mb-3 inline-flex rounded-lg p-2 ${colors[color]}`}>{icon}</div>
-            <p className="text-sm text-slate-400">{label}</p>
-            <div className="flex items-end justify-between">
-                <p className="text-2xl font-bold">{value}</p>
-                <div
-                    className={`flex items-center gap-1 text-sm ${isGood ? 'text-green-400' : 'text-red-400'
-                        }`}
-                >
-                    {isPositive ? (
-                        <TrendingUp className="h-4 w-4" />
-                    ) : (
-                        <TrendingDown className="h-4 w-4" />
-                    )}
-                    {Math.abs(change)}%
-                </div>
+            <p className="text-xs text-slate-400 truncate mb-1">{label}</p>
+            <div className="flex items-end justify-between gap-1 flex-wrap">
+                <p className="text-lg font-bold whitespace-nowrap">{value}</p>
+                {change !== undefined && (
+                    <div
+                        className={`flex items-center gap-0.5 text-[10px] font-medium ${isGood ? 'text-green-400' : 'text-red-400'
+                            }`}
+                    >
+                        {isPositive ? (
+                            <TrendingUp className="h-3 w-3" />
+                        ) : (
+                            <TrendingDown className="h-3 w-3" />
+                        )}
+                        {Math.abs(change)}%
+                    </div>
+                )}
             </div>
         </div>
     );

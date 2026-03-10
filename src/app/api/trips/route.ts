@@ -107,6 +107,9 @@ export async function GET(request: NextRequest) {
             avg_speed: trip.avg_speed_mph || (distance && durationSeconds && durationSeconds > 0
                 ? Math.round((distance / (durationSeconds / 3600)) * 10) / 10
                 : null),
+            min_outside_temp: trip.min_outside_temp ?? null,
+            max_outside_temp: trip.max_outside_temp ?? null,
+            avg_outside_temp: trip.avg_outside_temp ?? null,
             status: trip.is_complete ? 'completed' : 'in_progress',
         };
     });
@@ -137,6 +140,7 @@ export async function POST(request: NextRequest) {
             odometer,
             batteryLevel,
             address,
+            outsideTemp,
         } = body;
 
         if (!vehicleId) {
@@ -153,6 +157,9 @@ export async function POST(request: NextRequest) {
                 start_longitude: longitude,
                 start_battery_pct: batteryLevel,
                 start_address: address,
+                min_outside_temp: outsideTemp,
+                max_outside_temp: outsideTemp,
+                avg_outside_temp: outsideTemp,
                 is_complete: false,
             })
             .select()
@@ -190,6 +197,9 @@ export async function PATCH(request: NextRequest) {
             avgSpeed,
             distanceMiles,
             energyUsedKwh,
+            minTemp,
+            maxTemp,
+            avgTemp,
         } = body;
 
         if (!tripId) {
@@ -209,6 +219,9 @@ export async function PATCH(request: NextRequest) {
                 avg_speed_mph: avgSpeed,
                 distance_miles: distanceMiles,
                 energy_used_kwh: energyUsedKwh,
+                min_outside_temp: minTemp,
+                max_outside_temp: maxTemp,
+                avg_outside_temp: avgTemp,
                 is_complete: true,
             })
             .eq('id', tripId)

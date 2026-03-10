@@ -16,7 +16,7 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
   - Detailed logs of every trip with average speed
   - **Interactive Maps:** View full route with start/end markers
   - **Geocoding:** Automatic address resolution for start/end locations
-  - **Metrics:** Distance, duration, energy used, efficiency (Wh/km or Wh/mi), and speed
+  - **Metrics:** Distance, duration, energy used, efficiency (Wh/km or Wh/mi), speed, and **outside temperature** (min/max/avg)
   - **Filtering:** Filter trips by Week, Month, or Custom Date Range
   - **Export:** Download trip data as CSV or JSON
 
@@ -24,7 +24,11 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
   - Daily Distance & Energy Consumption bar charts
   - Efficiency by Time of Day (2-hour buckets, bar chart)
   - Aggregated stats with **trend percentages** vs. previous period
+  - **Top Trips Leaderboard:** Longest, shortest, and most efficient trips
+  - **Temperature Impact:** Chart correlating outside temperature with driving efficiency
+  - **Vampire Drain:** Estimated energy loss while parked (trip-interstitial method)
   - Charging Sources breakdown (pie chart)
+  - **Cost by Charging Source:** Horizontal bar chart showing costs per charger type
 
 - **User Preferences & Security**
   - Seamless authentication via **Tesla OAuth** with extended 30-day active sessions
@@ -90,6 +94,10 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
    Run the `database_schema.sql` script in your Supabase SQL Editor to create the necessary tables (`vehicles`, `trips`, etc.).
    Then run `scripts/create-app-settings.sql` to create the `app_settings` table for persistent user preferences.
 
+   **Migrations (run in order):**
+   - `supabase/migrations/20260311000000_trip_temperature_trigger.sql` — Adds temperature columns to `trips` and updates the `process_telemetry` trigger
+   - `supabase/migrations/20260311000001_backfill_trip_temperatures.sql` — Backfills temperature data for all existing trips from raw telemetry
+
 5. **Run the Development Server**
 
    ```bash
@@ -124,6 +132,17 @@ scripts/
 ├── telemetry-server.js   # Tesla telemetry ingest server
 └── create-app-settings.sql  # App settings table migration
 ```
+
+## ⚙️ Data Pipeline
+
+TripBoard uses a **database-level trigger** (`process_telemetry`) on the `telemetry_raw` table to automatically:
+
+- Update `vehicle_status` with the latest telemetry values
+- Detect trip start/end based on gear changes (D/R → start, P → end)
+- Track outside temperature (min/max/avg) during active trips
+- Detect and record charging sessions with charger type classification
+
+The Go telemetry server on the VPS ingests raw Tesla Fleet Telemetry and inserts into `telemetry_raw`. All trip/charging logic runs as PL/pgSQL triggers in Supabase.
 
 ## 🗺️ Geocoding & Maps
 

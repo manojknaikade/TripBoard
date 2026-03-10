@@ -132,6 +132,9 @@ CREATE TABLE public.trips (
   energy_used_kwh numeric,
   max_speed_mph numeric,
   avg_speed_mph numeric,
+  min_outside_temp numeric,
+  max_outside_temp numeric,
+  avg_outside_temp numeric,
   CONSTRAINT trips_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.user_settings (

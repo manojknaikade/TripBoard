@@ -70,3 +70,21 @@ This document records severe bugs, crashes, and pitfalls previously encountered 
 
 - Wrap the map div with `z-0 relative` to create a new stacking context that contains Leaflet's z-indices.
 - Ensure the sticky header uses a sufficiently high z-index (e.g., `z-50`).
+
+## 8. Variable Declaration Order in Multi-Loop Routes
+
+**Symptom:** `ReferenceError: Cannot access 'costByType' before initialization` at runtime, even though the code looks correct.
+**Root Cause:** When multiple `for` loops use the same variable, splitting the declaration and usage across loops creates a temporal dead zone. `const` declarations in JavaScript are block-scoped and cannot be accessed before the `const` statement executes.
+**Solution:**
+
+- Declare all accumulator variables (`costByType`, `chargingByType`, etc.) **before** the first loop that uses them, not between loops.
+- When adding new aggregations to existing loops, check that no new variable is referenced before its declaration.
+
+## 9. Tesla Telemetry `OutsideTemp` Frequency
+
+**Symptom:** Backfill scripts or triggers that look for `OutsideTemp` within a trip's exact time window find nothing, even for long trips.
+**Root Cause:** Tesla sends `OutsideTemp` very infrequently — roughly **1 in 100** telemetry records (~once per 3-5 minutes). Each `telemetry_raw` record typically contains only 1-3 keys (e.g., just `VehicleSpeed` or just `Location`).
+**Solution:**
+
+- For backfill: Search with a **±30 minute window** around the trip, or find the **nearest** `OutsideTemp` reading.
+- For real-time: Read from `vehicle_status.outside_temp` (which persists the last known value) rather than expecting the current payload to have it.
