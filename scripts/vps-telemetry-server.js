@@ -195,21 +195,8 @@ async function processNewTelemetry() {
                                 is_complete: true
                             }).eq('id', chargeData.id);
 
-                            // Create notification for charging complete
-                            const energyStr = chargeData.maxEnergy > 0 ? ` (+${chargeData.maxEnergy.toFixed(1)} kWh)` : '';
-                            await supabase.from('notifications').insert({
-                                vehicle_id: vehicleUuid,
-                                type: 'charging_complete',
-                                title: 'Charging Complete',
-                                message: `Charged to ${battery}% at ${locName}${energyStr}`,
-                                data: {
-                                    session_id: chargeData.id,
-                                    battery_pct: battery,
-                                    energy_kwh: chargeData.maxEnergy,
-                                    location: locName,
-                                    charger_type: chargeData.charger_type
-                                }
-                            });
+                            // Charging notifications are created in the database trigger when
+                            // the session flips to is_complete=true. Avoid duplicating them here.
 
                             activeCharges.delete(vehicleUuid);
                         }
