@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
 
 async function getSupabase() {
-    return await createClient();
+    return createAdminClient();
 }
 
 // GET - List trips for the authenticated user

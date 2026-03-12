@@ -1,9 +1,14 @@
+import { createAdminClient } from '@/lib/supabase/admin'
+import { getTeslaSession } from '@/lib/tesla/auth-server'
+import { NextRequest, NextResponse } from 'next/server'
 
-import { createClient } from '@/lib/supabase/server'
-import { NextResponse } from 'next/server'
+export async function GET(request: NextRequest) {
+    const session = await getTeslaSession(request)
+    if (!session) {
+        return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
+    }
 
-export async function GET() {
-    const supabase = await createClient()
+    const supabase = createAdminClient()
 
     // Order by most recent trip first
     const { data, error } = await supabase

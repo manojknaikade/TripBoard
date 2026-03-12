@@ -1,9 +1,15 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { getTeslaSession } from '@/lib/tesla/auth-server'
 import { NextRequest, NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+    const session = await getTeslaSession(request)
+    if (!session) {
+        return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
+    }
+
     const supabase = createAdminClient()
 
     const { data, error } = await supabase
@@ -27,6 +33,11 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+    const session = await getTeslaSession(request)
+    if (!session) {
+        return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
+    }
+
     const supabase = createAdminClient()
 
     try {
