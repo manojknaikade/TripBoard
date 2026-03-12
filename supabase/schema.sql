@@ -1,5 +1,6 @@
--- TripBoard Database Schema for Supabase
--- Run this in the Supabase SQL Editor
+-- TripBoard database bootstrap schema for Supabase.
+-- Apply this file on a fresh project, then run all files in supabase/migrations in chronological order.
+-- database_schema.sql is only a copied reference snapshot from Supabase and is not the source of truth.
 
 -- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -44,6 +45,43 @@ CREATE TABLE IF NOT EXISTS tesla_sessions (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   last_used_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Global app settings used by server-side flows that do not rely on Supabase Auth.
+CREATE TABLE IF NOT EXISTS app_settings (
+  id TEXT PRIMARY KEY DEFAULT 'default',
+  region TEXT DEFAULT 'eu',
+  units TEXT DEFAULT 'metric',
+  notifications_enabled BOOLEAN DEFAULT true,
+  data_source TEXT DEFAULT 'telemetry',
+  polling_driving INTEGER DEFAULT 30,
+  polling_charging INTEGER DEFAULT 60,
+  polling_parked INTEGER DEFAULT 300,
+  polling_sleeping INTEGER DEFAULT 600,
+  home_latitude DOUBLE PRECISION,
+  home_longitude DOUBLE PRECISION,
+  home_address TEXT,
+  currency TEXT DEFAULT 'CHF',
+  date_format TEXT DEFAULT 'DD/MM',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Per-user settings for Supabase-authenticated flows.
+CREATE TABLE IF NOT EXISTS user_settings (
+  user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  polling_driving INTEGER DEFAULT 30,
+  polling_charging INTEGER DEFAULT 300,
+  polling_parked INTEGER DEFAULT 1800,
+  polling_sleeping INTEGER DEFAULT 3600,
+  region TEXT DEFAULT 'eu' CHECK (region IN ('na', 'eu', 'cn')),
+  units TEXT DEFAULT 'imperial' CHECK (units IN ('imperial', 'metric')),
+  notifications_enabled BOOLEAN DEFAULT true,
+  data_source TEXT DEFAULT 'telemetry' CHECK (data_source IN ('polling', 'telemetry')),
+  currency TEXT DEFAULT 'CHF',
+  date_format TEXT DEFAULT 'DD/MM',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Polling settings per vehicle
@@ -134,6 +172,72 @@ CREATE TABLE IF NOT EXISTS vehicle_snapshots (
   speed DOUBLE PRECISION
 );
 
+-- Raw telemetry payloads ingested from the external telemetry server.
+CREATE TABLE IF NOT EXISTS telemetry_raw (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  vin TEXT NOT NULL,
+  timestamp TIMESTAMPTZ NOT NULL,
+  payload JSONB NOT NULL
+);
+
+-- Latest denormalized telemetry state for the vehicle.
+CREATE TABLE IF NOT EXISTS vehicle_status (
+  vin TEXT PRIMARY KEY,
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  shift_state TEXT,
+  speed NUMERIC,
+  odometer NUMERIC,
+  battery_level NUMERIC,
+  lat NUMERIC,
+  lon NUMERIC,
+  inside_temp NUMERIC,
+  outside_temp NUMERIC,
+  is_locked BOOLEAN,
+  current_trip_id UUID,
+  trip_start_battery NUMERIC,
+  trip_start_odometer NUMERIC,
+  sentry_mode BOOLEAN,
+  charge_state TEXT,
+  charger_power NUMERIC,
+  is_climate_on BOOLEAN,
+  car_version TEXT,
+  door_df BOOLEAN DEFAULT false,
+  door_dr BOOLEAN DEFAULT false,
+  door_pf BOOLEAN DEFAULT false,
+  door_pr BOOLEAN DEFAULT false,
+  trunk_ft BOOLEAN DEFAULT false,
+  trunk_rt BOOLEAN DEFAULT false,
+  tpms_fl NUMERIC,
+  tpms_fr NUMERIC,
+  tpms_rl NUMERIC,
+  tpms_rr NUMERIC,
+  est_battery_range NUMERIC,
+  charge_energy_added NUMERIC,
+  time_to_full_charge NUMERIC,
+  heading NUMERIC,
+  rated_range NUMERIC,
+  window_fd TEXT,
+  window_fp TEXT,
+  window_rd TEXT,
+  window_rp TEXT,
+  home_address TEXT,
+  current_charging_session_id UUID,
+  home_latitude NUMERIC,
+  home_longitude NUMERIC
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  vehicle_id UUID NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  message TEXT NOT NULL,
+  data JSONB DEFAULT '{}'::jsonb,
+  is_read BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Create indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_vehicles_user_id ON vehicles(user_id);
 CREATE INDEX IF NOT EXISTS idx_trips_vehicle_id ON trips(vehicle_id);
@@ -141,16 +245,23 @@ CREATE INDEX IF NOT EXISTS idx_trips_start_time ON trips(start_time DESC);
 CREATE INDEX IF NOT EXISTS idx_trip_waypoints_trip_id ON trip_waypoints(trip_id);
 CREATE INDEX IF NOT EXISTS idx_charging_sessions_vehicle_id ON charging_sessions(vehicle_id);
 CREATE INDEX IF NOT EXISTS idx_vehicle_snapshots_vehicle_id_timestamp ON vehicle_snapshots(vehicle_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(vehicle_id, is_read, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_type ON notifications(type, created_at DESC);
 
 -- Enable Row Level Security
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE vehicles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tesla_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE app_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE polling_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trips ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trip_waypoints ENABLE ROW LEVEL SECURITY;
 ALTER TABLE charging_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE vehicle_snapshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE telemetry_raw ENABLE ROW LEVEL SECURITY;
+ALTER TABLE vehicle_status ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
 
 -- RLS Policies: Users can only access their own data
 
@@ -164,6 +275,19 @@ CREATE POLICY "Users can view own vehicles" ON vehicles FOR SELECT USING (auth.u
 CREATE POLICY "Users can insert own vehicles" ON vehicles FOR INSERT WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can update own vehicles" ON vehicles FOR UPDATE USING (auth.uid() = user_id);
 CREATE POLICY "Users can delete own vehicles" ON vehicles FOR DELETE USING (auth.uid() = user_id);
+CREATE POLICY "Service role can manage tesla sessions" ON tesla_sessions FOR ALL TO service_role
+  USING (true)
+  WITH CHECK (true);
+
+-- Global settings remain service-role only until modeled per user.
+CREATE POLICY "Service role can manage app settings" ON app_settings FOR ALL TO service_role
+  USING (true)
+  WITH CHECK (true);
+
+-- Per-user settings
+CREATE POLICY "Users can view own settings" ON user_settings FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users can insert own settings" ON user_settings FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users can update own settings" ON user_settings FOR UPDATE USING (auth.uid() = user_id);
 
 -- Polling settings
 CREATE POLICY "Users can view own polling settings" ON polling_settings FOR SELECT
@@ -179,9 +303,10 @@ CREATE POLICY "Users can manage own trips" ON trips FOR ALL
 
 -- Trip waypoints
 CREATE POLICY "Users can view own waypoints" ON trip_waypoints FOR SELECT
-  USING (EXISTS (SELECT 1 FROM trips JOIN vehicles ON trips.vehicle_id = vehicles.id WHERE trips.id = trip_waypoints.trip_id AND vehicles.user_id = auth.uid()));
+  USING (EXISTS (SELECT 1 FROM trips JOIN vehicles ON trips.vehicle_id::text = vehicles.id::text WHERE trips.id = trip_waypoints.trip_id AND vehicles.user_id = auth.uid()));
 CREATE POLICY "Users can manage own waypoints" ON trip_waypoints FOR ALL
-  USING (EXISTS (SELECT 1 FROM trips JOIN vehicles ON trips.vehicle_id = vehicles.id WHERE trips.id = trip_waypoints.trip_id AND vehicles.user_id = auth.uid()));
+  USING (EXISTS (SELECT 1 FROM trips JOIN vehicles ON trips.vehicle_id::text = vehicles.id::text WHERE trips.id = trip_waypoints.trip_id AND vehicles.user_id = auth.uid()))
+  WITH CHECK (EXISTS (SELECT 1 FROM trips JOIN vehicles ON trips.vehicle_id::text = vehicles.id::text WHERE trips.id = trip_waypoints.trip_id AND vehicles.user_id = auth.uid()));
 
 -- Charging sessions
 CREATE POLICY "Users can view own charging sessions" ON charging_sessions FOR SELECT
@@ -195,6 +320,39 @@ CREATE POLICY "Users can view own snapshots" ON vehicle_snapshots FOR SELECT
 CREATE POLICY "Users can manage own snapshots" ON vehicle_snapshots FOR ALL
   USING (EXISTS (SELECT 1 FROM vehicles WHERE vehicles.id = vehicle_snapshots.vehicle_id AND vehicles.user_id = auth.uid()));
 
+-- Raw telemetry is only for server-side ingestion and maintenance.
+CREATE POLICY "Service role can manage telemetry raw" ON telemetry_raw FOR ALL TO service_role
+  USING (true)
+  WITH CHECK (true);
+
+-- Vehicle status can be read by the owning user; writes stay service-role only.
+CREATE POLICY "Users can view own vehicle status" ON vehicle_status FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1
+      FROM vehicles
+      WHERE vehicles.user_id = auth.uid()
+        AND vehicles.vin = REPLACE(vehicle_status.vin, 'vehicle_device.', '')
+    )
+  );
+CREATE POLICY "Service role can manage vehicle status" ON vehicle_status FOR ALL TO service_role
+  USING (true)
+  WITH CHECK (true);
+
+-- Notifications can be read by the owning user; writes stay service-role only.
+CREATE POLICY "Users can view own notifications" ON notifications FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1
+      FROM vehicles
+      WHERE vehicles.id = notifications.vehicle_id
+        AND vehicles.user_id = auth.uid()
+    )
+  );
+CREATE POLICY "Service role can manage notifications" ON notifications FOR ALL TO service_role
+  USING (true)
+  WITH CHECK (true);
+
 -- Function to auto-create profile on user signup
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
@@ -203,7 +361,7 @@ BEGIN
   VALUES (NEW.id, NEW.email, NEW.raw_user_meta_data->>'full_name');
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 -- Trigger for new user profile creation
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
@@ -218,9 +376,13 @@ BEGIN
   NEW.updated_at = NOW();
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SET search_path = public;
 
 -- Apply updated_at trigger to relevant tables
 CREATE TRIGGER update_profiles_updated_at BEFORE UPDATE ON profiles FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_vehicles_updated_at BEFORE UPDATE ON vehicles FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_app_settings_updated_at BEFORE UPDATE ON app_settings FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_user_settings_updated_at BEFORE UPDATE ON user_settings FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_polling_settings_updated_at BEFORE UPDATE ON polling_settings FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+INSERT INTO app_settings (id) VALUES ('default') ON CONFLICT (id) DO NOTHING;

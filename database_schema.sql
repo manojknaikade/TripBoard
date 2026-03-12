@@ -1,4 +1,6 @@
--- WARNING: This schema is for context only and is not meant to be run.
+-- WARNING: This file is a copied reference snapshot from Supabase for inspection only.
+-- It is not the source of truth and is not meant to be run.
+-- Use supabase/schema.sql plus supabase/migrations/* for actual setup and changes.
 -- Table order and constraints may not be valid for execution.
 
 CREATE TABLE public.app_settings (

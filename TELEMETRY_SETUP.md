@@ -21,6 +21,7 @@ We chose **Go** (Golang) because Tesla's official repository is written in Go, w
     - Strips the **FlatBuffers** header.
     - Decodes the **Protobuf** payload into a struct.
 4. **Storage:** Converts the data to JSON and pushes it to **Supabase** (`telemetry_raw` table).
+   The deployed Go binary reads `SUPABASE_URL` and `SUPABASE_KEY` from its environment. `SUPABASE_KEY` must be set to the Supabase service role key.
 
 ## 3. Implementation Steps
 
@@ -56,6 +57,40 @@ This allows us to save *everything* now and figure out complex queries (like Tri
 The ingester runs as a systemd service for automatic startup and reliability.
 
 **Service file:** `/etc/systemd/system/tesla-ingester.service`
+
+Recommended secret handling:
+
+1. Store secrets in `/home/ubuntu/.env`
+2. Reference that file from systemd with `EnvironmentFile=/home/ubuntu/.env`
+3. Keep `/home/ubuntu/.env` at `chmod 600`
+4. Set `SUPABASE_KEY` in that file to the Supabase service role key
+
+Example:
+
+```dotenv
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+SUPABASE_KEY=your_service_role_key
+```
+
+Recommended unit:
+
+```ini
+[Unit]
+Description=Tesla Telemetry Ingester
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/tesla-telemetry/go-decoder
+EnvironmentFile=/home/ubuntu/.env
+ExecStart=/opt/tesla-telemetry/go-decoder/ingest
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
 
 ```bash
 # Check status

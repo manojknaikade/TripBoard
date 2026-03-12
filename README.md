@@ -94,11 +94,14 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
    ```
 
 4. **Database Setup**
-   Run the `database_schema.sql` script in your Supabase SQL Editor to create the necessary tables (`vehicles`, `trips`, `tesla_sessions`, etc.).
-   Then run `scripts/create-app-settings.sql` to create the `app_settings` table for persistent user preferences.
+   Use `supabase/schema.sql` as the bootstrap schema for a fresh Supabase project.
+   After that, apply the SQL files in `supabase/migrations/` in chronological order to bring the database to the current app state.
 
-   **Migrations (run in order):**
+   `database_schema.sql` is only a copied reference snapshot from Supabase for inspection. It is not the source of truth and should not be used for setup.
+
+   **Key migrations:**
    - `supabase/migrations/20260312000000_create_tesla_sessions.sql` — Adds encrypted server-side Tesla session storage
+   - `supabase/migrations/20260312010000_harden_public_table_rls.sql` — Enables RLS on exposed public tables and adds tighter policies
    - `supabase/migrations/20260311000000_trip_temperature_trigger.sql` — Adds temperature columns to `trips` and updates the `process_telemetry` trigger
    - `supabase/migrations/20260311000001_backfill_trip_temperatures.sql` — Backfills temperature data for all existing trips from raw telemetry
 
@@ -134,7 +137,9 @@ src/
 └── types/                # TypeScript type definitions
 scripts/
 ├── telemetry-server.js   # Tesla telemetry ingest server
-└── create-app-settings.sql  # App settings table migration
+supabase/
+├── schema.sql            # Canonical bootstrap schema for fresh projects
+└── migrations/           # Incremental database changes
 ```
 
 ## ⚙️ Data Pipeline
@@ -147,6 +152,7 @@ TripBoard uses a **database-level trigger** (`process_telemetry`) on the `teleme
 - Detect and record charging sessions with charger type classification
 
 The Go telemetry server on the VPS ingests raw Tesla Fleet Telemetry and inserts into `telemetry_raw`. All trip/charging logic runs as PL/pgSQL triggers in Supabase.
+The production `tesla-ingester.service` now loads its Supabase credentials from `/home/ubuntu/.env` via `EnvironmentFile=` instead of hardcoding secrets in the unit file. The Go binary expects `SUPABASE_KEY`, and that value should be the Supabase service role key.
 
 ## Security Notes
 
@@ -154,6 +160,9 @@ The Go telemetry server on the VPS ingests raw Tesla Fleet Telemetry and inserts
 - The browser only keeps an opaque `HttpOnly` session cookie named `tesla_session`.
 - Tesla credentials live in the `tesla_sessions` table in Supabase and are encrypted at rest using `TOKEN_ENCRYPTION_KEY`.
 - Rotating `TOKEN_ENCRYPTION_KEY` invalidates existing Tesla sessions until users reconnect.
+- Public tables exposed through PostgREST should have RLS enabled. This repo now hardens `app_settings`, `telemetry_raw`, `notifications`, `vehicle_status`, and related tables through `supabase/migrations/20260312010000_harden_public_table_rls.sql`.
+- Routes that use the Supabase service role key are additionally gated server-side in Next.js, because service-role access bypasses RLS by design.
+- The production telemetry ingester should load secrets from `/home/ubuntu/.env` through systemd `EnvironmentFile=`. Avoid embedding Supabase keys directly in `/etc/systemd/system/tesla-ingester.service`.
 
 ## 🗺️ Geocoding & Maps
 
