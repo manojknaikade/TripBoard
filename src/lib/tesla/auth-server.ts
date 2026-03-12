@@ -1,8 +1,283 @@
+import crypto from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
+import { createAdminClient } from '@/lib/supabase/admin';
+import { normalizeTeslaRegion, type TeslaRegion } from '@/lib/tesla/api';
 
 const TESLA_TOKEN_URL = 'https://auth.tesla.com/oauth2/v3/token';
 const TESLA_CLIENT_ID = process.env.TESLA_CLIENT_ID!;
 const TESLA_CLIENT_SECRET = process.env.TESLA_CLIENT_SECRET!;
+const TESLA_SESSION_COOKIE = 'tesla_session';
+const TESLA_SESSION_MAX_AGE = 30 * 24 * 60 * 60;
+const TOKEN_REFRESH_WINDOW_MS = 5 * 60 * 1000;
+
+type TeslaSessionInput = {
+    accessToken: string;
+    refreshToken?: string;
+    region: TeslaRegion;
+};
+
+type TeslaSessionRow = {
+    session_token_hash: string;
+    access_token_encrypted: string;
+    refresh_token_encrypted: string | null;
+    token_expires_at: string | null;
+    region: string;
+};
+
+export type TeslaSession = TeslaSessionInput & {
+    sessionToken: string;
+    tokenExpiresAt: string | null;
+};
+
+function getEncryptionKey() {
+    const rawKey = process.env.TOKEN_ENCRYPTION_KEY;
+
+    if (!rawKey) {
+        throw new Error('TOKEN_ENCRYPTION_KEY is required for Tesla session storage');
+    }
+
+    const decodedKey = Buffer.from(rawKey, 'base64');
+    if (decodedKey.length === 32) {
+        return decodedKey;
+    }
+
+    if (Buffer.byteLength(rawKey) === 32) {
+        return Buffer.from(rawKey);
+    }
+
+    return crypto.createHash('sha256').update(rawKey).digest();
+}
+
+function encryptValue(value: string) {
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', getEncryptionKey(), iv);
+    const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+    const authTag = cipher.getAuthTag();
+
+    return [iv, authTag, encrypted].map((part) => part.toString('base64url')).join('.');
+}
+
+function decryptValue(payload: string) {
+    const [iv, authTag, encrypted] = payload.split('.');
+
+    if (!iv || !authTag || !encrypted) {
+        throw new Error('Invalid encrypted payload');
+    }
+
+    const decipher = crypto.createDecipheriv(
+        'aes-256-gcm',
+        getEncryptionKey(),
+        Buffer.from(iv, 'base64url')
+    );
+    decipher.setAuthTag(Buffer.from(authTag, 'base64url'));
+
+    const decrypted = Buffer.concat([
+        decipher.update(Buffer.from(encrypted, 'base64url')),
+        decipher.final(),
+    ]);
+
+    return decrypted.toString('utf8');
+}
+
+function hashSessionToken(sessionToken: string) {
+    return crypto.createHash('sha256').update(sessionToken).digest('hex');
+}
+
+function getTeslaSessionCookieOptions(request: NextRequest) {
+    const isLocalhost = request.nextUrl.hostname === 'localhost';
+
+    return {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production' && !isLocalhost,
+        sameSite: 'lax' as const,
+        maxAge: TESLA_SESSION_MAX_AGE,
+    };
+}
+
+function getTokenExpiry(accessToken: string) {
+    try {
+        const payload = JSON.parse(
+            Buffer.from(accessToken.split('.')[1], 'base64url').toString('utf8')
+        );
+
+        return typeof payload.exp === 'number'
+            ? new Date(payload.exp * 1000).toISOString()
+            : null;
+    } catch {
+        return null;
+    }
+}
+
+async function saveTeslaSession(sessionToken: string, session: TeslaSessionInput) {
+    const supabase = createAdminClient();
+    const tokenExpiresAt = getTokenExpiry(session.accessToken);
+
+    const { error } = await supabase
+        .from('tesla_sessions')
+        .upsert(
+            {
+                session_token_hash: hashSessionToken(sessionToken),
+                access_token_encrypted: encryptValue(session.accessToken),
+                refresh_token_encrypted: session.refreshToken
+                    ? encryptValue(session.refreshToken)
+                    : null,
+                token_expires_at: tokenExpiresAt,
+                region: session.region,
+                updated_at: new Date().toISOString(),
+                last_used_at: new Date().toISOString(),
+            },
+            { onConflict: 'session_token_hash' }
+        );
+
+    if (error) {
+        throw new Error(`Failed to persist Tesla session: ${error.message}`);
+    }
+
+    return tokenExpiresAt;
+}
+
+async function getTeslaSessionRow(sessionToken: string) {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+        .from('tesla_sessions')
+        .select('session_token_hash, access_token_encrypted, refresh_token_encrypted, token_expires_at, region')
+        .eq('session_token_hash', hashSessionToken(sessionToken))
+        .maybeSingle<TeslaSessionRow>();
+
+    if (error) {
+        throw new Error(`Failed to load Tesla session: ${error.message}`);
+    }
+
+    return data;
+}
+
+async function deleteTeslaSessionRecord(sessionToken: string) {
+    const supabase = createAdminClient();
+    const { error } = await supabase
+        .from('tesla_sessions')
+        .delete()
+        .eq('session_token_hash', hashSessionToken(sessionToken));
+
+    if (error) {
+        throw new Error(`Failed to delete Tesla session: ${error.message}`);
+    }
+}
+
+async function refreshStoredTeslaSession(sessionToken: string, session: TeslaSession) {
+    if (!session.refreshToken) {
+        return null;
+    }
+
+    const data = await refreshTeslaTokenRaw(session.refreshToken);
+    if (!data?.access_token) {
+        return null;
+    }
+
+    const refreshedSession: TeslaSessionInput = {
+        accessToken: data.access_token,
+        refreshToken: data.refresh_token || session.refreshToken,
+        region: session.region,
+    };
+
+    const tokenExpiresAt = await saveTeslaSession(sessionToken, refreshedSession);
+
+    return {
+        sessionToken,
+        ...refreshedSession,
+        tokenExpiresAt,
+    };
+}
+
+export async function setTeslaSession(
+    request: NextRequest,
+    response: NextResponse,
+    session: TeslaSessionInput
+) {
+    const sessionToken =
+        request.cookies.get(TESLA_SESSION_COOKIE)?.value ||
+        crypto.randomBytes(32).toString('base64url');
+
+    await saveTeslaSession(sessionToken, session);
+
+    response.cookies.set(
+        TESLA_SESSION_COOKIE,
+        sessionToken,
+        getTeslaSessionCookieOptions(request)
+    );
+
+    response.cookies.delete('tesla_access_token');
+    response.cookies.delete('tesla_refresh_token');
+}
+
+export async function getTeslaSession(request: NextRequest): Promise<TeslaSession | null> {
+    const sessionToken = request.cookies.get(TESLA_SESSION_COOKIE)?.value;
+
+    if (!sessionToken) {
+        return null;
+    }
+
+    const row = await getTeslaSessionRow(sessionToken);
+    if (!row) {
+        return null;
+    }
+
+    try {
+        const session: TeslaSession = {
+            sessionToken,
+            accessToken: decryptValue(row.access_token_encrypted),
+            refreshToken: row.refresh_token_encrypted
+                ? decryptValue(row.refresh_token_encrypted)
+                : undefined,
+            region: normalizeTeslaRegion(row.region) ?? 'eu',
+            tokenExpiresAt: row.token_expires_at,
+        };
+
+        if (!session.tokenExpiresAt) {
+            session.tokenExpiresAt = getTokenExpiry(session.accessToken);
+            await saveTeslaSession(sessionToken, session);
+        }
+
+        if (session.tokenExpiresAt) {
+            const msUntilExpiry = new Date(session.tokenExpiresAt).getTime() - Date.now();
+
+            if (msUntilExpiry < TOKEN_REFRESH_WINDOW_MS) {
+                const refreshedSession = await refreshStoredTeslaSession(sessionToken, session);
+                if (refreshedSession) {
+                    return refreshedSession;
+                }
+
+                if (msUntilExpiry <= 0) {
+                    await deleteTeslaSessionRecord(sessionToken);
+                    return null;
+                }
+            }
+        }
+
+        return session;
+    } catch (error) {
+        console.error('Failed to decrypt Tesla session:', error);
+        await deleteTeslaSessionRecord(sessionToken);
+        return null;
+    }
+}
+
+export async function clearTeslaSession(request: NextRequest, response: NextResponse) {
+    const sessionToken = request.cookies.get(TESLA_SESSION_COOKIE)?.value;
+
+    if (sessionToken) {
+        try {
+            await deleteTeslaSessionRecord(sessionToken);
+        } catch (error) {
+            console.error('Failed to delete Tesla session during sign-out:', error);
+        }
+    }
+
+    response.cookies.delete(TESLA_SESSION_COOKIE);
+    response.cookies.delete('tesla_access_token');
+    response.cookies.delete('tesla_refresh_token');
+    response.cookies.delete('tesla_token_expires_at');
+    response.cookies.delete('user_id');
+}
 
 export async function refreshTeslaTokenRaw(refreshToken: string) {
     if (!TESLA_CLIENT_ID) {
@@ -31,81 +306,4 @@ export async function refreshTeslaTokenRaw(refreshToken: string) {
         console.error('Tesla Auth: Refresh error', e);
         return null;
     }
-}
-
-export async function handleTeslaTokenRefresh(request: NextRequest, response: NextResponse) {
-    const accessToken = request.cookies.get('tesla_access_token')?.value;
-    const refreshToken = request.cookies.get('tesla_refresh_token')?.value;
-
-    if (!accessToken || !refreshToken) return response;
-
-    try {
-        // Simple JWT decode to check expiry
-        const payloadBase64 = accessToken.split('.')[1];
-        if (!payloadBase64) return response;
-
-        const payloadJson = Buffer.from(payloadBase64, 'base64').toString();
-        const payload = JSON.parse(payloadJson);
-        const expiry = (payload.exp || 0) * 1000;
-        const now = Date.now();
-
-        // Refresh if expires in less than 30 minutes
-        if (expiry - now < 30 * 60 * 1000) {
-            console.log('Tesla token expiring soon, refreshing in middleware...');
-            const data = await refreshTeslaTokenRaw(refreshToken);
-
-            if (data?.access_token) {
-                const isLocalhost = request.nextUrl.hostname === 'localhost';
-                const isSecure = process.env.NODE_ENV === 'production' && !isLocalhost;
-
-                const cookieOptions = {
-                    httpOnly: true,
-                    secure: isSecure,
-                    sameSite: 'lax' as const,
-                    maxAge: 30 * 24 * 60 * 60, // 30 days
-                };
-
-                response.cookies.set('tesla_access_token', data.access_token, cookieOptions);
-                if (data.refresh_token) {
-                    response.cookies.set('tesla_refresh_token', data.refresh_token, cookieOptions);
-                }
-            }
-        }
-    } catch (e) {
-        console.error('Tesla token refresh check failed:', e);
-    }
-
-    return response;
-}
-
-/**
- * For use in Server Components / Route Handlers
- */
-export async function getValidTeslaToken() {
-    const { cookies } = await import('next/headers');
-    const cookieStore = await cookies();
-    const accessToken = cookieStore.get('tesla_access_token')?.value;
-    const refreshToken = cookieStore.get('tesla_refresh_token')?.value;
-
-    if (!accessToken) return null;
-
-    // Basic check: is the token expired?
-    // Tesla tokens are JWTs. We can check the 'exp' claim.
-    try {
-        const payload = JSON.parse(Buffer.from(accessToken.split('.')[1], 'base64').toString());
-        const expiry = (payload.exp || 0) * 1000; // to ms
-        const now = Date.now();
-
-        // If it expires in less than 5 minutes, refresh it
-        if (expiry - now < 5 * 60 * 1000) {
-            if (refreshToken) {
-                const data = await refreshTeslaTokenRaw(refreshToken);
-                return data?.access_token || accessToken;
-            }
-        }
-    } catch (e) {
-        console.error('Failed to parse Tesla token:', e);
-    }
-
-    return accessToken;
 }

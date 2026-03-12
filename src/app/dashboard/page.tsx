@@ -2,9 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { handleSignOut } from '@/lib/utils/auth';
 import {
-  Zap,
   Battery,
   Gauge,
   Thermometer,
@@ -13,17 +11,12 @@ import {
   Unlock,
   Sun,
   Moon,
-  History,
-  BarChart3,
-  Settings,
-  LogOut,
   RefreshCw,
   Car,
   Loader2,
   AlertCircle,
   Power,
   Clock,
-  Cpu,
   BatteryCharging,
 } from 'lucide-react';
 import { useSettingsStore } from '@/stores/settingsStore';
@@ -138,18 +131,7 @@ export default function DashboardPage() {
   }, []);
 
   // Fetch vehicles list on mount
-  useEffect(() => {
-    fetchVehicles();
-  }, []);
-
-  // Fetch vehicle data when selected vehicle changes
-  useEffect(() => {
-    if (selectedVehicle) {
-      fetchVehicleData(selectedVehicle.id);
-    }
-  }, [selectedVehicle]);
-
-  const fetchVehicles = async () => {
+  const fetchVehicles = useCallback(async () => {
     try {
       const response = await fetch('/api/tesla/test');
       const data = await response.json();
@@ -165,8 +147,13 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
+  useEffect(() => {
+    fetchVehicles();
+  }, [fetchVehicles]);
+
+  // Fetch vehicle data when selected vehicle changes
   const fetchVehicleData = useCallback(async (vehicleId: number) => {
     setDataLoading(true);
     setIsAsleep(false);
@@ -210,6 +197,12 @@ export default function DashboardPage() {
       setDataLoading(false);
     }
   }, [region, dataSource]);
+
+  useEffect(() => {
+    if (selectedVehicle) {
+      fetchVehicleData(selectedVehicle.id);
+    }
+  }, [selectedVehicle, fetchVehicleData]);
 
   const handleWakeAndRefresh = async () => {
     if (!selectedVehicle) return;

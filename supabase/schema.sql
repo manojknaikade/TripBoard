@@ -34,6 +34,18 @@ CREATE TABLE IF NOT EXISTS vehicles (
   UNIQUE(user_id, tesla_id)
 );
 
+CREATE TABLE IF NOT EXISTS tesla_sessions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  session_token_hash TEXT NOT NULL UNIQUE,
+  access_token_encrypted TEXT NOT NULL,
+  refresh_token_encrypted TEXT,
+  token_expires_at TIMESTAMPTZ,
+  region TEXT NOT NULL DEFAULT 'eu' CHECK (region IN ('na', 'eu', 'cn')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  last_used_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Polling settings per vehicle
 CREATE TABLE IF NOT EXISTS polling_settings (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -133,6 +145,7 @@ CREATE INDEX IF NOT EXISTS idx_vehicle_snapshots_vehicle_id_timestamp ON vehicle
 -- Enable Row Level Security
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE vehicles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tesla_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE polling_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trips ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trip_waypoints ENABLE ROW LEVEL SECURITY;

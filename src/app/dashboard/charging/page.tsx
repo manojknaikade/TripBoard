@@ -1,12 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import {
     Zap,
     History,
     Calendar,
-    MapPin,
     Clock,
     Battery,
     Loader2,
@@ -41,6 +40,17 @@ interface ChargingSession {
     is_complete: boolean;
 }
 
+interface TimeframeSelectorProps {
+    selected: string;
+    onSelect: (value: string) => void;
+    customStart: string;
+    customEnd: string;
+    onCustomStartChange: (value: string) => void;
+    onCustomEndChange: (value: string) => void;
+    showCustomPicker: boolean;
+    onToggleCustomPicker: () => void;
+}
+
 function formatDuration(start: string, end: string | null): string {
     if (!end) return 'In Progress';
     const seconds = Math.floor((new Date(end).getTime() - new Date(start).getTime()) / 1000);
@@ -69,7 +79,7 @@ function formatDate(dateString: string): string {
 }
 
 export default function ChargingPage() {
-    const { units, currency: preferredCurrency } = useSettingsStore();
+    const { currency: preferredCurrency } = useSettingsStore();
     const [sessions, setSessions] = useState<ChargingSession[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -85,7 +95,7 @@ export default function ChargingPage() {
     const [savingCost, setSavingCost] = useState(false);
 
     // Calculate date range
-    const getDateRange = () => {
+    const getDateRange = useCallback(() => {
         const toDate = new Date();
         toDate.setHours(23, 59, 59, 999);
         let fromDate = new Date();
@@ -113,7 +123,7 @@ export default function ChargingPage() {
             }
         }
         return { fromDate, toDate };
-    };
+    }, [timeframe, customStart, customEnd]);
 
     const handleSaveCost = async () => {
         if (!editingSession || !costInput) return;
@@ -147,7 +157,7 @@ export default function ChargingPage() {
         }
     };
 
-    const fetchSessions = async () => {
+    const fetchSessions = useCallback(async () => {
         setLoading(true);
         setError(null);
         try {
@@ -169,12 +179,12 @@ export default function ChargingPage() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [getDateRange]);
 
     // Re-fetch when timeframe or custom dates change
     useEffect(() => {
         fetchSessions();
-    }, [timeframe, customStart, customEnd]);
+    }, [fetchSessions]);
 
     const filteredSessions = sessions;
 
@@ -491,7 +501,7 @@ function StatCard({ icon, label, value, color }: { icon: React.ReactNode; label:
 }
 
 // Reuse the TimeframeSelector from Trips page (simplified here for brevity, usually extracted to a component)
-function TimeframeSelector({ selected, onSelect, customStart, customEnd, onCustomStartChange, onCustomEndChange, showCustomPicker, onToggleCustomPicker }: any) {
+function TimeframeSelector({ selected, onSelect, customStart, customEnd, onCustomStartChange, onCustomEndChange, showCustomPicker, onToggleCustomPicker }: TimeframeSelectorProps) {
     const options = [
         { id: 'week', label: 'This Week' }, { id: '7days', label: 'Last 7 Days' },
         { id: 'month', label: 'This Month' }, { id: '30days', label: 'Last 30 Days' },

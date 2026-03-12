@@ -1,26 +1,56 @@
-import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { NextRequest, NextResponse } from 'next/server'
+import { getTeslaSession } from '@/lib/tesla/auth-server'
 
 export const dynamic = 'force-dynamic';
+
+type TripRecord = {
+    id: string;
+    start_time: string;
+    end_time: string | null;
+    distance_miles: number | null;
+    start_odometer: number | null;
+    end_odometer: number | null;
+    energy_used_kwh: number | null;
+    start_battery_pct: number | null;
+    end_battery_pct: number | null;
+    min_outside_temp?: number | null;
+    max_outside_temp?: number | null;
+    avg_outside_temp?: number | null;
+};
+
+type ChargingSessionRecord = {
+    start_time: string;
+    energy_added_kwh: number | null;
+    charger_type: string | null;
+    cost_user_entered: number | null;
+};
+
+type SnapshotRecord = {
+    timestamp: string;
+    outside_temp: number | null;
+};
+
+type LeaderboardTrip = TripRecord & {
+    calculatedDistance: number;
+    calculatedEnergy: number;
+    calculatedEfficiency: number;
+};
 
 export async function GET(request: NextRequest) {
     try {
         const supabase = createAdminClient()
 
         // Enforce authentication so this isn't globally exposed and Next.js knows it's dynamic
-        const accessToken = request.cookies.get('tesla_access_token')?.value;
-        if (!accessToken) {
-            console.warn('Analytics API: No tesla_access_token found in cookies. This may be due to the "secure" flag on localhost in prod build.');
+        const session = await getTeslaSession(request);
+        if (!session) {
+            console.warn('Analytics API: No Tesla session found.');
             return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
         }
 
         // Get timeframe from query params
         const { searchParams } = new URL(request.url)
         const timeframe = searchParams.get('timeframe') || 'week'
-        const startDate = searchParams.get('startDate')
-        const endDate = searchParams.get('endDate')
-
         let userUnits: 'imperial' | 'metric' = 'metric'; // DEFAULT TO METRIC
         let userDateFormat: 'DD/MM' | 'MM/DD' = 'DD/MM';
 
@@ -247,10 +277,13 @@ export async function GET(request: NextRequest) {
         const costByType: Record<string, number> = {};
         let totalChargingEnergy = 0
 
-        for (const session of chargingSessions || []) {
+        const typedChargingSessions = (chargingSessions || []) as ChargingSessionRecord[];
+        const typedTrips = (trips || []) as TripRecord[];
+
+        for (const session of typedChargingSessions) {
             // Column in DB is `charger_type` (see schema / telemetry server),
             // not `charging_type`. Fall back to 'other' if missing.
-            const rawType = (session as any).charger_type as string | null | undefined;
+            const rawType = session.charger_type;
             const typeKey = (rawType ?? 'other').toLowerCase();
 
             // Normalise to our known buckets
@@ -262,7 +295,7 @@ export async function GET(request: NextRequest) {
                                 'other';
 
             // Accumulate cost by type (for ALL sessions, even without energy)
-            const sessionCost = (session as any).cost_user_entered || 0;
+            const sessionCost = session.cost_user_entered || 0;
             if (!costByType[normalisedKey]) costByType[normalisedKey] = 0;
             costByType[normalisedKey] += sessionCost;
 
@@ -277,7 +310,7 @@ export async function GET(request: NextRequest) {
         let totalChargingCost = 0;
         const dailyChargingData: Record<string, { energy: number; cost: number; sessions: number }> = {};
 
-        for (const session of chargingSessions || []) {
+        for (const session of typedChargingSessions) {
             // Aggregate Total Cost (simple sum here, ignoring currency conversion complexity for MVP)
             const cost = session.cost_user_entered || 0;
             totalChargingCost += cost;
@@ -398,7 +431,7 @@ export async function GET(request: NextRequest) {
         // --- NEW: ADVANCED ANALYTICS ---
 
         // 1. Top Trips Leaderboard
-        const validTrips = (trips || []).map(t => {
+        const validTrips: LeaderboardTrip[] = typedTrips.map((t) => {
             const dist = t.distance_miles ||
             ((t.end_odometer && t.start_odometer) ? t.end_odometer - t.start_odometer : 0);
             const energy = t.energy_used_kwh ||
@@ -418,7 +451,7 @@ export async function GET(request: NextRequest) {
             }) : null,
         };
 
-        const formatTripForLeaderboard = (trip: any) => {
+        const formatTripForLeaderboard = (trip: LeaderboardTrip | null) => {
             if (!trip) return null;
             const dist = trip.calculatedDistance * distanceMultiplier;
             return {
@@ -436,13 +469,14 @@ export async function GET(request: NextRequest) {
             .gte('timestamp', fromDate.toISOString())
             .lte('timestamp', toDate.toISOString())
             .order('timestamp', { ascending: true });
+        const typedSnapshots = (snapshots || []) as SnapshotRecord[];
 
         console.log(`[Analytics] Found ${trips?.length || 0} trips and ${snapshots?.length || 0} snapshots`);
 
         // Calculate Vampire Drain (trip-to-trip estimation)
         // We look at the battery drop between consecutive trips (End of Trip N to Start of Trip N+1)
         let vampireDrainKwh = 0;
-        const allTripsForDrain = trips || [];
+        const allTripsForDrain = typedTrips;
         if (allTripsForDrain.length > 1) {
             for (let i = 1; i < allTripsForDrain.length; i++) {
                 const prevTrip = allTripsForDrain[i - 1];
@@ -454,7 +488,7 @@ export async function GET(request: NextRequest) {
                     // If battery dropped between trips, and it's a reasonable drop (ignore charging or weird resets)
                     if (batteryDrop > 0.1 && batteryDrop < 15) {
                         // Check if there was a charging session in between to avoid counting charging as drain
-                        const hasChargingBetween = (chargingSessions || []).some(s => {
+                        const hasChargingBetween = typedChargingSessions.some((s) => {
                             const sessionStart = new Date(s.start_time).getTime();
                             const prevEnd = new Date(prevTrip.end_time || '').getTime();
                             const currStart = new Date(currTrip.start_time || '').getTime();
@@ -474,9 +508,13 @@ export async function GET(request: NextRequest) {
         // Calculate Temperature Impact
         const tempBuckets: Record<number, { totalEff: number, count: number }> = {};
         for (const trip of validTrips) {
+            if (!trip.end_time) {
+                continue;
+            }
+
             const start = new Date(trip.start_time).getTime();
             const end = new Date(trip.end_time).getTime();
-            const tripSnapshots = (snapshots || []).filter(s => {
+            const tripSnapshots = typedSnapshots.filter((s) => {
                 const t = new Date(s.timestamp).getTime();
                 return t >= start && t <= end;
             });
@@ -509,7 +547,12 @@ export async function GET(request: NextRequest) {
             // Only use trips that actually have temperature data
             const tripsWithTemp = validTrips.filter(t => t.avg_outside_temp !== null && t.avg_outside_temp !== undefined);
             for (const trip of tripsWithTemp) {
-                const bucket = Math.round(trip.avg_outside_temp / 5) * 5;
+                const avgOutsideTemp = trip.avg_outside_temp;
+                if (avgOutsideTemp == null) {
+                    continue;
+                }
+
+                const bucket = Math.round(avgOutsideTemp / 5) * 5;
                 const efficiency = trip.calculatedEfficiency;
                 
                 if (efficiency > 100 && efficiency < 600) {
@@ -557,8 +600,10 @@ export async function GET(request: NextRequest) {
             temperatureImpact,
             costBySource,
         })
-    } catch (err: any) {
+    } catch (err: unknown) {
         console.error('CRITICAL Analytics error:', err);
-        return NextResponse.json({ success: false, error: err.message || 'Failed to fetch analytics', stack: err.stack }, { status: 500 });
+        const message = err instanceof Error ? err.message : 'Failed to fetch analytics';
+        const stack = err instanceof Error ? err.stack : undefined;
+        return NextResponse.json({ success: false, error: message, stack }, { status: 500 });
     }
 }

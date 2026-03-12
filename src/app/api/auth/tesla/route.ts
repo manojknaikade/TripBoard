@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 
 // Tesla OAuth configuration
@@ -17,7 +17,7 @@ const SCOPES = [
     'vehicle_charging_cmds',
 ].join(' ');
 
-export async function GET(request: NextRequest) {
+export async function GET() {
     // Generate state and code verifier for PKCE
     const state = crypto.randomBytes(16).toString('hex');
     const codeVerifier = crypto.randomBytes(32).toString('base64url');

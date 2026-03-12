@@ -31,7 +31,9 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
   - **Cost by Charging Source:** Horizontal bar chart showing costs per charger type
 
 - **User Preferences & Security**
-  - Seamless authentication via **Tesla OAuth** with extended 30-day active sessions
+  - Seamless authentication via **Tesla OAuth** or direct Tesla API token entry
+  - Same-device sessions persist for up to 30 days via an **HttpOnly** session cookie
+  - Tesla access and refresh tokens are stored **server-side in Supabase** and encrypted with `TOKEN_ENCRYPTION_KEY`
   - Toggle between **Metric** (km, kWh) and **Imperial** (mi, kWh) units
   - Set home address with interactive map picker
   - Settings persisted to **Supabase** (survives browser clears)
@@ -86,15 +88,17 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
    TESLA_CLIENT_SECRET=your_tesla_client_secret
    NEXT_PUBLIC_TESLA_REDIRECT_URI=http://localhost:3000/api/auth/tesla/callback
    
-   # Encryption (for token storage)
+   # Encryption (used for Tesla token/session storage)
+   # Generate with: openssl rand -base64 32
    TOKEN_ENCRYPTION_KEY=your_random_32_byte_string
    ```
 
 4. **Database Setup**
-   Run the `database_schema.sql` script in your Supabase SQL Editor to create the necessary tables (`vehicles`, `trips`, etc.).
+   Run the `database_schema.sql` script in your Supabase SQL Editor to create the necessary tables (`vehicles`, `trips`, `tesla_sessions`, etc.).
    Then run `scripts/create-app-settings.sql` to create the `app_settings` table for persistent user preferences.
 
    **Migrations (run in order):**
+   - `supabase/migrations/20260312000000_create_tesla_sessions.sql` — Adds encrypted server-side Tesla session storage
    - `supabase/migrations/20260311000000_trip_temperature_trigger.sql` — Adds temperature columns to `trips` and updates the `process_telemetry` trigger
    - `supabase/migrations/20260311000001_backfill_trip_temperatures.sql` — Backfills temperature data for all existing trips from raw telemetry
 
@@ -143,6 +147,13 @@ TripBoard uses a **database-level trigger** (`process_telemetry`) on the `teleme
 - Detect and record charging sessions with charger type classification
 
 The Go telemetry server on the VPS ingests raw Tesla Fleet Telemetry and inserts into `telemetry_raw`. All trip/charging logic runs as PL/pgSQL triggers in Supabase.
+
+## Security Notes
+
+- Tesla access and refresh tokens are never stored in `localStorage`.
+- The browser only keeps an opaque `HttpOnly` session cookie named `tesla_session`.
+- Tesla credentials live in the `tesla_sessions` table in Supabase and are encrypted at rest using `TOKEN_ENCRYPTION_KEY`.
+- Rotating `TOKEN_ENCRYPTION_KEY` invalidates existing Tesla sessions until users reconnect.
 
 ## 🗺️ Geocoding & Maps
 

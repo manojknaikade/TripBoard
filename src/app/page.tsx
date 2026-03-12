@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Zap, Map, BarChart3, Settings } from 'lucide-react';
+import { Zap, Map, BarChart3 } from 'lucide-react';
 
 export default function Home() {
     return (

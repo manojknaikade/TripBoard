@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -17,14 +17,9 @@ export default function TripDetailMap({ startLat, startLng, endLat, endLng }: Tr
     const endMarkerRef = useRef<L.Marker | null>(null);
     const lineRef = useRef<L.Polyline | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
-    const [mounted, setMounted] = useState(false);
 
     useEffect(() => {
-        setMounted(true);
-    }, []);
-
-    useEffect(() => {
-        if (!mounted || !containerRef.current) return;
+        if (!containerRef.current) return;
 
         // Initialize map if not already done
         if (!mapRef.current) {
@@ -127,20 +122,12 @@ export default function TripDetailMap({ startLat, startLng, endLat, endLng }: Tr
                 lineRef.current = null;
             }
         };
-    }, [mounted, startLat, startLng, endLat, endLng]);
-
-    if (!mounted) {
-        return (
-            <div className="flex h-96 items-center justify-center rounded-xl bg-slate-700/30">
-                <div className="h-6 w-6 animate-spin rounded-full border-2 border-red-500 border-t-transparent" />
-            </div>
-        );
-    }
+    }, [startLat, startLng, endLat, endLng]);
 
     return (
         <div
             ref={containerRef}
-            className="h-96 w-full overflow-hidden rounded-xl border border-slate-700/50"
+            className="h-96 w-full overflow-hidden rounded-xl border border-slate-700/50 bg-slate-700/30"
             style={{ zIndex: 0 }}
         />
     );

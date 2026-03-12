@@ -24,13 +24,18 @@ interface LocationPickerProps {
     onLocationChange: (lat: number, lon: number, address: string) => void;
 }
 
+interface SearchResult {
+    lat: string;
+    lon: string;
+    display_name: string;
+}
+
 function LocationMarker({ lat, lon, onDragEnd }: { lat: number; lon: number; onDragEnd: (lat: number, lon: number) => void }) {
     const map = useMap();
-    const [position, setPosition] = useState<L.LatLng>(new L.LatLng(lat, lon));
-    const markerRef = useRef<any>(null);
+    const position = new L.LatLng(lat, lon);
+    const markerRef = useRef<L.Marker | null>(null);
 
     useEffect(() => {
-        setPosition(new L.LatLng(lat, lon));
         map.flyTo([lat, lon], map.getZoom());
     }, [lat, lon, map]);
 
@@ -39,7 +44,6 @@ function LocationMarker({ lat, lon, onDragEnd }: { lat: number; lon: number; onD
             const marker = markerRef.current;
             if (marker != null) {
                 const newPos = marker.getLatLng();
-                setPosition(newPos);
                 onDragEnd(newPos.lat, newPos.lng);
             }
         },
@@ -70,7 +74,7 @@ function MapEvents({ onClick }: { onClick: (lat: number, lon: number) => void })
 export default function LocationPicker({ latitude, longitude, address, onLocationChange }: LocationPickerProps) {
     const [searchQuery, setSearchQuery] = useState('');
     const [isSearching, setIsSearching] = useState(false);
-    const [searchResults, setSearchResults] = useState<any[]>([]);
+    const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
 
     // Default to a central location if none provided (e.g., Zurich)
     const defaultLat = 47.3769;
@@ -86,7 +90,7 @@ export default function LocationPicker({ latitude, longitude, address, onLocatio
         setIsSearching(true);
         try {
             const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}`);
-            const data = await res.json();
+            const data: SearchResult[] = await res.json();
             setSearchResults(data);
         } catch (error) {
             console.error('Search failed:', error);

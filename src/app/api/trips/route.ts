@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { getTeslaSession } from '@/lib/tesla/auth-server';
 
 async function getSupabase() {
     return await createClient();
@@ -7,9 +8,9 @@ async function getSupabase() {
 
 // GET - List trips for the authenticated user
 export async function GET(request: NextRequest) {
-    const accessToken = request.cookies.get('tesla_access_token')?.value;
+    const session = await getTeslaSession(request);
 
-    if (!accessToken) {
+    if (!session) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
@@ -125,9 +126,9 @@ export async function GET(request: NextRequest) {
 
 // POST - Start a new trip
 export async function POST(request: NextRequest) {
-    const accessToken = request.cookies.get('tesla_access_token')?.value;
+    const session = await getTeslaSession(request);
 
-    if (!accessToken) {
+    if (!session) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
@@ -137,7 +138,6 @@ export async function POST(request: NextRequest) {
             vehicleId,
             latitude,
             longitude,
-            odometer,
             batteryLevel,
             address,
             outsideTemp,
@@ -178,9 +178,9 @@ export async function POST(request: NextRequest) {
 
 // PATCH - End/update a trip
 export async function PATCH(request: NextRequest) {
-    const accessToken = request.cookies.get('tesla_access_token')?.value;
+    const session = await getTeslaSession(request);
 
-    if (!accessToken) {
+    if (!session) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
@@ -190,7 +190,6 @@ export async function PATCH(request: NextRequest) {
             tripId,
             latitude,
             longitude,
-            odometer,
             batteryLevel,
             address,
             maxSpeed,

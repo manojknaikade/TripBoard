@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getTeslaSession } from '@/lib/tesla/auth-server';
 
 export const dynamic = 'force-dynamic';
 
 // GET - Fetch notifications
 export async function GET(request: NextRequest) {
-    const accessToken = request.cookies.get('tesla_access_token')?.value;
-    if (!accessToken) {
+    const session = await getTeslaSession(request);
+    if (!session) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
@@ -48,8 +49,8 @@ export async function GET(request: NextRequest) {
 
 // PATCH - Mark notifications as read
 export async function PATCH(request: NextRequest) {
-    const accessToken = request.cookies.get('tesla_access_token')?.value;
-    if (!accessToken) {
+    const session = await getTeslaSession(request);
+    if (!session) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 

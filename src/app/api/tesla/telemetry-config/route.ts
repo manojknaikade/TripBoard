@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-const REGIONAL_ENDPOINTS = {
-    na: 'https://fleet-api.prd.na.vn.cloud.tesla.com',
-    eu: 'https://fleet-api.prd.eu.vn.cloud.tesla.com',
-    cn: 'https://fleet-api.prd.cn.vn.cloud.tesla.cn',
-};
+import { fetchTeslaApi, normalizeTeslaRegion } from '@/lib/tesla/api';
+import { getTeslaSession } from '@/lib/tesla/auth-server';
 
 // URL to your Vehicle Command Proxy
 const PROXY_URL = 'https://tripboard.manojnaikade.com:4443';
@@ -43,10 +39,10 @@ emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
 -----END CERTIFICATE-----`;
 
 export async function POST(request: NextRequest) {
-    const accessToken = request.cookies.get('tesla_access_token')?.value;
-    const region = request.nextUrl.searchParams.get('region') || 'eu';
+    const session = await getTeslaSession(request);
+    const region = normalizeTeslaRegion(request.nextUrl.searchParams.get('region')) || session?.region || 'eu';
 
-    if (!accessToken) {
+    if (!session) {
         return NextResponse.json(
             { error: 'Not authenticated with Tesla' },
             { status: 401 }
@@ -70,11 +66,12 @@ export async function POST(request: NextRequest) {
     let targetVin = vin;
     if (!targetVin && vehicleId) {
         // Fetch vehicle data to get VIN
-        const baseUrl = REGIONAL_ENDPOINTS[region as keyof typeof REGIONAL_ENDPOINTS] || REGIONAL_ENDPOINTS.eu;
         try {
-            const vehicleRes = await fetch(`${baseUrl}/api/1/vehicles/${vehicleId}`, {
-                headers: { Authorization: `Bearer ${accessToken}` },
-            });
+            const vehicleRes = await fetchTeslaApi(
+                session.accessToken,
+                region,
+                `/api/1/vehicles/${vehicleId}`
+            );
             const vehicleData = await vehicleRes.json();
             targetVin = vehicleData.response?.vin;
         } catch (err) {
@@ -88,8 +85,6 @@ export async function POST(request: NextRequest) {
             { status: 400 }
         );
     }
-
-    const baseUrl = REGIONAL_ENDPOINTS[region as keyof typeof REGIONAL_ENDPOINTS] || REGIONAL_ENDPOINTS.eu;
 
     // Telemetry configuration per Tesla docs
     const telemetryConfig = {
@@ -139,7 +134,7 @@ export async function POST(request: NextRequest) {
             {
                 method: 'POST',
                 headers: {
-                    Authorization: `Bearer ${accessToken}`,
+                    Authorization: `Bearer ${session.accessToken}`,
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify(telemetryConfig),
@@ -187,11 +182,11 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
-    const accessToken = request.cookies.get('tesla_access_token')?.value;
+    const session = await getTeslaSession(request);
     const vehicleId = request.nextUrl.searchParams.get('vehicleId');
-    const region = request.nextUrl.searchParams.get('region') || 'eu';
+    const region = normalizeTeslaRegion(request.nextUrl.searchParams.get('region')) || session?.region || 'eu';
 
-    if (!accessToken) {
+    if (!session) {
         return NextResponse.json({ error: 'Not authenticated with Tesla' }, { status: 401 });
     }
 
@@ -199,13 +194,13 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'Vehicle ID required' }, { status: 400 });
     }
 
-    const baseUrl = REGIONAL_ENDPOINTS[region as keyof typeof REGIONAL_ENDPOINTS] || REGIONAL_ENDPOINTS.eu;
-
     try {
         // We first need the VIN 
-        const vehicleRes = await fetch(`${baseUrl}/api/1/vehicles/${vehicleId}`, {
-            headers: { Authorization: `Bearer ${accessToken}` },
-        });
+        const vehicleRes = await fetchTeslaApi(
+            session.accessToken,
+            region,
+            `/api/1/vehicles/${vehicleId}`
+        );
 
         if (!vehicleRes.ok) {
             return NextResponse.json({ error: 'Failed to fetch vehicle details' }, { status: vehicleRes.status });
@@ -223,7 +218,7 @@ export async function GET(request: NextRequest) {
             `${PROXY_URL}/api/1/vehicles/${vin}/fleet_telemetry_config`,
             {
                 headers: {
-                    Authorization: `Bearer ${accessToken}`,
+                    Authorization: `Bearer ${session.accessToken}`,
                     'Content-Type': 'application/json',
                 },
             }
@@ -264,11 +259,11 @@ export async function GET(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-    const accessToken = request.cookies.get('tesla_access_token')?.value;
+    const session = await getTeslaSession(request);
     const vehicleId = request.nextUrl.searchParams.get('vehicleId');
-    const region = request.nextUrl.searchParams.get('region') || 'eu';
+    const region = normalizeTeslaRegion(request.nextUrl.searchParams.get('region')) || session?.region || 'eu';
 
-    if (!accessToken) {
+    if (!session) {
         return NextResponse.json({ error: 'Not authenticated with Tesla' }, { status: 401 });
     }
 
@@ -276,13 +271,13 @@ export async function DELETE(request: NextRequest) {
         return NextResponse.json({ error: 'Vehicle ID required' }, { status: 400 });
     }
 
-    const baseUrl = REGIONAL_ENDPOINTS[region as keyof typeof REGIONAL_ENDPOINTS] || REGIONAL_ENDPOINTS.eu;
-
     try {
         // We first need the VIN 
-        const vehicleRes = await fetch(`${baseUrl}/api/1/vehicles/${vehicleId}`, {
-            headers: { Authorization: `Bearer ${accessToken}` },
-        });
+        const vehicleRes = await fetchTeslaApi(
+            session.accessToken,
+            region,
+            `/api/1/vehicles/${vehicleId}`
+        );
 
         const vehicleData = await vehicleRes.json();
         const vin = vehicleData.response?.vin;
@@ -297,7 +292,7 @@ export async function DELETE(request: NextRequest) {
             {
                 method: 'DELETE',
                 headers: {
-                    Authorization: `Bearer ${accessToken}`,
+                    Authorization: `Bearer ${session.accessToken}`,
                 },
             }
         );

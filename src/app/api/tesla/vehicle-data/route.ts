@@ -1,17 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-const REGIONAL_ENDPOINTS = {
-    na: 'https://fleet-api.prd.na.vn.cloud.tesla.com',
-    eu: 'https://fleet-api.prd.eu.vn.cloud.tesla.com',
-    cn: 'https://fleet-api.prd.cn.vn.cloud.tesla.cn',
-};
+import { fetchTeslaApi, normalizeTeslaRegion } from '@/lib/tesla/api';
+import { getTeslaSession } from '@/lib/tesla/auth-server';
 
 export async function GET(request: NextRequest) {
-    const accessToken = request.cookies.get('tesla_access_token')?.value;
+    const session = await getTeslaSession(request);
     const vehicleId = request.nextUrl.searchParams.get('id');
-    const region = request.nextUrl.searchParams.get('region') || 'eu';
+    const region = normalizeTeslaRegion(request.nextUrl.searchParams.get('region')) || session?.region || 'eu';
 
-    if (!accessToken) {
+    if (!session) {
         return NextResponse.json(
             { error: 'Not authenticated with Tesla' },
             { status: 401 }
@@ -24,19 +20,12 @@ export async function GET(request: NextRequest) {
             { status: 400 }
         );
     }
-
-    const baseUrl = REGIONAL_ENDPOINTS[region as keyof typeof REGIONAL_ENDPOINTS] || REGIONAL_ENDPOINTS.eu;
-
     try {
         // Fetch vehicle data from Tesla Fleet API
-        const response = await fetch(
-            `${baseUrl}/api/1/vehicles/${vehicleId}/vehicle_data`,
-            {
-                headers: {
-                    Authorization: `Bearer ${accessToken}`,
-                    'Content-Type': 'application/json',
-                },
-            }
+        const response = await fetchTeslaApi(
+            session.accessToken,
+            region,
+            `/api/1/vehicles/${vehicleId}/vehicle_data`
         );
 
         if (!response.ok) {

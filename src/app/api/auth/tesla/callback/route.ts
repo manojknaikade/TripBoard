@@ -1,10 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { discoverTeslaVehicles } from '@/lib/tesla/api';
+import { setTeslaSession } from '@/lib/tesla/auth-server';
 
 const TESLA_TOKEN_URL = 'https://auth.tesla.com/oauth2/v3/token';
 const TESLA_CLIENT_ID = process.env.TESLA_CLIENT_ID!;
 const TESLA_CLIENT_SECRET = process.env.TESLA_CLIENT_SECRET!;
 const REDIRECT_URI = process.env.NEXT_PUBLIC_TESLA_REDIRECT_URI!;
+
+function getOauthFailureMessage(error: unknown) {
+    if (!(error instanceof Error)) {
+        return 'OAuth failed';
+    }
+
+    if (error.message.includes('TOKEN_ENCRYPTION_KEY')) {
+        return 'Server misconfigured: TOKEN_ENCRYPTION_KEY is missing';
+    }
+
+    if (error.message.includes('tesla_sessions')) {
+        return 'Server misconfigured: tesla_sessions table is missing';
+    }
+
+    return 'OAuth failed';
+}
 
 export async function GET(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams;
@@ -12,14 +29,12 @@ export async function GET(request: NextRequest) {
     const state = searchParams.get('state');
     const error = searchParams.get('error');
 
-    // Check for errors from Tesla
     if (error) {
         return NextResponse.redirect(
             new URL(`/auth/login?error=${encodeURIComponent(error)}`, request.url)
         );
     }
 
-    // Verify state
     const storedState = request.cookies.get('tesla_oauth_state')?.value;
     const codeVerifier = request.cookies.get('tesla_code_verifier')?.value;
 
@@ -36,7 +51,6 @@ export async function GET(request: NextRequest) {
     }
 
     try {
-        // Exchange code for tokens
         const tokenResponse = await fetch(TESLA_TOKEN_URL, {
             method: 'POST',
             headers: {
@@ -56,69 +70,44 @@ export async function GET(request: NextRequest) {
             const errorData = await tokenResponse.json().catch(() => ({}));
             console.error('Tesla token error:', errorData);
             return NextResponse.redirect(
-                new URL(`/auth/login?error=${encodeURIComponent(errorData.error_description || 'Token exchange failed')}`, request.url)
+                new URL(
+                    `/auth/login?error=${encodeURIComponent(errorData.error_description || 'Token exchange failed')}`,
+                    request.url
+                )
             );
         }
 
         const tokens = await tokenResponse.json();
+        const discovery = await discoverTeslaVehicles(tokens.access_token);
 
-        // Get Supabase client and check if user is logged in
-        const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
-
-        if (user) {
-            // User is logged in, store tokens in database
-            // TODO: Encrypt tokens before storing
-            console.log('Tesla tokens received for user:', user.id);
-
-            // Fetch vehicles to get vehicle IDs
-            const vehiclesResponse = await fetch('https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles', {
-                headers: {
-                    Authorization: `Bearer ${tokens.access_token}`,
-                },
-            });
-
-            if (vehiclesResponse.ok) {
-                const vehiclesData = await vehiclesResponse.json();
-                console.log('Vehicles found:', vehiclesData.response?.length || 0);
-            }
+        if (!discovery.ok) {
+            console.error('Tesla vehicle discovery failed after OAuth callback:', discovery.error);
+            return NextResponse.redirect(
+                new URL('/auth/login?error=Tesla account validation failed', request.url)
+            );
         }
 
-        // Store tokens temporarily in session storage via URL hash
-        // In production, store encrypted in database
         const response = NextResponse.redirect(
-            new URL(`/dashboard?tesla_connected=true`, request.url)
+            new URL('/dashboard?tesla_connected=true', request.url)
         );
 
-        // Clear OAuth cookies
         response.cookies.delete('tesla_oauth_state');
         response.cookies.delete('tesla_code_verifier');
 
-        // Set token cookies (temporary - in production use encrypted DB storage)
-        const isLocalhost = request.nextUrl.hostname === 'localhost';
-        const isSecure = process.env.NODE_ENV === 'production' && !isLocalhost;
-
-        response.cookies.set('tesla_access_token', tokens.access_token, {
-            httpOnly: true,
-            secure: isSecure,
-            sameSite: 'lax',
-            maxAge: 30 * 24 * 60 * 60, // Extend session to 30 days in the browser
+        await setTeslaSession(request, response, {
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token,
+            region: discovery.region,
         });
-
-        if (tokens.refresh_token) {
-            response.cookies.set('tesla_refresh_token', tokens.refresh_token, {
-                httpOnly: true,
-                secure: isSecure,
-                sameSite: 'lax',
-                maxAge: 30 * 24 * 60 * 60, // 30 days
-            });
-        }
 
         return response;
     } catch (err) {
         console.error('Tesla OAuth error:', err);
         return NextResponse.redirect(
-            new URL('/auth/login?error=OAuth failed', request.url)
+            new URL(
+                `/auth/login?error=${encodeURIComponent(getOauthFailureMessage(err))}`,
+                request.url
+            )
         );
     }
 }

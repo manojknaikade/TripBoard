@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Zap, Key, ArrowLeft, Loader2, Info } from 'lucide-react';
+import { Key, ArrowLeft, Loader2, Info } from 'lucide-react';
 
 export default function ApiKeyPage() {
     const router = useRouter();
@@ -18,21 +18,15 @@ export default function ApiKeyPage() {
         setError(null);
 
         try {
-            // Validate the token by fetching vehicles
             const response = await fetch('/api/tesla/vehicles', {
                 method: 'POST',
+                credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ accessToken, refreshToken }),
             });
 
             if (!response.ok) {
                 throw new Error('Invalid token or API error');
-            }
-
-            // Store tokens securely (will be encrypted server-side)
-            localStorage.setItem('tesla_access_token', accessToken);
-            if (refreshToken) {
-                localStorage.setItem('tesla_refresh_token', refreshToken);
             }
 
             router.push('/dashboard');

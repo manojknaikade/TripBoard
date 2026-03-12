@@ -1,11 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import { useSettingsStore } from '@/stores/settingsStore';
 import {
-    Zap,
     ArrowLeft,
     Clock,
     MapPin,
@@ -90,7 +89,6 @@ function formatDateTime(dateString: string): string {
 
 export default function TripDetailPage() {
     const params = useParams();
-    const router = useRouter();
     const tripId = params.id as string;
     const [trip, setTrip] = useState<Trip | null>(null);
     const [loading, setLoading] = useState(true);
@@ -100,11 +98,7 @@ export default function TripDetailPage() {
     const [loadingAddresses, setLoadingAddresses] = useState(false);
     const { units } = useSettingsStore();
 
-    useEffect(() => {
-        fetchTripDetails();
-    }, [tripId]);
-
-    const fetchTripDetails = async () => {
+    const fetchTripDetails = useCallback(async () => {
         try {
             setLoading(true);
             const res = await fetch('/api/trips');
@@ -124,10 +118,14 @@ export default function TripDetailPage() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [tripId]);
 
     // Fetch addresses for start and end coordinates
-    const fetchAddresses = async () => {
+    useEffect(() => {
+        fetchTripDetails();
+    }, [fetchTripDetails]);
+
+    const fetchAddresses = useCallback(async () => {
         if (!trip) return;
 
         setLoadingAddresses(true);
@@ -166,14 +164,14 @@ export default function TripDetailPage() {
         }
 
         setLoadingAddresses(false);
-    };
+    }, [trip]);
 
     // Fetch addresses when trip loads
     useEffect(() => {
         if (trip) {
             fetchAddresses();
         }
-    }, [trip]);
+    }, [trip, fetchAddresses]);
 
     if (loading) {
         return (

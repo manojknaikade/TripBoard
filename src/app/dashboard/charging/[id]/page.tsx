@@ -1,11 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import { useSettingsStore } from '@/stores/settingsStore';
 import {
-    Zap,
     ArrowLeft,
     Clock,
     MapPin,
@@ -66,14 +65,12 @@ function formatDateTime(dateString: string): string {
 
 export default function ChargingDetailPage() {
     const params = useParams();
-    const router = useRouter();
     const sessionId = params.id as string;
 
     const [session, setSession] = useState<ChargingSession | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [address, setAddress] = useState<string>('');
-    const [loadingAddress, setLoadingAddress] = useState(false);
 
     // Cost Editor State
     const { currency: preferredCurrency } = useSettingsStore();
@@ -82,11 +79,7 @@ export default function ChargingDetailPage() {
     const [currencyInput, setCurrencyInput] = useState(preferredCurrency);
     const [savingCost, setSavingCost] = useState(false);
 
-    useEffect(() => {
-        fetchSessionDetails();
-    }, [sessionId]);
-
-    const fetchSessionDetails = async () => {
+    const fetchSessionDetails = useCallback(async () => {
         try {
             setLoading(true);
             const res = await fetch(`/api/charging/${sessionId}`);
@@ -103,12 +96,15 @@ export default function ChargingDetailPage() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [sessionId]);
 
-    const fetchAddressFromCoords = async () => {
+    useEffect(() => {
+        fetchSessionDetails();
+    }, [fetchSessionDetails]);
+
+    const fetchAddressFromCoords = useCallback(async () => {
         if (!session || (!session.latitude && !session.longitude)) return;
 
-        setLoadingAddress(true);
         if (session.location_name) {
             setAddress(session.location_name);
         } else {
@@ -124,14 +120,13 @@ export default function ChargingDetailPage() {
                 setAddress(`${session.latitude!.toFixed(4)}, ${session.longitude!.toFixed(4)}`);
             }
         }
-        setLoadingAddress(false);
-    };
+    }, [session]);
 
     useEffect(() => {
         if (session) {
             fetchAddressFromCoords();
         }
-    }, [session]);
+    }, [session, fetchAddressFromCoords]);
 
     const handleSaveCost = async () => {
         if (!session || !costInput) return;

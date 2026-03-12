@@ -233,3 +233,15 @@ CREATE TABLE public.vehicles (
   CONSTRAINT vehicles_pkey PRIMARY KEY (id),
   CONSTRAINT vehicles_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.profiles(id)
 );
+CREATE TABLE public.tesla_sessions (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  session_token_hash text NOT NULL UNIQUE,
+  access_token_encrypted text NOT NULL,
+  refresh_token_encrypted text,
+  token_expires_at timestamp with time zone,
+  region text NOT NULL DEFAULT 'eu'::text CHECK (region = ANY (ARRAY['na'::text, 'eu'::text, 'cn'::text])),
+  created_at timestamp with time zone DEFAULT now(),
+  updated_at timestamp with time zone DEFAULT now(),
+  last_used_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT tesla_sessions_pkey PRIMARY KEY (id)
+);

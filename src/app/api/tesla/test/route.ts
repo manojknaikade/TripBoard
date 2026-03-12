@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { fetchTeslaApi, normalizeTeslaRegion } from '@/lib/tesla/api';
+import { getTeslaSession } from '@/lib/tesla/auth-server';
 
 export async function GET(request: NextRequest) {
-    const accessToken = request.cookies.get('tesla_access_token')?.value;
+    const session = await getTeslaSession(request);
 
-    if (!accessToken) {
+    if (!session) {
         return NextResponse.json(
             { error: 'Not authenticated with Tesla. Please connect your Tesla account first.' },
             { status: 401 }
@@ -11,13 +13,8 @@ export async function GET(request: NextRequest) {
     }
 
     try {
-        // Test the connection by fetching vehicles
-        const response = await fetch('https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles', {
-            headers: {
-                Authorization: `Bearer ${accessToken}`,
-                'Content-Type': 'application/json',
-            },
-        });
+        const region = normalizeTeslaRegion(request.nextUrl.searchParams.get('region')) || session.region;
+        const response = await fetchTeslaApi(session.accessToken, region, '/api/1/vehicles');
 
         if (!response.ok) {
             const error = await response.json().catch(() => ({}));

@@ -2,17 +2,11 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { handleSignOut } from '@/lib/utils/auth';
 import {
-    Zap,
-    Gauge,
-    History,
-    BarChart3,
-    Settings,
-    LogOut,
     TrendingUp,
     TrendingDown,
     Battery,
+    Gauge,
     Navigation,
     Clock,
     Calendar,
@@ -31,46 +25,33 @@ import {
     ResponsiveContainer,
     BarChart,
     Bar,
-    PieChart,
-    Pie,
-    Cell,
-    LineChart,
-    Line
 } from 'recharts';
 import Header from '@/components/Header';
 import { useSettingsStore } from '@/stores/settingsStore';
-
-// Default fallback data
-const defaultWeeklyData = [
-    { day: 'Mon', distance: 0, energy: 0, trips: 0 },
-    { day: 'Tue', distance: 0, energy: 0, trips: 0 },
-    { day: 'Wed', distance: 0, energy: 0, trips: 0 },
-    { day: 'Thu', distance: 0, energy: 0, trips: 0 },
-    { day: 'Fri', distance: 0, energy: 0, trips: 0 },
-    { day: 'Sat', distance: 0, energy: 0, trips: 0 },
-    { day: 'Sun', distance: 0, energy: 0, trips: 0 },
-];
-
-const defaultEfficiencyData = [
-    { time: '6am', efficiency: 250 },
-    { time: '9am', efficiency: 265 },
-    { time: '12pm', efficiency: 260 },
-    { time: '3pm', efficiency: 258 },
-    { time: '6pm', efficiency: 275 },
-    { time: '9pm', efficiency: 252 },
-];
-
-const defaultChargingMix = [
-    { name: 'Home', value: 68, color: '#22c55e' },
-    { name: 'Supercharger', value: 25, color: '#ef4444' },
-    { name: 'Other', value: 7, color: '#6b7280' },
-];
 
 interface AnalyticTrip {
     id: string;
     date: string;
     distance: number;
     efficiency: number;
+}
+
+interface WeeklyDatum {
+    day: string;
+    distance: number;
+    energy: number;
+    trips: number;
+}
+
+interface EfficiencyDatum {
+    time: string;
+    efficiency: number;
+}
+
+interface ChargingMixDatum {
+    name: string;
+    value: number;
+    color: string;
 }
 
 interface AnalyticsData {
@@ -88,9 +69,9 @@ interface AnalyticsData {
             drivingTime: number;
         };
     };
-    weeklyData: typeof defaultWeeklyData;
-    efficiencyData: typeof defaultEfficiencyData;
-    chargingMix: typeof defaultChargingMix;
+    weeklyData: WeeklyDatum[];
+    efficiencyData: EfficiencyDatum[];
+    chargingMix: ChargingMixDatum[];
     leaderboard: {
         longest: AnalyticTrip | null;
         shortest: AnalyticTrip | null;

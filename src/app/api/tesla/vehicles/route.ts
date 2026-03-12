@@ -1,15 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
+import {
+    discoverTeslaVehicles,
+    fetchTeslaApi,
+    normalizeTeslaRegion,
+    type TeslaRegion,
+} from '@/lib/tesla/api';
+import { getTeslaSession, setTeslaSession } from '@/lib/tesla/auth-server';
 
-// Tesla Fleet API regional endpoints
-const REGIONAL_ENDPOINTS = {
-    na: 'https://fleet-api.prd.na.vn.cloud.tesla.com',
-    eu: 'https://fleet-api.prd.eu.vn.cloud.tesla.com',
-    cn: 'https://fleet-api.prd.cn.vn.cloud.tesla.cn',
-};
+async function fetchVehicles(accessToken: string, region: TeslaRegion) {
+    const response = await fetchTeslaApi(accessToken, region, '/api/1/vehicles');
+    const data = await response.json().catch(() => ({}));
+    return { response, data };
+}
 
 export async function POST(request: NextRequest) {
     try {
-        const { accessToken, region = 'na' } = await request.json();
+        const { accessToken, refreshToken, region } = await request.json();
 
         if (!accessToken) {
             return NextResponse.json(
@@ -18,25 +24,23 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        const baseUrl = REGIONAL_ENDPOINTS[region as keyof typeof REGIONAL_ENDPOINTS] || REGIONAL_ENDPOINTS.na;
-
-        const response = await fetch(`${baseUrl}/api/1/vehicles`, {
-            headers: {
-                Authorization: `Bearer ${accessToken}`,
-                'Content-Type': 'application/json',
-            },
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
+        const discovery = await discoverTeslaVehicles(accessToken, region);
+        if (!discovery.ok) {
             return NextResponse.json(
-                { error: errorData.error || 'Failed to fetch vehicles' },
-                { status: response.status }
+                { error: (discovery.error as { error?: string })?.error || 'Failed to fetch vehicles' },
+                { status: discovery.status }
             );
         }
 
-        const data = await response.json();
-        return NextResponse.json(data);
+        const appResponse = NextResponse.json(discovery.data);
+
+        await setTeslaSession(request, appResponse, {
+            accessToken,
+            refreshToken,
+            region: discovery.region,
+        });
+
+        return appResponse;
     } catch (error) {
         console.error('Tesla API error:', error);
         return NextResponse.json(
@@ -47,36 +51,43 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
-    // For authenticated users, get token from session
     const authHeader = request.headers.get('authorization');
-
-    if (!authHeader?.startsWith('Bearer ')) {
-        return NextResponse.json(
-            { error: 'Authorization required' },
-            { status: 401 }
-        );
-    }
-
-    const accessToken = authHeader.substring(7);
-    const region = request.nextUrl.searchParams.get('region') || 'na';
-    const baseUrl = REGIONAL_ENDPOINTS[region as keyof typeof REGIONAL_ENDPOINTS] || REGIONAL_ENDPOINTS.na;
+    const requestedRegion = normalizeTeslaRegion(request.nextUrl.searchParams.get('region'));
 
     try {
-        const response = await fetch(`${baseUrl}/api/1/vehicles`, {
-            headers: {
-                Authorization: `Bearer ${accessToken}`,
-                'Content-Type': 'application/json',
-            },
-        });
+        if (authHeader?.startsWith('Bearer ')) {
+            const accessToken = authHeader.substring(7);
+            const region = requestedRegion ?? 'eu';
+            const { response, data } = await fetchVehicles(accessToken, region);
+
+            if (!response.ok) {
+                return NextResponse.json(
+                    { error: (data as { error?: string })?.error || 'Failed to fetch vehicles' },
+                    { status: response.status }
+                );
+            }
+
+            return NextResponse.json(data);
+        }
+
+        const session = await getTeslaSession(request);
+        if (!session) {
+            return NextResponse.json(
+                { error: 'Authorization required' },
+                { status: 401 }
+            );
+        }
+
+        const region = requestedRegion ?? session.region;
+        const { response, data } = await fetchVehicles(session.accessToken, region);
 
         if (!response.ok) {
             return NextResponse.json(
-                { error: 'Failed to fetch vehicles' },
+                { error: (data as { error?: string })?.error || 'Failed to fetch vehicles' },
                 { status: response.status }
             );
         }
 
-        const data = await response.json();
         return NextResponse.json(data);
     } catch (error) {
         console.error('Tesla API error:', error);

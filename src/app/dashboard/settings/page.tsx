@@ -1,21 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
 import {
-    Zap,
-    Gauge,
-    History,
-    BarChart3,
-    Settings as SettingsIcon,
-    LogOut,
     Clock,
     Bell,
     Globe,
     Download,
     Check,
+    Gauge,
     MapPin,
     Banknote,
 } from 'lucide-react';
@@ -30,17 +22,23 @@ const LocationPicker = dynamic(() => import('@/components/settings/LocationPicke
     ssr: false
 });
 
+interface VehicleSummary {
+    id: number;
+    display_name: string;
+    vin: string;
+    state: string;
+}
+
 export default function SettingsPage() {
     const [saved, setSaved] = useState(false);
     const [mounted, setMounted] = useState(false);
     const [exporting, setExporting] = useState<'csv' | 'json' | null>(null);
     const [savingHome, setSavingHome] = useState(false);
-    const [vehicles, setVehicles] = useState<any[]>([]);
+    const [vehicles, setVehicles] = useState<VehicleSummary[]>([]);
     const [selectedVehicleId, setSelectedVehicleId] = useState<string>('');
     const [pushingConfig, setPushingConfig] = useState(false);
     const [configStatus, setConfigStatus] = useState<{ success: boolean; message: string } | null>(null);
 
-    const router = useRouter();
     const {
         pollingConfig,
         region,
@@ -95,12 +93,6 @@ export default function SettingsPage() {
         // Auto-save to database
         saveToDatabase();
         setTimeout(() => setSaved(false), 2000);
-    };
-
-    const handleSignOut = async () => {
-        const supabase = createClient();
-        await supabase.auth.signOut();
-        router.push('/auth/login');
     };
 
     const saveHomeLocation = async () => {
@@ -165,7 +157,7 @@ export default function SettingsPage() {
             } else {
                 setConfigStatus({ success: false, message: data.error || 'Failed to push configuration' });
             }
-        } catch (err) {
+        } catch {
             setConfigStatus({ success: false, message: 'Network error pushing configuration' });
         } finally {
             setPushingConfig(false);

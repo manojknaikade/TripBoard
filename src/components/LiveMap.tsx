@@ -5,6 +5,13 @@ import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 
+interface VehicleStatus {
+    lat: number;
+    lon: number;
+    speed?: number | null;
+    battery_level?: number | null;
+}
+
 // Fix for default marker icons in Next.js
 const defaultIcon = L.icon({
     iconUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon.png',
@@ -26,7 +33,7 @@ function Recenter({ lat, lon }: { lat: number; lon: number }) {
 }
 
 export default function LiveMap() {
-    const [vehicle, setVehicle] = useState<any>(null);
+    const [vehicle, setVehicle] = useState<VehicleStatus | null>(null);
 
     // Poll for updates
     useEffect(() => {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -15,14 +15,9 @@ export default function VehicleMap({ latitude, longitude, heading, vehicleName }
     const mapRef = useRef<L.Map | null>(null);
     const markerRef = useRef<L.Marker | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
-    const [mounted, setMounted] = useState(false);
 
     useEffect(() => {
-        setMounted(true);
-    }, []);
-
-    useEffect(() => {
-        if (!mounted || !containerRef.current) return;
+        if (!containerRef.current) return;
 
         // Initialize map if not already done
         if (!mapRef.current) {
@@ -82,20 +77,12 @@ export default function VehicleMap({ latitude, longitude, heading, vehicleName }
                 markerRef.current = null;
             }
         };
-    }, [mounted, latitude, longitude, heading, vehicleName]);
-
-    if (!mounted) {
-        return (
-            <div className="flex h-64 items-center justify-center rounded-xl bg-slate-700/30">
-                <div className="h-6 w-6 animate-spin rounded-full border-2 border-red-500 border-t-transparent" />
-            </div>
-        );
-    }
+    }, [latitude, longitude, heading, vehicleName]);
 
     return (
         <div
             ref={containerRef}
-            className="h-64 w-full overflow-hidden rounded-xl"
+            className="h-64 w-full overflow-hidden rounded-xl bg-slate-700/30"
             style={{ zIndex: 0 }}
         />
     );

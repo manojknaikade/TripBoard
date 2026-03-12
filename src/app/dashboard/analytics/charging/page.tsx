@@ -37,6 +37,17 @@ interface AnalyticsData {
     costBySource: Array<{ name: string; cost: number; color: string; }>;
 }
 
+interface TimeframeSelectorProps {
+    selected: string;
+    onSelect: (value: string) => void;
+    customStart: string;
+    customEnd: string;
+    onCustomStartChange: (value: string) => void;
+    onCustomEndChange: (value: string) => void;
+    showCustomPicker: boolean;
+    onToggleCustomPicker: () => void;
+}
+
 export default function ChargingAnalyticsPage() {
     const [timeframe, setTimeframe] = useState('7days');
     const [customStart, setCustomStart] = useState('');
@@ -293,7 +304,7 @@ function StatCard({ icon, label, value, color }: { icon: React.ReactNode; label:
     );
 }
 
-function TimeframeSelector({ selected, onSelect, customStart, customEnd, onCustomStartChange, onCustomEndChange, showCustomPicker, onToggleCustomPicker }: any) {
+function TimeframeSelector({ selected, onSelect, customStart, customEnd, onCustomStartChange, onCustomEndChange, showCustomPicker, onToggleCustomPicker }: TimeframeSelectorProps) {
     const options = [
         { id: 'week', label: 'This Week' }, { id: '7days', label: 'Last 7 Days' },
         { id: 'month', label: 'This Month' }, { id: '30days', label: 'Last 30 Days' },

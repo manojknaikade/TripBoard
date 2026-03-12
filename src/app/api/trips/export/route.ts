@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getTeslaSession } from '@/lib/tesla/auth-server';
 
 const MINIMUM_DISTANCE_MILES = 0.3;
 
@@ -129,8 +130,8 @@ function toCsv(items: any[]): string {
 }
 
 export async function GET(request: NextRequest) {
-    const accessToken = request.cookies.get('tesla_access_token')?.value;
-    if (!accessToken) {
+    const session = await getTeslaSession(request);
+    if (!session) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
@@ -206,4 +207,3 @@ export async function GET(request: NextRequest) {
         },
     });
 }
-

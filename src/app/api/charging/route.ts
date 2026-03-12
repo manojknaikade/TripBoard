@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getTeslaSession } from '@/lib/tesla/auth-server';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
-    const accessToken = request.cookies.get('tesla_access_token')?.value;
+    const session = await getTeslaSession(request);
 
-    if (!accessToken) {
+    if (!session) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 

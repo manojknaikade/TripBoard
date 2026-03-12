@@ -1,23 +1,16 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { handleSignOut } from '@/lib/utils/auth';
 import { useSettingsStore } from '@/stores/settingsStore';
 import {
-    Zap,
-    Gauge,
-    History,
-    BarChart3,
-    Settings,
-    LogOut,
     MapPin,
     Clock,
     Battery,
     Navigation,
     TrendingUp,
+    History,
     Calendar,
-    ChevronRight,
     Car,
     Loader2,
     Thermometer,
@@ -102,7 +95,7 @@ export default function TripsPage() {
     const [showCustomPicker, setShowCustomPicker] = useState(false);
 
     // Calculate date range based on timeframe
-    const getDateRange = () => {
+    const getDateRange = useCallback(() => {
         const toDate = new Date();
         toDate.setHours(23, 59, 59, 999);
         let fromDate = new Date();
@@ -142,9 +135,9 @@ export default function TripsPage() {
         }
 
         return { fromDate, toDate };
-    };
+    }, [timeframe, customStart, customEnd]);
 
-    const fetchTrips = async () => {
+    const fetchTrips = useCallback(async () => {
         setLoading(true);
         setError(null);
         try {
@@ -166,12 +159,12 @@ export default function TripsPage() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [getDateRange]);
 
     // Re-fetch when timeframe or custom dates change
     useEffect(() => {
         fetchTrips();
-    }, [timeframe, customStart, customEnd]);
+    }, [fetchTrips]);
 
     // Trips are already filtered server-side
     const filteredTrips = trips;
