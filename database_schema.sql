@@ -101,6 +101,38 @@ CREATE TABLE public.telemetry_raw (
   payload jsonb NOT NULL,
   CONSTRAINT telemetry_raw_pkey PRIMARY KEY (id)
 );
+CREATE TABLE public.temp_charging_sessions (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  vehicle_id uuid NOT NULL,
+  start_time timestamp with time zone NOT NULL,
+  end_time timestamp with time zone,
+  start_battery_pct double precision,
+  end_battery_pct double precision,
+  energy_added_kwh double precision,
+  charge_rate_kw double precision,
+  latitude double precision,
+  longitude double precision,
+  location_name text,
+  charger_type text,
+  cost_estimate double precision,
+  is_complete boolean DEFAULT false,
+  created_at timestamp with time zone DEFAULT now(),
+  cost_user_entered double precision,
+  currency text DEFAULT 'CHF'::text,
+  CONSTRAINT temp_charging_sessions_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.tesla_sessions (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  session_token_hash text NOT NULL UNIQUE,
+  access_token_encrypted text NOT NULL,
+  refresh_token_encrypted text,
+  token_expires_at timestamp with time zone,
+  region text NOT NULL DEFAULT 'eu'::text CHECK (region = ANY (ARRAY['na'::text, 'eu'::text, 'cn'::text])),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  last_used_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT tesla_sessions_pkey PRIMARY KEY (id)
+);
 CREATE TABLE public.trip_waypoints (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   trip_id uuid NOT NULL,
@@ -235,101 +267,3 @@ CREATE TABLE public.vehicles (
   CONSTRAINT vehicles_pkey PRIMARY KEY (id),
   CONSTRAINT vehicles_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.profiles(id)
 );
-CREATE TABLE public.tesla_sessions (
-  id uuid NOT NULL DEFAULT uuid_generate_v4(),
-  session_token_hash text NOT NULL UNIQUE,
-  access_token_encrypted text NOT NULL,
-  refresh_token_encrypted text,
-  token_expires_at timestamp with time zone,
-  region text NOT NULL DEFAULT 'eu'::text CHECK (region = ANY (ARRAY['na'::text, 'eu'::text, 'cn'::text])),
-  created_at timestamp with time zone DEFAULT now(),
-  updated_at timestamp with time zone DEFAULT now(),
-  last_used_at timestamp with time zone DEFAULT now(),
-  CONSTRAINT tesla_sessions_pkey PRIMARY KEY (id)
-);
-
-ALTER TABLE public.app_settings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.telemetry_raw ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.vehicle_status ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.temp_charging_sessions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.trips ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Service role can manage app settings"
-  ON public.app_settings FOR ALL TO service_role
-  USING (true)
-  WITH CHECK (true);
-
-CREATE POLICY "Service role can manage telemetry raw"
-  ON public.telemetry_raw FOR ALL TO service_role
-  USING (true)
-  WITH CHECK (true);
-
-CREATE POLICY "Users can view own notifications"
-  ON public.notifications FOR SELECT TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1
-      FROM public.vehicles vehicles
-      WHERE vehicles.id = notifications.vehicle_id
-        AND vehicles.user_id = auth.uid()
-    )
-  );
-
-CREATE POLICY "Service role can manage notifications"
-  ON public.notifications FOR ALL TO service_role
-  USING (true)
-  WITH CHECK (true);
-
-CREATE POLICY "Users can view own vehicle status"
-  ON public.vehicle_status FOR SELECT TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1
-      FROM public.vehicles vehicles
-      WHERE vehicles.user_id = auth.uid()
-        AND vehicles.vin = REPLACE(vehicle_status.vin, 'vehicle_device.', '')
-    )
-  );
-
-CREATE POLICY "Service role can manage vehicle status"
-  ON public.vehicle_status FOR ALL TO service_role
-  USING (true)
-  WITH CHECK (true);
-
-CREATE POLICY "Users can view own temp charging sessions"
-  ON public.temp_charging_sessions FOR SELECT TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1
-      FROM public.vehicles vehicles
-      WHERE vehicles.id = temp_charging_sessions.vehicle_id
-        AND vehicles.user_id = auth.uid()
-    )
-  );
-
-CREATE POLICY "Service role can manage temp charging sessions"
-  ON public.temp_charging_sessions FOR ALL TO service_role
-  USING (true)
-  WITH CHECK (true);
-
-CREATE POLICY "Users can view own trips"
-  ON public.trips FOR SELECT TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1
-      FROM public.vehicles vehicles
-      WHERE vehicles.user_id = auth.uid()
-        AND (
-          vehicles.vin = REPLACE(trips.vin, 'vehicle_device.', '')
-          OR vehicles.vin = trips.vehicle_id
-          OR vehicles.tesla_id = trips.vehicle_id
-          OR vehicles.id::text = trips.vehicle_id
-        )
-    )
-  );
-
-CREATE POLICY "Service role can manage trips"
-  ON public.trips FOR ALL TO service_role
-  USING (true)
-  WITH CHECK (true);
