@@ -2,9 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { fetchTeslaApi, normalizeTeslaRegion } from '@/lib/tesla/api';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
 
-// URL to your Vehicle Command Proxy
-const PROXY_URL = 'https://tripboard.manojnaikade.com:4443';
-
 // The CA cert (public key) from /opt/vehicle-proxy/config/public_key.pem
 const CA_CERT = `-----BEGIN CERTIFICATE-----
 MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
@@ -37,6 +34,44 @@ oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq
 mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d
 emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
 -----END CERTIFICATE-----`;
+
+function getTelemetryProxyConfig() {
+    const proxyUrl = process.env.TESLA_VEHICLE_COMMAND_PROXY_URL;
+    const telemetryHostname = process.env.TESLA_TELEMETRY_HOSTNAME;
+    const telemetryPortRaw = process.env.TESLA_TELEMETRY_PORT;
+
+    if (!proxyUrl) {
+        throw new Error('TESLA_VEHICLE_COMMAND_PROXY_URL is required');
+    }
+
+    if (!telemetryHostname) {
+        throw new Error('TESLA_TELEMETRY_HOSTNAME is required');
+    }
+
+    if (!telemetryPortRaw) {
+        throw new Error('TESLA_TELEMETRY_PORT is required');
+    }
+
+    const telemetryPort = parseInt(telemetryPortRaw, 10);
+
+    if (!Number.isFinite(telemetryPort) || telemetryPort <= 0) {
+        throw new Error('TESLA_TELEMETRY_PORT must be a valid positive integer');
+    }
+
+    let proxyHost: string;
+    try {
+        proxyHost = new URL(proxyUrl).hostname;
+    } catch {
+        throw new Error('TESLA_VEHICLE_COMMAND_PROXY_URL must be a valid URL');
+    }
+
+    return {
+        proxyUrl,
+        proxyHost,
+        telemetryHostname,
+        telemetryPort,
+    };
+}
 
 export async function POST(request: NextRequest) {
     const session = await getTeslaSession(request);
@@ -86,12 +121,22 @@ export async function POST(request: NextRequest) {
         );
     }
 
+    let proxyConfig: ReturnType<typeof getTelemetryProxyConfig>;
+    try {
+        proxyConfig = getTelemetryProxyConfig();
+    } catch (err) {
+        return NextResponse.json(
+            { error: err instanceof Error ? err.message : 'Invalid telemetry proxy configuration' },
+            { status: 500 }
+        );
+    }
+
     // Telemetry configuration per Tesla docs
     const telemetryConfig = {
         vins: [targetVin],
         config: {
-            hostname: 'tripboard.manojnaikade.com',
-            port: 443,
+            hostname: proxyConfig.telemetryHostname,
+            port: proxyConfig.telemetryPort,
             ca: CA_CERT,
             fields: {
                 Location: { interval_seconds: 10 },
@@ -130,7 +175,7 @@ export async function POST(request: NextRequest) {
     try {
         // Use Vehicle Command Proxy for signing
         const response = await fetch(
-            `${PROXY_URL}/api/1/vehicles/fleet_telemetry_config`,
+            `${proxyConfig.proxyUrl}/api/1/vehicles/fleet_telemetry_config`,
             {
                 method: 'POST',
                 headers: {
@@ -153,7 +198,7 @@ export async function POST(request: NextRequest) {
                 error: `Tesla API error (${response.status}): returned HTML instead of JSON`,
                 hint: response.status === 401 ? 'Access token may be expired - try signing out and back in' :
                     response.status === 403 ? 'Ensure your Vehicle Command Proxy is running and correctly configured' :
-                        'Check the proxy server logs at tripboard.manojnaikade.com',
+                        `Check the proxy server logs at ${proxyConfig.proxyHost}`,
                 details: responseText.slice(0, 200)
             }, { status: response.status === 200 ? 500 : response.status });
         }
@@ -194,6 +239,16 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'Vehicle ID required' }, { status: 400 });
     }
 
+    let proxyConfig: ReturnType<typeof getTelemetryProxyConfig>;
+    try {
+        proxyConfig = getTelemetryProxyConfig();
+    } catch (err) {
+        return NextResponse.json(
+            { error: err instanceof Error ? err.message : 'Invalid telemetry proxy configuration' },
+            { status: 500 }
+        );
+    }
+
     try {
         // We first need the VIN 
         const vehicleRes = await fetchTeslaApi(
@@ -215,7 +270,7 @@ export async function GET(request: NextRequest) {
 
         // Fetch telemetry config through proxy
         const response = await fetch(
-            `${PROXY_URL}/api/1/vehicles/${vin}/fleet_telemetry_config`,
+            `${proxyConfig.proxyUrl}/api/1/vehicles/${vin}/fleet_telemetry_config`,
             {
                 headers: {
                     Authorization: `Bearer ${session.accessToken}`,
@@ -271,6 +326,16 @@ export async function DELETE(request: NextRequest) {
         return NextResponse.json({ error: 'Vehicle ID required' }, { status: 400 });
     }
 
+    let proxyConfig: ReturnType<typeof getTelemetryProxyConfig>;
+    try {
+        proxyConfig = getTelemetryProxyConfig();
+    } catch (err) {
+        return NextResponse.json(
+            { error: err instanceof Error ? err.message : 'Invalid telemetry proxy configuration' },
+            { status: 500 }
+        );
+    }
+
     try {
         // We first need the VIN 
         const vehicleRes = await fetchTeslaApi(
@@ -288,7 +353,7 @@ export async function DELETE(request: NextRequest) {
 
         // Delete telemetry config through proxy
         const response = await fetch(
-            `${PROXY_URL}/api/1/vehicles/${vin}/fleet_telemetry_config`,
+            `${proxyConfig.proxyUrl}/api/1/vehicles/${vin}/fleet_telemetry_config`,
             {
                 method: 'DELETE',
                 headers: {

@@ -87,11 +87,16 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
    TESLA_CLIENT_ID=your_tesla_client_id
    TESLA_CLIENT_SECRET=your_tesla_client_secret
    NEXT_PUBLIC_TESLA_REDIRECT_URI=http://localhost:3000/api/auth/tesla/callback
+   TESLA_VEHICLE_COMMAND_PROXY_URL=https://your-vehicle-proxy.example.com:4443
+   TESLA_TELEMETRY_HOSTNAME=your-telemetry-host.example.com
+   TESLA_TELEMETRY_PORT=443
    
    # Encryption (used for Tesla token/session storage)
    # Generate with: openssl rand -base64 32
    TOKEN_ENCRYPTION_KEY=your_random_32_byte_string
    ```
+
+   `TESLA_VEHICLE_COMMAND_PROXY_URL` is the Vehicle Command Proxy the app talks to for fleet telemetry config operations. `TESLA_TELEMETRY_HOSTNAME` and `TESLA_TELEMETRY_PORT` are the host/port Tesla vehicles should stream telemetry to.
 
 4. **Database Setup**
    Use `supabase/schema.sql` as the bootstrap schema for a fresh Supabase project.

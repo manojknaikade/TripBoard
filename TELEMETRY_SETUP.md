@@ -1,79 +1,117 @@
-# How We Built the Tesla Telemetry Ingester
+# Telemetry Setup
 
-## 1. The Challenge
+This document describes the current TripBoard telemetry architecture and the steps required to run it safely in development and production.
 
-Tesla's Fleet Telemetry sends data in a proprietary binary format over WebSockets.
+## Overview
 
-- **Protocol:** WebSocket (Secure w/ mTLS)
-- **Format:** `FlatBuffers` (Envelope) wrapping a `Protobuf` (Payload).
-- **Difficulty:** Decoding requires the specific Schema definitions (`.fbs` and `.proto` files).
+TripBoard uses Tesla Fleet Telemetry with a two-part backend:
 
-## 2. The Solution
+1. A Go telemetry ingester receives Tesla telemetry over HTTPS/WSS with mTLS.
+2. Supabase stores raw events in `telemetry_raw` and derives application data with database functions and triggers.
 
-We built a custom **Go Server** on an Oracle VM.
-We chose **Go** (Golang) because Tesla's official repository is written in Go, which allowed us to import their decoder libraries directly, avoiding the need to manually reverse-engineer the binary schemas.
+The Go ingester is responsible only for transport, decoding, and raw ingestion.
+Trip detection, charging-session detection, and related state updates happen in Supabase.
 
-### Architecture
+## Current Architecture
 
-1. **Ingester (Go):** Listens on port 443 (HTTPS/WSS).
-2. **Authentication:** Validates the Client Certificate (mTLS) from the car.
-3. **Decoding:**
-    - Strips the **FlatBuffers** header.
-    - Decodes the **Protobuf** payload into a struct.
-4. **Storage:** Converts the data to JSON and pushes it to **Supabase** (`telemetry_raw` table).
-   The deployed Go binary reads `SUPABASE_URL` and `SUPABASE_KEY` from its environment. `SUPABASE_KEY` must be set to the Supabase service role key.
+### Ingestion
 
-## 3. Implementation Steps
+- The Go ingester listens on port `443`.
+- Tesla vehicles connect to the ingester using Fleet Telemetry.
+- The ingester decodes Tesla messages and writes JSON payloads into `public.telemetry_raw`.
+- The ingester uses `SUPABASE_URL` and `SUPABASE_KEY` from its runtime environment.
+- `SUPABASE_KEY` must be the Supabase service role key.
 
-### Step A: Server Setup (Oracle VM)
+### Database Processing
 
-1. **Install Go:** `sudo apt-get install golang-go`
-2. **Clone Tesla Repo:**
+Supabase owns the application-side telemetry processing:
 
-    ```bash
-    git clone https://github.com/teslamotors/fleet-telemetry.git /opt/tesla-telemetry/fleet-telemetry
-    ```
+- `public.process_telemetry()` updates `vehicle_status`
+- `public.process_telemetry()` detects trip start and trip end
+- `public.process_telemetry()` detects charging-session start and charging-session completion
+- `public.reconcile_stale_charging_sessions(interval)` closes stale open charging sessions when explicit end events are missing
 
-3. **Initialize Decoder Module:**
-    We created a new Go module (`tripboard-telemetry`) and linked it to the local `fleet-telemetry` folder to use its packages.
+Relevant migrations:
 
-### Step B: The Code (`main.go`)
+- [supabase/migrations/20260311000000_trip_temperature_trigger.sql](/Users/manojnaikade/Documents/TripBoard/supabase/migrations/20260311000000_trip_temperature_trigger.sql)
+- [supabase/migrations/20260313000000_fix_notifications.sql](/Users/manojnaikade/Documents/TripBoard/supabase/migrations/20260313000000_fix_notifications.sql)
+- [supabase/migrations/20260313010000_move_charging_detection_to_db.sql](/Users/manojnaikade/Documents/TripBoard/supabase/migrations/20260313010000_move_charging_detection_to_db.sql)
 
-The core logic resides in a single Go file that:
+### App-Side Telemetry Configuration
 
-1. Starts a WebSocket Server using `github.com/gorilla/websocket`.
-2. Reads the binary message.
-3. Calls `messages.StreamMessageFromBytes(msg)` (Tesla's library) to unwrap the FlatBuffer.
-4. Calls `proto.Unmarshal` to decode the Payload.
-5. Sends the JSON to Supabase via HTTP POST.
+The Next.js app configures Tesla Fleet Telemetry through:
 
-### Step C: Database (Supabase)
+- [src/app/api/tesla/telemetry-config/route.ts](/Users/manojnaikade/Documents/TripBoard/src/app/api/tesla/telemetry-config/route.ts)
 
-We created a table `telemetry_raw` to store the raw JSON.
-This allows us to save *everything* now and figure out complex queries (like Trip Detection) later using SQL Triggers.
+That route talks to the Vehicle Command Proxy and tells Tesla vehicles which host and port to stream telemetry to.
 
-## 4. Running as a Systemd Service
+## Prerequisites
 
-The ingester runs as a systemd service for automatic startup and reliability.
+- A Supabase project
+- A working Tesla Fleet API application
+- A Vehicle Command Proxy
+- A public HTTPS endpoint for the Go ingester
+- TLS and mTLS correctly configured for Tesla Fleet Telemetry
+- A deployed Next.js app with the required server-side env vars
 
-**Service file:** `/etc/systemd/system/tesla-ingester.service`
+## Required Environment Variables
 
-Recommended secret handling:
+### Next.js App
 
-1. Store secrets in `/home/ubuntu/.env`
-2. Reference that file from systemd with `EnvironmentFile=/home/ubuntu/.env`
-3. Keep `/home/ubuntu/.env` at `chmod 600`
-4. Set `SUPABASE_KEY` in that file to the Supabase service role key
+Set these in local `.env.local` and in production on Vercel:
 
-Example:
+```dotenv
+TESLA_VEHICLE_COMMAND_PROXY_URL=https://your-vehicle-proxy.example.com:4443
+TESLA_TELEMETRY_HOSTNAME=your-telemetry-host.example.com
+TESLA_TELEMETRY_PORT=443
+```
+
+Meaning:
+
+- `TESLA_VEHICLE_COMMAND_PROXY_URL`: base URL of the Vehicle Command Proxy used by the app
+- `TESLA_TELEMETRY_HOSTNAME`: hostname written into Tesla fleet telemetry configuration
+- `TESLA_TELEMETRY_PORT`: port written into Tesla fleet telemetry configuration
+
+These variables are required. The telemetry-config route no longer falls back to hardcoded production values.
+
+### Go Ingester
+
+Set these on the telemetry server:
 
 ```dotenv
 SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
 SUPABASE_KEY=your_service_role_key
 ```
 
-Recommended unit:
+Optional aliases may still exist in your environment, but the deployed ingester expects `SUPABASE_KEY`.
+
+## Supabase Setup
+
+Use:
+
+- [supabase/schema.sql](/Users/manojnaikade/Documents/TripBoard/supabase/schema.sql) for the bootstrap schema
+- `supabase/migrations/*` for incremental changes
+
+Do not use [database_schema.sql](/Users/manojnaikade/Documents/TripBoard/database_schema.sql) for setup. It is a copied reference snapshot only.
+
+Required telemetry-related tables and functions:
+
+- `public.telemetry_raw`
+- `public.vehicle_status`
+- `public.trips`
+- `public.charging_sessions`
+- `public.process_telemetry()`
+- `public.reconcile_stale_charging_sessions(interval)`
+
+## Go Ingester Deployment
+
+### Recommended Location
+
+- working directory: `/opt/tesla-telemetry/go-decoder`
+- service file: `/etc/systemd/system/tesla-ingester.service`
+- env file: `/home/ubuntu/.env`
+
+### Recommended systemd Unit
 
 ```ini
 [Unit]
@@ -92,58 +130,179 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-```bash
-# Check status
-sudo systemctl status tesla-ingester
+### Recommended Secret Handling
 
-# View logs (live)
-sudo journalctl -u tesla-ingester -f
+1. Store secrets only in `/home/ubuntu/.env`
+2. Keep the file private with `chmod 600 /home/ubuntu/.env`
+3. Do not hardcode Supabase credentials in the systemd unit
+4. Use the Supabase service role key for telemetry ingestion
 
-# Restart if needed
-sudo systemctl restart tesla-ingester
-
-# Stop/Start
-sudo systemctl stop tesla-ingester
-sudo systemctl start tesla-ingester
-```
-
-## 5. Building the Binary
+### Build
 
 ```bash
 cd /opt/tesla-telemetry/go-decoder
 go build -o ingest main.go
 ```
 
-## 6. Result
+### Service Operations
 
-- **Latency:** Real-time (<500ms).
-- **Data:** Full vehicle telemetry (Speed, Location, Battery, Temperature).
-- **Stability:** Handles disconnects and auto-restarts via systemd.
-- **DetailedChargeState:** Migrated to the modern `DetailedChargeState` for robust charging analytics.
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable tesla-ingester
+sudo systemctl restart tesla-ingester
+sudo systemctl status tesla-ingester
+sudo journalctl -u tesla-ingester -f
+```
 
-## 7. Key Learnings (DetailedChargeState Migration)
+## Tesla Fleet Telemetry Configuration
 
-During our migration to `DetailedChargeState`, we discovered several critical aspects of Tesla's telemetry:
+TripBoard pushes telemetry configuration through the app, not manually from the server.
 
-### A. Field Deprecation
+The app route:
 
-Tesla has deprecated the standard `ChargeState` field in favor of `DetailedChargeState`. Using the legacy field may result in `invalid` or missing data in the stream.
+- resolves the vehicle VIN when needed
+- calls the Vehicle Command Proxy
+- configures Tesla telemetry to stream to `TESLA_TELEMETRY_HOSTNAME:TESLA_TELEMETRY_PORT`
 
-### B. Enum Format Discrepancies
+Fields currently configured include:
 
-The new `DetailedChargeState` uses prefixed string values in its Protobuf definitions. While the old field sent `"Charging"`, the new one sends `"DetailedChargeStateCharging"`. Our Supabase processing must handle both for backward compatibility.
+- `Location`
+- `BatteryLevel`
+- `Odometer`
+- `VehicleSpeed`
+- `Gear`
+- `InsideTemp`
+- `OutsideTemp`
+- `DetailedChargeState`
+- `FastChargerPresent`
+- `FastChargerType`
+- `LocatedAtHome`
+- `DCChargingEnergyIn`
+- `ACChargingEnergyIn`
+- `ACChargingPower`
+- `DCChargingPower`
+- `DoorState`
+- `TpmsPressureFl`
+- `TpmsPressureFr`
+- `TpmsPressureRl`
+- `TpmsPressureRr`
+- `Version`
+- `EstBatteryRange`
+- `RatedRange`
+- `FdWindow`
+- `FpWindow`
+- `RdWindow`
+- `RpWindow`
 
-### C. Active Configuration Pushing
+## Charging and Trip Detection
 
-Updating the code logic *does not* automatically change what the car streams. A explicit `POST` to the `fleet-telemetry-config-create` endpoint is required to update the car's field list. We integrated a **"Push Configuration"** button in the App Settings to automate this process.
+### Trips
 
-### D. Database Trigger Logic
+Trips are derived in Supabase from telemetry state transitions, primarily gear changes:
 
-Trip and charging-session detection now live directly inside Supabase in the `process_telemetry()` trigger function on `telemetry_raw`. The Go ingester is only responsible for receiving Tesla Fleet Telemetry and writing raw payloads into Supabase.
+- `D` or `R` starts a trip if no active trip exists
+- `P` completes the active trip
 
-For long-running edge cases, Supabase can also close stale open charging sessions with `reconcile_stale_charging_sessions(interval '15 minutes')`. If you enable `pg_cron`, schedule it every 10-15 minutes so the database can clean up any session that never received an explicit `Complete` or `Disconnected` event.
-Once that migration is applied, stop any legacy `vps-telemetry-server.js` process on the VPS so only the database trigger owns charging-session creation.
+### Charging Sessions
 
-### E. Extracting Location Names (Reverse Geocoding)
+Charging sessions are derived in Supabase from charge-state and power telemetry:
 
-Tesla's raw telemetry stream only transmits raw `Latitude` and `Longitude` coordinates. There is no string representing the town or physical address. The current charging detector does not depend on reverse geocoding; it stores coordinates directly in `charging_sessions`, and the app can enrich addresses separately when needed.
+- `DetailedChargeStateCharging` or `DetailedChargeStateStarting` starts a session
+- completion states finish the session
+- charger type is classified from fast-charger flags, power, and home-location context
+
+### Stale Session Reconciliation
+
+If telemetry does not send an explicit charging end event, stale sessions can be closed with:
+
+```sql
+select public.reconcile_stale_charging_sessions(interval '15 minutes');
+```
+
+If `pg_cron` is enabled, schedule that function every 10 to 15 minutes.
+
+## Production Cutover Notes
+
+The legacy Node charging detector is no longer part of the intended production path.
+
+If an old `vps-telemetry-server.js` process is still running, stop it after the Supabase charging-session migration is applied. Running both systems at the same time can create duplicate `charging_sessions` writes.
+
+## Verification Checklist
+
+After deployment, verify:
+
+1. `tesla-ingester.service` is active
+2. New rows are appearing in `public.telemetry_raw`
+3. `process_telemetry()` is updating `vehicle_status`
+4. Trips are being created in `public.trips`
+5. Charging sessions are being created in `public.charging_sessions`
+6. The telemetry-config API works from the app
+7. The Vehicle Command Proxy is reachable from the app
+
+Useful checks:
+
+```bash
+sudo systemctl status tesla-ingester
+sudo journalctl -u tesla-ingester -f
+```
+
+```sql
+select created_at, vin
+from public.telemetry_raw
+order by created_at desc
+limit 20;
+```
+
+```sql
+select *
+from public.vehicle_status
+order by updated_at desc
+limit 20;
+```
+
+## Troubleshooting
+
+### Telemetry Config API Returns Server Configuration Error
+
+Check that these exist in the Next.js runtime environment:
+
+- `TESLA_VEHICLE_COMMAND_PROXY_URL`
+- `TESLA_TELEMETRY_HOSTNAME`
+- `TESLA_TELEMETRY_PORT`
+
+### No New Rows in `telemetry_raw`
+
+Check:
+
+- ingester service status
+- TLS and mTLS setup
+- Tesla Fleet Telemetry configuration
+- server logs
+- Supabase service role key on the ingester host
+
+### Charging Sessions Not Closing
+
+Check:
+
+- `DetailedChargeState` is included in the Tesla telemetry config
+- `process_telemetry()` migration is applied
+- `reconcile_stale_charging_sessions()` is scheduled if you rely on stale-session cleanup
+
+### Readable Location Names Are Missing
+
+This is expected in the current design.
+
+The DB-side charging detector stores coordinates in `charging_sessions`. Human-readable addresses can be enriched separately in the app if needed.
+
+### TLS Handshake Noise in Ingester Logs
+
+Public port `443` will attract scanner traffic. Random TLS handshake errors from unknown Internet clients do not necessarily indicate a Tesla integration failure.
+
+Validate ingestion by checking for fresh rows in `telemetry_raw` rather than assuming every TLS error is application-impacting.
+
+## Notes
+
+- Tesla has moved from legacy `ChargeState` toward `DetailedChargeState`
+- `DetailedChargeState` values may arrive with prefixes such as `DetailedChargeStateCharging`
+- TripBoard normalizes those values in Supabase processing
+- updating the app alone does not change the car stream; Tesla telemetry configuration must be pushed again when field definitions change
