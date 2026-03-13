@@ -136,7 +136,7 @@ src/
 ├── stores/               # Zustand state stores
 └── types/                # TypeScript type definitions
 scripts/
-├── telemetry-server.js   # Tesla telemetry ingest server
+├── telemetry-server.js   # Legacy/local Node telemetry prototype
 supabase/
 ├── schema.sql            # Canonical bootstrap schema for fresh projects
 └── migrations/           # Incremental database changes
@@ -150,8 +150,10 @@ TripBoard uses a **database-level trigger** (`process_telemetry`) on the `teleme
 - Detect trip start/end based on gear changes (D/R → start, P → end)
 - Track outside temperature (min/max/avg) during active trips
 - Detect and record charging sessions with charger type classification
+- Reconcile stale open charging sessions with `reconcile_stale_charging_sessions()`
 
 The Go telemetry server on the VPS ingests raw Tesla Fleet Telemetry and inserts into `telemetry_raw`. All trip/charging logic runs as PL/pgSQL triggers in Supabase.
+The legacy `scripts/vps-telemetry-server.js` charging detector is no longer part of the intended production path.
 The production `tesla-ingester.service` now loads its Supabase credentials from `/home/ubuntu/.env` via `EnvironmentFile=` instead of hardcoding secrets in the unit file. The Go binary expects `SUPABASE_KEY`, and that value should be the Supabase service role key.
 
 ## Security Notes

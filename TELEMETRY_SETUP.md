@@ -131,17 +131,18 @@ Tesla has deprecated the standard `ChargeState` field in favor of `DetailedCharg
 
 ### B. Enum Format Discrepancies
 
-The new `DetailedChargeState` uses prefixed string values in its Protobuf definitions. While the old field sent `"Charging"`, the new one sends `"DetailedChargeStateCharging"`. Our `telemetry-server.js` and database triggers must handle both for backward compatibility.
+The new `DetailedChargeState` uses prefixed string values in its Protobuf definitions. While the old field sent `"Charging"`, the new one sends `"DetailedChargeStateCharging"`. Our Supabase processing must handle both for backward compatibility.
 
 ### C. Active Configuration Pushing
 
 Updating the code logic *does not* automatically change what the car streams. A explicit `POST` to the `fleet-telemetry-config-create` endpoint is required to update the car's field list. We integrated a **"Push Configuration"** button in the App Settings to automate this process.
 
-### D. Dual Processing Logic
+### D. Database Trigger Logic
 
-While a Go ingester handles the high-performance binary-to-JSON conversion and raw storage, we use a separate **Node.js Telemetry Processor** on the VPS to handle complex state transitions (like identifying the start and end of a charging session and updating the `charging_sessions` table).
+Trip and charging-session detection now live directly inside Supabase in the `process_telemetry()` trigger function on `telemetry_raw`. The Go ingester is only responsible for receiving Tesla Fleet Telemetry and writing raw payloads into Supabase.
+
+For long-running edge cases, Supabase can also close stale open charging sessions with `reconcile_stale_charging_sessions(interval '15 minutes')`. If you enable `pg_cron`, schedule it every 10-15 minutes so the database can clean up any session that never received an explicit `Complete` or `Disconnected` event.
 
 ### E. Extracting Location Names (Reverse Geocoding)
 
-Tesla's raw telemetry stream only transmits raw `Latitude` and `Longitude` coordinates. There is no string representing the town or physical address. To resolve this, our Node.js VPS script (`vps-telemetry-server.js`) utilizes the **OpenStreetMap Nominatim API**.
-When a new charging session begins, the VPS executes an internal `https.get` request (supplying the essential `User-Agent` header) to reverse-geocode those coordinates back into a city or street name. This derived string is then permanently written directly to the Supabase `location_name` column, ensuring the web application's Charging grid displays meaningful human-readable addresses instantly without front-end rate limiting!
+Tesla's raw telemetry stream only transmits raw `Latitude` and `Longitude` coordinates. There is no string representing the town or physical address. The current charging detector does not depend on reverse geocoding; it stores coordinates directly in `charging_sessions`, and the app can enrich addresses separately when needed.

@@ -120,7 +120,7 @@ def build_pdf():
                 "<b>Server layer:</b> Next.js API routes handle Tesla OAuth, Tesla Fleet API requests, trip/charging/settings CRUD, exports, geocoding, vehicle status, and notifications.",
                 "<b>Data layer:</b> Supabase stores <font name='Courier'>user_settings</font>, <font name='Courier'>trips</font>, <font name='Courier'>charging_sessions</font>, <font name='Courier'>vehicle_status</font>, <font name='Courier'>telemetry_raw</font>, and <font name='Courier'>notifications</font>.",
                 "<b>Data flow:</b> UI calls app API routes; routes either query Tesla Fleet API directly or read processed telemetry/status from Supabase; results are shaped for the dashboard and history pages.",
-                "<b>Telemetry path:</b> Repo docs and scripts describe an external Go ingester receiving Tesla telemetry and writing JSON to Supabase, plus a Node.js processor/VPS script for charging and state transition handling.",
+                "<b>Telemetry path:</b> Repo docs and scripts describe an external Go ingester receiving Tesla telemetry and writing JSON to Supabase, while database triggers in Supabase derive trips and charging sessions from raw telemetry.",
             ],
             bullet_style,
         ),
@@ -130,7 +130,7 @@ def build_pdf():
             [
                 "Install dependencies: <font name='Courier'>npm install</font>.",
                 "Create <font name='Courier'>.env.local</font> from repo examples and set Supabase URL/key, Tesla client ID/secret, redirect URI, and token encryption key.",
-                "Run the SQL setup in Supabase: <font name='Courier'>database_schema.sql</font>, then <font name='Courier'>scripts/create-app-settings.sql</font>.",
+                "Run the SQL setup in Supabase from <font name='Courier'>supabase/schema.sql</font> and <font name='Courier'>supabase/migrations/</font>, then initialize the default app settings row if needed.",
                 "Start the app with <font name='Courier'>npm run dev</font> and open <font name='Courier'>http://localhost:3000</font>.",
                 "Optional for telemetry mode: follow <font name='Courier'>TELEMETRY_SETUP.md</font> and related scripts to feed live telemetry into Supabase.",
             ],
