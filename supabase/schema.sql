@@ -294,6 +294,7 @@ CREATE INDEX IF NOT EXISTS idx_vehicles_user_id ON vehicles(user_id);
 CREATE INDEX IF NOT EXISTS idx_trips_vehicle_id ON trips(vehicle_id);
 CREATE INDEX IF NOT EXISTS idx_trips_start_time ON trips(start_time DESC);
 CREATE INDEX IF NOT EXISTS idx_trip_waypoints_trip_id ON trip_waypoints(trip_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_trip_waypoints_trip_id_timestamp ON trip_waypoints(trip_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_charging_sessions_vehicle_id ON charging_sessions(vehicle_id);
 CREATE INDEX IF NOT EXISTS idx_vehicle_snapshots_vehicle_id_timestamp ON vehicle_snapshots(vehicle_id, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(vehicle_id, is_read, created_at DESC);

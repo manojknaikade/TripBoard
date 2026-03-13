@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import Header from '@/components/Header';
 import dynamic from 'next/dynamic';
+import type { TripRoutePoint } from '@/lib/trips/routePoints';
 
 const TripDetailMap = dynamic(() => import('@/components/TripDetailMap'), {
     loading: () => <div className="h-96 w-full animate-pulse rounded-xl bg-slate-800" />,
@@ -118,6 +119,7 @@ export default function TripDetailPage() {
     const [error, setError] = useState<string | null>(null);
     const [startAddress, setStartAddress] = useState<string>('');
     const [endAddress, setEndAddress] = useState<string>('');
+    const [routePoints, setRoutePoints] = useState<TripRoutePoint[]>([]);
     const [loadingAddresses, setLoadingAddresses] = useState(false);
     const { units } = useSettingsStore();
 
@@ -130,18 +132,22 @@ export default function TripDetailPage() {
 
             if (!res.ok) {
                 setTrip(null);
+                setRoutePoints([]);
                 setError(data.error || 'Trip not found');
                 return;
             }
 
             if (data.success && data.trip) {
                 setTrip(data.trip);
+                setRoutePoints(Array.isArray(data.route_points) ? data.route_points : []);
             } else {
                 setTrip(null);
+                setRoutePoints([]);
                 setError('Trip not found');
             }
         } catch (err) {
             console.error('Failed to fetch trip:', err);
+            setRoutePoints([]);
             setError('Failed to load trip details');
         } finally {
             setLoading(false);
@@ -263,6 +269,7 @@ export default function TripDetailPage() {
                             startLng={trip.start_longitude!}
                             endLat={trip.end_latitude}
                             endLng={trip.end_longitude}
+                            routePoints={routePoints}
                         />
                     </div>
                 )}
