@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import Header from '@/components/Header';
 import dynamic from 'next/dynamic';
+import type { TripRoutePoint } from '@/lib/trips/routePoints';
 
 // Dynamic import to avoid SSR issues with Leaflet
 const TripMiniMap = dynamic(() => import('@/components/TripMiniMap'), {
@@ -43,6 +44,7 @@ interface Trip {
     end_battery_level: number | null;
     avg_outside_temp: number | null;
     status: string;
+    route_points?: TripRoutePoint[];
 }
 
 function formatDuration(seconds: number): string {
@@ -150,7 +152,9 @@ export default function TripsPage() {
                 from: fromDate.toISOString(),
                 to: toDate.toISOString(),
             });
-            const response = await fetch(`/api/trips?${params}`);
+            const response = await fetch(`/api/trips?${params}`, {
+                cache: 'no-store',
+            });
             const data = await response.json();
 
             if (data.success) {
@@ -351,10 +355,12 @@ function TripCard({ trip, units }: { trip: Trip; units: 'imperial' | 'metric' })
                 {hasCoords && (
                     <div className="hidden sm:block h-24 w-32 flex-shrink-0 rounded-lg overflow-hidden border border-slate-600/50 z-0 relative">
                         <TripMiniMap
+                            key={`${trip.id}-${trip.route_points?.length || 0}-${trip.start_latitude}-${trip.start_longitude}-${trip.end_latitude ?? 'open'}-${trip.end_longitude ?? 'open'}`}
                             startLat={trip.start_latitude}
                             startLon={trip.start_longitude}
                             endLat={trip.end_latitude}
                             endLon={trip.end_longitude}
+                            routePoints={trip.route_points || []}
                         />
                     </div>
                 )}

@@ -1,9 +1,160 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
+import {
+    dedupeRoutePoints,
+    extractRoutePointFromTelemetry,
+    sampleRoutePoints,
+    type TripRoutePoint,
+} from '@/lib/trips/routePoints';
 
 async function getSupabase() {
     return createAdminClient();
+}
+
+type TripWaypointRow = {
+    trip_id: string;
+    timestamp: string;
+    latitude: number;
+    longitude: number;
+};
+
+type TelemetryRawRow = {
+    timestamp: string;
+    payload: {
+        data?: Array<{
+            key?: string;
+            value?: Record<string, unknown>;
+        }>;
+    } | null;
+};
+
+type TripWithVin = {
+    id: string;
+    vin: string;
+    start_time: string;
+    end_time: string | null;
+};
+
+type TripForVinResolution = {
+    id: string;
+    vin: string | null;
+    vehicle_id: string | null;
+    start_time: string;
+    end_time: string | null;
+};
+
+async function resolveTripsWithVin(
+    supabase: Awaited<ReturnType<typeof getSupabase>>,
+    trips: TripForVinResolution[]
+) {
+    const vehicleIds = Array.from(
+        new Set(
+            trips
+                .map((trip) => trip.vehicle_id)
+                .filter((vehicleId): vehicleId is string =>
+                    typeof vehicleId === 'string' && !vehicleId.startsWith('vehicle_device.')
+                )
+        )
+    );
+
+    const vehicleVinMap = new Map<string, string>();
+
+    if (vehicleIds.length > 0) {
+        const { data: vehicles, error } = await supabase
+            .from('vehicles')
+            .select('id, vin')
+            .in('id', vehicleIds);
+
+        if (error) {
+            throw error;
+        }
+
+        for (const vehicle of vehicles || []) {
+            if (vehicle.id && vehicle.vin) {
+                vehicleVinMap.set(vehicle.id, vehicle.vin);
+            }
+        }
+    }
+
+    return trips.flatMap((trip) => {
+        const resolvedVin =
+            trip.vin
+            || (trip.vehicle_id?.startsWith('vehicle_device.') ? trip.vehicle_id : null)
+            || (trip.vehicle_id ? vehicleVinMap.get(trip.vehicle_id) || null : null);
+
+        if (!resolvedVin) {
+            return [];
+        }
+
+        return [{
+            id: trip.id,
+            vin: resolvedVin,
+            start_time: trip.start_time,
+            end_time: trip.end_time,
+        }];
+    });
+}
+
+async function loadThumbnailRoutePoints(
+    supabase: Awaited<ReturnType<typeof getSupabase>>,
+    tripId: string,
+    vin: string | null,
+    startTime: string,
+    endTime: string | null
+) {
+    const { data: waypointRows, error: waypointError } = await supabase
+        .from('trip_waypoints')
+        .select('trip_id, timestamp, latitude, longitude')
+        .eq('trip_id', tripId)
+        .order('timestamp', { ascending: true });
+
+    if (waypointError) {
+        throw waypointError;
+    }
+
+    if (waypointRows && waypointRows.length > 0) {
+        const points = (waypointRows as TripWaypointRow[]).map((row) => ({
+            timestamp: row.timestamp,
+            latitude: row.latitude,
+            longitude: row.longitude,
+            speed_mph: null,
+            battery_level: null,
+            odometer: null,
+            heading: null,
+        }));
+
+        return sampleRoutePoints(dedupeRoutePoints(points), 24);
+    }
+
+    if (!vin) {
+        return [];
+    }
+
+    const fromTimestamp = new Date(new Date(startTime).getTime() - 30_000).toISOString();
+    const toTimestamp = new Date(
+        endTime
+            ? new Date(endTime).getTime() + 30_000
+            : Date.now()
+    ).toISOString();
+
+    const { data: telemetryRows, error: telemetryError } = await supabase
+        .from('telemetry_raw')
+        .select('timestamp, payload')
+        .eq('vin', vin)
+        .gte('timestamp', fromTimestamp)
+        .lte('timestamp', toTimestamp)
+        .order('timestamp', { ascending: true });
+
+    if (telemetryError) {
+        throw telemetryError;
+    }
+
+    const parsedPoints = ((telemetryRows || []) as TelemetryRawRow[])
+        .map((row) => extractRoutePointFromTelemetry(row.timestamp, row.payload))
+        .filter((point): point is TripRoutePoint => point !== null);
+
+    return sampleRoutePoints(dedupeRoutePoints(parsedPoints), 24);
 }
 
 // GET - List trips for the authenticated user
@@ -65,6 +216,44 @@ export async function GET(request: NextRequest) {
     });
 
     // Transform to match frontend expectations
+    const routePointMap = new Map<string, TripRoutePoint[]>();
+    let tripsWithResolvedVin: TripWithVin[] = [];
+
+    try {
+        tripsWithResolvedVin = await resolveTripsWithVin(
+            supabase,
+            filteredTrips.map((trip) => ({
+                id: trip.id,
+                vin: typeof trip?.vin === 'string' ? trip.vin : null,
+                vehicle_id: typeof trip?.vehicle_id === 'string' ? trip.vehicle_id : null,
+                start_time: trip.start_time,
+                end_time: trip.end_time,
+            }))
+        );
+    } catch (vinError) {
+        console.error('Trip VIN resolution error:', vinError);
+    }
+
+    const vinByTripId = new Map(tripsWithResolvedVin.map((trip) => [trip.id, trip.vin]));
+
+    await Promise.all(filteredTrips.map(async (trip) => {
+        try {
+            const points = await loadThumbnailRoutePoints(
+                supabase,
+                trip.id,
+                vinByTripId.get(trip.id) || null,
+                trip.start_time,
+                trip.end_time
+            );
+
+            if (points.length > 0) {
+                routePointMap.set(trip.id, points);
+            }
+        } catch (routeError) {
+            console.error(`Trip thumbnail route fetch error for ${trip.id}:`, routeError);
+        }
+    }));
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const formattedTrips = filteredTrips.map((trip: any) => {
         // Calculate distance from odometer if distance_miles is null
@@ -112,6 +301,7 @@ export async function GET(request: NextRequest) {
             max_outside_temp: trip.max_outside_temp ?? null,
             avg_outside_temp: trip.avg_outside_temp ?? null,
             status: trip.is_complete ? 'completed' : 'in_progress',
+            route_points: routePointMap.get(trip.id) || [],
         };
     });
 

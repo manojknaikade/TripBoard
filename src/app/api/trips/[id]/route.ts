@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
+import {
+    dedupeRoutePoints,
+    extractRoutePointFromTelemetry,
+    type TripRoutePoint,
+} from '@/lib/trips/routePoints';
 
 type TripRow = {
     id: string;
@@ -26,6 +31,26 @@ type TripRow = {
     max_outside_temp: number | null;
     avg_outside_temp: number | null;
     is_complete: boolean | null;
+};
+
+type TripWaypointRow = {
+    timestamp: string;
+    latitude: number;
+    longitude: number;
+    speed_mph: number | null;
+    battery_level: number | null;
+    odometer: number | null;
+    heading: number | null;
+};
+
+type TelemetryRawRow = {
+    timestamp: string;
+    payload: {
+        data?: Array<{
+            key?: string;
+            value?: Record<string, unknown>;
+        }>;
+    } | null;
 };
 
 function formatTrip(trip: TripRow) {
@@ -74,6 +99,76 @@ function formatTrip(trip: TripRow) {
     };
 }
 
+async function resolveTripVin(
+    supabase: ReturnType<typeof createAdminClient>,
+    trip: TripRow
+): Promise<string | null> {
+    if (trip.vin) {
+        return trip.vin;
+    }
+
+    if (!trip.vehicle_id) {
+        return null;
+    }
+
+    const { data: vehicle } = await supabase
+        .from('vehicles')
+        .select('vin')
+        .eq('id', trip.vehicle_id)
+        .maybeSingle<{ vin: string | null }>();
+
+    return vehicle?.vin ?? null;
+}
+
+async function loadRoutePoints(
+    supabase: ReturnType<typeof createAdminClient>,
+    trip: TripRow
+): Promise<TripRoutePoint[]> {
+    const { data: storedWaypoints, error: waypointError } = await supabase
+        .from('trip_waypoints')
+        .select('timestamp, latitude, longitude, speed_mph, battery_level, odometer, heading')
+        .eq('trip_id', trip.id)
+        .order('timestamp', { ascending: true });
+
+    if (waypointError) {
+        throw waypointError;
+    }
+
+    if (storedWaypoints && storedWaypoints.length > 0) {
+        return dedupeRoutePoints(storedWaypoints as TripWaypointRow[]);
+    }
+
+    const vin = await resolveTripVin(supabase, trip);
+    if (!vin) {
+        return [];
+    }
+
+    const from = new Date(new Date(trip.start_time).getTime() - 30_000).toISOString();
+    const to = new Date(
+        trip.end_time
+            ? new Date(trip.end_time).getTime() + 30_000
+            : Date.now()
+    ).toISOString();
+
+    const { data: telemetryRows, error: telemetryError } = await supabase
+        .from('telemetry_raw')
+        .select('timestamp, payload')
+        .eq('vin', vin)
+        .gte('timestamp', from)
+        .lte('timestamp', to)
+        .order('timestamp', { ascending: true });
+
+    if (telemetryError) {
+        throw telemetryError;
+    }
+
+    const parsedPoints = (telemetryRows as TelemetryRawRow[] | null | undefined)
+        ?.map((row) => extractRoutePointFromTelemetry(row.timestamp, row.payload))
+        .filter((point): point is TripRoutePoint => point !== null) ?? [];
+
+    return dedupeRoutePoints(parsedPoints);
+}
+
 export async function GET(
     request: NextRequest,
     context: { params: Promise<{ id: string }> }
@@ -102,8 +197,21 @@ export async function GET(
         return NextResponse.json({ error: 'Trip not found' }, { status: 404 });
     }
 
-    return NextResponse.json({
-        success: true,
-        trip: formatTrip(trip),
-    });
+    try {
+        const routePoints = await loadRoutePoints(supabase, trip);
+
+        return NextResponse.json({
+            success: true,
+            trip: formatTrip(trip),
+            route_points: routePoints,
+        });
+    } catch (routeError) {
+        console.error('Trip route fetch error:', routeError);
+        return NextResponse.json({
+            success: true,
+            trip: formatTrip(trip),
+            route_points: [],
+            route_error: routeError instanceof Error ? routeError.message : 'Failed to load route points',
+        });
+    }
 }

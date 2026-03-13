@@ -6,6 +6,7 @@ import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { getMapTileConfig } from '@/lib/maps/style'
+import type { TripRoutePoint } from '@/lib/trips/routePoints'
 
 // Custom icons for start/end points
 const startIcon = L.divIcon({
@@ -27,6 +28,7 @@ interface TripMiniMapProps {
     startLon: number;
     endLat?: number | null;
     endLon?: number | null;
+    routePoints?: TripRoutePoint[];
 }
 
 // Component to fit bounds after map is initialized
@@ -42,26 +44,45 @@ function FitBounds({ bounds }: { bounds: L.LatLngBoundsExpression }) {
     return null;
 }
 
-export default function TripMiniMap({ startLat, startLon, endLat, endLon }: TripMiniMapProps) {
+export default function TripMiniMap({
+    startLat,
+    startLon,
+    endLat,
+    endLon,
+    routePoints = [],
+}: TripMiniMapProps) {
     const { mapStyle } = useSettingsStore();
     const tileConfig = getMapTileConfig(mapStyle);
     const hasEnd = endLat != null && endLon != null;
-    const isSinglePoint = !hasEnd || (startLat === endLat && startLon === endLon);
+    const routeLinePoints = routePoints.map(
+        (point) => [point.latitude, point.longitude] as L.LatLngTuple
+    );
+    const fallbackEndPoint =
+        hasEnd
+            ? ([endLat!, endLon!] as [number, number])
+            : routeLinePoints.length > 0
+                ? routeLinePoints[routeLinePoints.length - 1]
+                : null;
+    const isSinglePoint = fallbackEndPoint == null
+        || (startLat === fallbackEndPoint[0] && startLon === fallbackEndPoint[1]);
 
     // Calculate center and bounds
-    const centerLat = hasEnd ? (startLat + endLat) / 2 : startLat;
-    const centerLon = hasEnd ? (startLon + endLon) / 2 : startLon;
+    const centerLat = fallbackEndPoint ? (startLat + fallbackEndPoint[0]) / 2 : startLat;
+    const centerLon = fallbackEndPoint ? (startLon + fallbackEndPoint[1]) / 2 : startLon;
 
     // Create bounds for fitBounds. If it's a single point (like a charging session), box it out nicely to zoom out more
+    const boundsPoints: L.LatLngTuple[] = routeLinePoints.length >= 2
+        ? routeLinePoints
+        : fallbackEndPoint
+            ? [[startLat, startLon], fallbackEndPoint]
+            : [[startLat, startLon]];
+
     const bounds = isSinglePoint
         ? L.latLngBounds([
             [startLat - 0.02, startLon - 0.02],
             [startLat + 0.02, startLon + 0.02]
         ])
-        : L.latLngBounds([
-            [startLat, startLon],
-            [endLat!, endLon!]
-        ]);
+        : L.latLngBounds(boundsPoints);
 
     return (
         <div className="h-full w-full rounded-lg overflow-hidden">
@@ -88,13 +109,20 @@ export default function TripMiniMap({ startLat, startLon, endLat, endLon }: Trip
                 <Marker position={[startLat, startLon]} icon={startIcon} />
 
                 {/* End marker and line (only if it's an actual trip with distance) */}
-                {hasEnd && !isSinglePoint && (
+                {!isSinglePoint && fallbackEndPoint && (
                     <>
-                        <Marker position={[endLat!, endLon!]} icon={endIcon} />
-                        <Polyline
-                            positions={[[startLat, startLon], [endLat, endLon!]]}
-                            pathOptions={{ color: '#3b82f6', weight: 2, opacity: 0.7, dashArray: '5, 5' }}
-                        />
+                        <Marker position={fallbackEndPoint} icon={endIcon} />
+                        {routeLinePoints.length >= 2 ? (
+                            <Polyline
+                                positions={routeLinePoints}
+                                pathOptions={{ color: '#38bdf8', weight: 2.5, opacity: 0.85 }}
+                            />
+                        ) : (
+                            <Polyline
+                                positions={[[startLat, startLon], fallbackEndPoint]}
+                                pathOptions={{ color: '#3b82f6', weight: 2, opacity: 0.7, dashArray: '5, 5' }}
+                            />
+                        )}
                     </>
                 )}
             </MapContainer>

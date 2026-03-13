@@ -14,7 +14,8 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
 
 - **Trip History & Maps**
   - Detailed logs of every trip with average speed
-  - **Interactive Maps:** View full route with start/end markers
+  - **Interactive Maps:** View exact recorded trip routes with start/end markers
+  - **Route Thumbnails:** Trip list mini-maps render the recorded route instead of a straight-line placeholder
   - **Geocoding:** Automatic address resolution for start/end locations
   - **Map Style Preference:** Switch between street and dark basemaps
   - **Metrics:** Distance, duration, energy used, efficiency (Wh/km or Wh/mi), speed, and **outside temperature** (min/max/avg)
@@ -126,6 +127,7 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
    - `supabase/migrations/20260313050000_add_tyre_sets.sql` — Adds tyre set tracking and links seasonal records to specific sets
    - `supabase/migrations/20260313060000_add_record_odometer_ranges.sql` — Adds explicit start/end odometer fields for seasonal records
    - `supabase/migrations/20260313070000_add_maintenance_cost.sql` — Adds per-record service cost and currency fields
+   - `supabase/migrations/20260313080000_add_trip_route_waypoints.sql` — Captures exact route waypoints for future trips and backfills historical trip routes from `telemetry_raw`
 
 5. **Run the Development Server**
 
@@ -172,11 +174,13 @@ TripBoard uses a **database-level trigger** (`process_telemetry`) on the `teleme
 
 - Update `vehicle_status` with the latest telemetry values
 - Detect trip start/end based on gear changes (D/R → start, P → end)
+- Record `trip_waypoints` during active trips so trip detail maps and list thumbnails can render the exact route taken
 - Track outside temperature (min/max/avg) during active trips
 - Detect and record charging sessions with charger type classification
 - Reconcile stale open charging sessions with `reconcile_stale_charging_sessions()`
 
 The Go telemetry server on the VPS ingests raw Tesla Fleet Telemetry and inserts into `telemetry_raw`. All trip/charging logic runs as PL/pgSQL triggers in Supabase.
+Historical trip routes can be backfilled from `telemetry_raw` into `trip_waypoints` by applying `supabase/migrations/20260313080000_add_trip_route_waypoints.sql`.
 The legacy `scripts/vps-telemetry-server.js` charging detector is no longer part of the intended production path.
 After applying the charging-detection migration in Supabase, stop any still-running legacy Node detector on the VPS to avoid duplicate `charging_sessions` writes.
 The production `tesla-ingester.service` now loads its Supabase credentials from `/home/ubuntu/.env` via `EnvironmentFile=` instead of hardcoding secrets in the unit file. The Go binary expects `SUPABASE_KEY`, and that value should be the Supabase service role key.
