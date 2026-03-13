@@ -28,11 +28,15 @@ export async function GET(
             .from('charging_sessions')
             .select('*')
             .eq('id', id)
-            .single();
+            .maybeSingle();
 
         if (error) {
             console.error('Fetch charging session error:', error);
             return NextResponse.json({ error: error.message }, { status: 500 });
+        }
+
+        if (!session) {
+            return NextResponse.json({ error: 'Charging session not found' }, { status: 404 });
         }
 
         return NextResponse.json({ success: true, session });

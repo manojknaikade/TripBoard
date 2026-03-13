@@ -101,16 +101,21 @@ export default function TripDetailPage() {
     const fetchTripDetails = useCallback(async () => {
         try {
             setLoading(true);
-            const res = await fetch('/api/trips');
+            setError(null);
+            const res = await fetch(`/api/trips/${tripId}`);
             const data = await res.json();
 
-            if (data.success && data.trips) {
-                const foundTrip = data.trips.find((t: Trip) => t.id === tripId);
-                if (foundTrip) {
-                    setTrip(foundTrip);
-                } else {
-                    setError('Trip not found');
-                }
+            if (!res.ok) {
+                setTrip(null);
+                setError(data.error || 'Trip not found');
+                return;
+            }
+
+            if (data.success && data.trip) {
+                setTrip(data.trip);
+            } else {
+                setTrip(null);
+                setError('Trip not found');
             }
         } catch (err) {
             console.error('Failed to fetch trip:', err);
