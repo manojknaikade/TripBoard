@@ -40,6 +40,13 @@ interface ChargingSession {
     is_complete: boolean;
 }
 
+type GeocodeResult = {
+    success?: boolean;
+    address?: string;
+    raw?: Record<string, string | undefined>;
+    fallback?: string;
+};
+
 interface TimeframeSelectorProps {
     selected: string;
     onSelect: (value: string) => void;
@@ -78,11 +85,61 @@ function formatDate(dateString: string): string {
     else return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
+function getSessionCoordinateKey(session: ChargingSession): string | null {
+    if (session.latitude == null || session.longitude == null) {
+        return null;
+    }
+
+    return `${session.latitude.toFixed(4)},${session.longitude.toFixed(4)}`;
+}
+
+function extractLocalityLabel(data: GeocodeResult, session: ChargingSession): string {
+    const raw = data.raw || {};
+    const locality =
+        raw.suburb ||
+        raw.neighbourhood ||
+        raw.city_district ||
+        raw.quarter ||
+        raw.borough ||
+        raw.town ||
+        raw.city ||
+        raw.village ||
+        raw.municipality ||
+        raw.hamlet;
+
+    const city =
+        raw.city ||
+        raw.town ||
+        raw.village ||
+        raw.municipality ||
+        raw.county ||
+        raw.state;
+
+    if (locality && city && locality !== city) {
+        return `${locality}, ${city}`;
+    }
+
+    if (locality) {
+        return locality;
+    }
+
+    if (city) {
+        return city;
+    }
+
+    if (session.location_name && session.location_name !== 'Charging Location') {
+        return session.location_name;
+    }
+
+    return 'Charging Location';
+}
+
 export default function ChargingPage() {
     const { currency: preferredCurrency } = useSettingsStore();
     const [sessions, setSessions] = useState<ChargingSession[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [locationLabels, setLocationLabels] = useState<Record<string, string>>({});
     const [timeframe, setTimeframe] = useState('7days');
     const [customStart, setCustomStart] = useState('');
     const [customEnd, setCustomEnd] = useState('');
@@ -185,6 +242,78 @@ export default function ChargingPage() {
     useEffect(() => {
         fetchSessions();
     }, [fetchSessions]);
+
+    useEffect(() => {
+        const sessionsWithCoords = sessions.filter(
+            (session) => session.latitude != null && session.longitude != null
+        );
+
+        if (sessionsWithCoords.length === 0) {
+            return;
+        }
+
+        let cancelled = false;
+
+        const loadLocationLabels = async () => {
+            const pendingSessions = sessionsWithCoords.filter((session) => {
+                const key = getSessionCoordinateKey(session);
+                return key != null && !locationLabels[key];
+            });
+
+            if (pendingSessions.length === 0) {
+                return;
+            }
+
+            const results = await Promise.all(
+                pendingSessions.map(async (session) => {
+                    const key = getSessionCoordinateKey(session);
+                    if (!key) {
+                        return null;
+                    }
+
+                    try {
+                        const res = await fetch(
+                            `/api/geocode?lat=${session.latitude}&lng=${session.longitude}`
+                        );
+                        const data: GeocodeResult = await res.json();
+
+                        return {
+                            key,
+                            label: extractLocalityLabel(data, session),
+                        };
+                    } catch {
+                        return {
+                            key,
+                            label:
+                                session.location_name && session.location_name !== 'Charging Location'
+                                    ? session.location_name
+                                    : 'Charging Location',
+                        };
+                    }
+                })
+            );
+
+            if (cancelled) {
+                return;
+            }
+
+            setLocationLabels((prev) => {
+                const next = { ...prev };
+                for (const result of results) {
+                    if (result) {
+                        next[result.key] = result.label;
+                    }
+                }
+                return next;
+            });
+        };
+
+        void loadLocationLabels();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [sessions, locationLabels]);
 
     const filteredSessions = sessions;
 
@@ -335,6 +464,12 @@ export default function ChargingPage() {
                                         <SessionCard
                                             key={session.id}
                                             session={session}
+                                            locationLabel={
+                                                (() => {
+                                                    const key = getSessionCoordinateKey(session);
+                                                    return key ? locationLabels[key] : undefined;
+                                                })()
+                                            }
                                             preferredCurrency={preferredCurrency}
                                             onAddCost={() => {
                                                 setEditingSession(session);
@@ -353,7 +488,17 @@ export default function ChargingPage() {
     );
 }
 
-function SessionCard({ session, preferredCurrency, onAddCost }: { session: ChargingSession; preferredCurrency: string; onAddCost: () => void; }) {
+function SessionCard({
+    session,
+    locationLabel,
+    preferredCurrency,
+    onAddCost,
+}: {
+    session: ChargingSession;
+    locationLabel?: string;
+    preferredCurrency: string;
+    onAddCost: () => void;
+}) {
     const isSupercharger = session.charger_type?.toLowerCase().includes('supercharger');
     const isDC = session.charger_type?.toLowerCase().includes('3rd_party_fast') || isSupercharger;
     const hasLocation = session.latitude && session.longitude;
@@ -380,7 +525,7 @@ function SessionCard({ session, preferredCurrency, onAddCost }: { session: Charg
                         <div>
                             <div className="flex items-center gap-2">
                                 <span className="font-medium">
-                                    {session.location_name || 'Charging Location'}
+                                    {locationLabel || 'Charging Location'}
                                 </span>
                                 {isSupercharger && (
                                     <span className="rounded-full bg-red-500/20 px-2 py-0.5 text-xs font-medium text-red-500 border border-red-500/20">

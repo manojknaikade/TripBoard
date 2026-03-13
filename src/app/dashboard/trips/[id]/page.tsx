@@ -87,6 +87,29 @@ function formatDateTime(dateString: string): string {
     });
 }
 
+function getTripSubtitle(
+    trip: Trip,
+    startAddress: string,
+    endAddress: string
+): string {
+    const resolvedStart = startAddress || trip.start_address || '';
+    const resolvedEnd = endAddress || trip.end_address || '';
+
+    if (resolvedStart && resolvedEnd) {
+        return `${resolvedStart} to ${resolvedEnd}`;
+    }
+
+    if (resolvedStart) {
+        return `Started from ${resolvedStart}`;
+    }
+
+    if (resolvedEnd) {
+        return `Ended at ${resolvedEnd}`;
+    }
+
+    return formatDateTime(trip.started_at);
+}
+
 export default function TripDetailPage() {
     const params = useParams();
     const tripId = params.id as string;
@@ -227,7 +250,7 @@ export default function TripDetailPage() {
                         </div>
                         <h1 className="text-2xl font-bold">Trip Details</h1>
                         <p className="text-slate-400">
-                            {trip.start_address || `${trip.start_latitude?.toFixed(4)}, ${trip.start_longitude?.toFixed(4)}`}
+                            {getTripSubtitle(trip, startAddress, endAddress)}
                         </p>
                     </div>
                 </div>

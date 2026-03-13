@@ -3,6 +3,17 @@ import { NextRequest, NextResponse } from 'next/server';
 // OpenStreetMap Nominatim API for reverse geocoding (free, no API key needed)
 const NOMINATIM_API = 'https://nominatim.openstreetmap.org/reverse';
 
+function normalizeCountryName(country: string | undefined): string | null {
+    if (!country) return null;
+
+    const normalized = country
+        .split('/')
+        .map((part) => part.trim())
+        .find(Boolean);
+
+    return normalized || null;
+}
+
 export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const lat = searchParams.get('lat');
@@ -49,8 +60,10 @@ export async function GET(request: NextRequest) {
         const city = address.city || address.town || address.village || address.hamlet;
         if (city) parts.push(city);
 
-        // Add country
-        if (address.country) parts.push(address.country);
+        // Nominatim can return multilingual country names like
+        // "Schweiz/Suisse/Svizzera/Svizra". Keep a single label.
+        const country = normalizeCountryName(address.country);
+        if (country) parts.push(country);
 
         const formattedAddress = parts.length > 0
             ? parts.join(', ')
