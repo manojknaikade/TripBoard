@@ -54,7 +54,7 @@ export default function NotificationBell() {
     const fetchNotifications = async () => {
         setLoading(true);
         try {
-            const res = await fetch('/api/notifications?limit=20');
+            const res = await fetch('/api/notifications?unread_only=true&limit=20');
             const data = await res.json();
             if (data.success) {
                 setNotifications(data.notifications || []);
@@ -81,7 +81,7 @@ export default function NotificationBell() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mark_all: true }),
             });
-            setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+            setNotifications([]);
             setUnreadCount(0);
         } catch {
             // silently fail
@@ -95,9 +95,7 @@ export default function NotificationBell() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ids: [id] }),
             });
-            setNotifications(prev =>
-                prev.map(n => n.id === id ? { ...n, is_read: true } : n)
-            );
+            setNotifications(prev => prev.filter(n => n.id !== id));
             setUnreadCount(prev => Math.max(0, prev - 1));
         } catch {
             // silently fail
@@ -186,7 +184,7 @@ export default function NotificationBell() {
                         ) : notifications.length === 0 ? (
                             <div className="flex flex-col items-center justify-center py-8 text-slate-500">
                                 <Bell className="mb-2 h-8 w-8" />
-                                <p className="text-sm">No notifications yet</p>
+                                <p className="text-sm">No unread notifications</p>
                             </div>
                         ) : (
                             notifications.map(n => (
