@@ -34,6 +34,7 @@ export async function GET() {
                 dateFormat: 'DD/MM',
                 notifications: true,
                 dataSource: 'polling',
+                mapStyle: 'streets',
             }
         });
     }
@@ -57,6 +58,7 @@ export async function GET() {
             dateFormat: settings.date_format || 'DD/MM',
             notifications: settings.notifications_enabled,
             dataSource: settings.data_source,
+            mapStyle: settings.map_style || 'streets',
         }
     })
 }
@@ -71,7 +73,7 @@ export async function POST(request: NextRequest) {
 
     try {
         const body = await request.json()
-        const { pollingConfig, region, units, currency, dateFormat, notifications, dataSource } = body
+        const { pollingConfig, region, units, currency, dateFormat, notifications, dataSource, mapStyle } = body
 
         const { error } = await supabase
             .from('user_settings')
@@ -87,6 +89,7 @@ export async function POST(request: NextRequest) {
                 date_format: dateFormat,
                 notifications_enabled: notifications,
                 data_source: dataSource,
+                map_style: mapStyle,
                 updated_at: new Date().toISOString(),
             }, {
                 onConflict: 'user_id'

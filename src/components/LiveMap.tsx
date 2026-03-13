@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react'
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
+import { useSettingsStore } from '@/stores/settingsStore'
+import { getMapTileConfig } from '@/lib/maps/style'
 
 interface VehicleStatus {
     lat: number;
@@ -33,6 +35,8 @@ function Recenter({ lat, lon }: { lat: number; lon: number }) {
 }
 
 export default function LiveMap() {
+    const { mapStyle } = useSettingsStore();
+    const tileConfig = getMapTileConfig(mapStyle);
     const [vehicle, setVehicle] = useState<VehicleStatus | null>(null);
 
     // Poll for updates
@@ -65,8 +69,8 @@ export default function LiveMap() {
             style={{ height: '100%', width: '100%' }}
         >
             <TileLayer
-                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                attribution={tileConfig.attribution}
+                url={tileConfig.url}
             />
             <Marker position={[vehicle.lat, vehicle.lon]} icon={defaultIcon}>
                 <Popup>

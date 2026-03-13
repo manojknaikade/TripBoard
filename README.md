@@ -16,6 +16,7 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
   - Detailed logs of every trip with average speed
   - **Interactive Maps:** View full route with start/end markers
   - **Geocoding:** Automatic address resolution for start/end locations
+  - **Map Style Preference:** Switch between street and dark basemaps
   - **Metrics:** Distance, duration, energy used, efficiency (Wh/km or Wh/mi), speed, and **outside temperature** (min/max/avg)
   - **Filtering:** Filter trips by Week, Month, or Custom Date Range
   - **Export:** Download trip data as CSV or JSON
@@ -37,6 +38,7 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
   - Toggle between **Metric** (km, kWh) and **Imperial** (mi, kWh) units
   - Set home address with interactive map picker
   - Settings persisted to **Supabase** (survives browser clears)
+  - Selectable map style across dashboard, trip, charging, and settings maps
   - Customizable polling intervals
 
 ## 🛠 Tech Stack
@@ -109,6 +111,7 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
    - `supabase/migrations/20260312010000_harden_public_table_rls.sql` — Enables RLS on exposed public tables and adds tighter policies
    - `supabase/migrations/20260311000000_trip_temperature_trigger.sql` — Adds temperature columns to `trips` and updates the `process_telemetry` trigger
    - `supabase/migrations/20260311000001_backfill_trip_temperatures.sql` — Backfills temperature data for all existing trips from raw telemetry
+   - `supabase/migrations/20260313030000_add_map_style_setting.sql` — Adds a persisted per-user map style preference
 
 5. **Run the Development Server**
 

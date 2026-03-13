@@ -5,6 +5,8 @@ import { MapContainer, TileLayer, Marker, Popup, useMap, useMapEvents } from 're
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { Search, Loader2 } from 'lucide-react';
+import { useSettingsStore } from '@/stores/settingsStore';
+import { getMapTileConfig } from '@/lib/maps/style';
 
 // Fix for default marker icons in Next.js
 const defaultIcon = L.icon({
@@ -72,6 +74,8 @@ function MapEvents({ onClick }: { onClick: (lat: number, lon: number) => void })
 }
 
 export default function LocationPicker({ latitude, longitude, address, onLocationChange }: LocationPickerProps) {
+    const { mapStyle } = useSettingsStore();
+    const tileConfig = getMapTileConfig(mapStyle);
     const [searchQuery, setSearchQuery] = useState('');
     const [isSearching, setIsSearching] = useState(false);
     const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -159,8 +163,8 @@ export default function LocationPicker({ latitude, longitude, address, onLocatio
                     style={{ height: '100%', width: '100%' }}
                 >
                     <TileLayer
-                        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                        attribution={tileConfig.attribution}
+                        url={tileConfig.url}
                     />
                     <LocationMarker
                         lat={currentLat}

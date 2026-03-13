@@ -3,6 +3,8 @@
 import { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { useSettingsStore } from '@/stores/settingsStore';
+import { getMapTileConfig } from '@/lib/maps/style';
 
 interface TripDetailMapProps {
     startLat: number;
@@ -12,6 +14,8 @@ interface TripDetailMapProps {
 }
 
 export default function TripDetailMap({ startLat, startLng, endLat, endLng }: TripDetailMapProps) {
+    const { mapStyle } = useSettingsStore();
+    const tileConfig = getMapTileConfig(mapStyle);
     const mapRef = useRef<L.Map | null>(null);
     const startMarkerRef = useRef<L.Marker | null>(null);
     const endMarkerRef = useRef<L.Marker | null>(null);
@@ -36,10 +40,9 @@ export default function TripDetailMap({ startLat, startLng, endLat, endLng }: Tr
                 attributionControl: true,
             });
 
-            // Add dark tile layer matching mini-map
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-                maxZoom: 19,
+            L.tileLayer(tileConfig.url, {
+                attribution: tileConfig.attribution,
+                maxZoom: tileConfig.maxZoom,
             }).addTo(mapRef.current);
 
             // Custom start icon (green)
@@ -122,7 +125,7 @@ export default function TripDetailMap({ startLat, startLng, endLat, endLng }: Tr
                 lineRef.current = null;
             }
         };
-    }, [startLat, startLng, endLat, endLng]);
+    }, [startLat, startLng, endLat, endLng, tileConfig.attribution, tileConfig.maxZoom, tileConfig.url]);
 
     return (
         <div

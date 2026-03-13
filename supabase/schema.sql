@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
   units TEXT DEFAULT 'imperial' CHECK (units IN ('imperial', 'metric')),
   notifications_enabled BOOLEAN DEFAULT true,
   data_source TEXT DEFAULT 'telemetry' CHECK (data_source IN ('polling', 'telemetry')),
+  map_style TEXT DEFAULT 'streets' CHECK (map_style IN ('streets', 'dark')),
   currency TEXT DEFAULT 'CHF',
   date_format TEXT DEFAULT 'DD/MM',
   created_at TIMESTAMPTZ DEFAULT NOW(),

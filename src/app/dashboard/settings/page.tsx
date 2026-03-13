@@ -10,6 +10,7 @@ import {
     Gauge,
     MapPin,
     Banknote,
+    Map,
 } from 'lucide-react';
 import { useSettingsStore } from '@/stores/settingsStore';
 import Header from '@/components/Header';
@@ -46,6 +47,7 @@ export default function SettingsPage() {
         currency,
         notifications,
         dataSource,
+        mapStyle,
         homeLocation,
         setPollingConfig,
         setRegion,
@@ -54,6 +56,7 @@ export default function SettingsPage() {
         setDateFormat,
         setNotifications,
         setDataSource,
+        setMapStyle,
         setHomeLocation,
         loadFromDatabase,
         saveToDatabase,
@@ -387,6 +390,34 @@ export default function SettingsPage() {
                                         }`}
                                 >
                                     {u.label}
+                                </button>
+                            ))}
+                        </div>
+                    </SettingsSection>
+
+                    {/* Map Style */}
+                    <SettingsSection
+                        icon={<Map className="h-5 w-5" />}
+                        title="Map Style"
+                        description="Choose the basemap style used across dashboard, trips, charging, and pickers"
+                    >
+                        <div className="flex gap-3">
+                            {[
+                                { id: 'streets', label: 'Streets' },
+                                { id: 'dark', label: 'Dark' },
+                            ].map((style) => (
+                                <button
+                                    key={style.id}
+                                    onClick={() => {
+                                        setMapStyle(style.id as 'streets' | 'dark');
+                                        showSaved();
+                                    }}
+                                    className={`rounded-lg px-4 py-2 text-sm transition-colors ${mapStyle === style.id
+                                        ? 'bg-red-500/10 text-red-400 ring-1 ring-red-500/30'
+                                        : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
+                                        }`}
+                                >
+                                    {style.label}
                                 </button>
                             ))}
                         </div>

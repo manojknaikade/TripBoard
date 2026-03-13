@@ -284,7 +284,8 @@ export default function DashboardPage() {
   const displayData = vehicleData || (isAsleep && cachedData?.vehicle) || null;
   const displayTimestamp = vehicleData ? lastUpdated : cachedData?.timestamp;
 
-  // Reverse geocode to get street address
+  // Reverse geocode via the shared API route so address formatting stays
+  // consistent across dashboard, trips, and charging views.
   useEffect(() => {
     if (!displayData?.latitude || !displayData?.longitude) {
       setStreetAddress(null);
@@ -293,14 +294,15 @@ export default function DashboardPage() {
     const lat = displayData.latitude;
     const lon = displayData.longitude;
 
-    fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`)
+    fetch(`/api/geocode?lat=${lat}&lng=${lon}`)
       .then(res => res.json())
       .then(data => {
-        if (data?.display_name) {
-          // Shorten the address: take first 2-3 parts
-          const parts = data.display_name.split(', ');
-          const short = parts.slice(0, 3).join(', ');
-          setStreetAddress(short);
+        if (data?.success && data?.address) {
+          setStreetAddress(data.address);
+        } else if (data?.fallback) {
+          setStreetAddress(data.fallback);
+        } else {
+          setStreetAddress(null);
         }
       })
       .catch(() => setStreetAddress(null));
@@ -536,9 +538,6 @@ export default function DashboardPage() {
                       <span className="text-xs text-slate-500">(last known)</span>
                     )}
                   </div>
-                  <span className="text-xs text-slate-500">
-                    {displayData.latitude.toFixed(5)}, {displayData.longitude.toFixed(5)}
-                  </span>
                 </div>
                 {streetAddress && (
                   <p className="mb-4 text-slate-300">{streetAddress}</p>

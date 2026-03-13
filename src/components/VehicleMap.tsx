@@ -3,6 +3,8 @@
 import { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { useSettingsStore } from '@/stores/settingsStore';
+import { getMapTileConfig } from '@/lib/maps/style';
 
 interface VehicleMapProps {
     latitude: number;
@@ -12,6 +14,8 @@ interface VehicleMapProps {
 }
 
 export default function VehicleMap({ latitude, longitude, heading, vehicleName }: VehicleMapProps) {
+    const { mapStyle } = useSettingsStore();
+    const tileConfig = getMapTileConfig(mapStyle);
     const mapRef = useRef<L.Map | null>(null);
     const markerRef = useRef<L.Marker | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -28,10 +32,9 @@ export default function VehicleMap({ latitude, longitude, heading, vehicleName }
                 attributionControl: true,
             });
 
-            // Add OpenStreetMap tiles
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-                maxZoom: 19,
+            L.tileLayer(tileConfig.url, {
+                attribution: tileConfig.attribution,
+                maxZoom: tileConfig.maxZoom,
             }).addTo(mapRef.current);
 
             // Custom Tesla marker icon
@@ -77,7 +80,7 @@ export default function VehicleMap({ latitude, longitude, heading, vehicleName }
                 markerRef.current = null;
             }
         };
-    }, [latitude, longitude, heading, vehicleName]);
+    }, [latitude, longitude, heading, vehicleName, tileConfig.attribution, tileConfig.maxZoom, tileConfig.url]);
 
     return (
         <div

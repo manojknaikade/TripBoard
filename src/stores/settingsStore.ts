@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { PollingConfig, DEFAULT_POLLING_CONFIG } from '@/lib/utils/polling';
+import type { MapStyle } from '@/lib/maps/style';
 
 type Region = 'na' | 'eu' | 'cn';
 type Units = 'imperial' | 'metric';
@@ -23,6 +24,7 @@ interface SettingsStore {
     dateFormat: DateFormat;
     notifications: boolean;
     dataSource: DataSource;
+    mapStyle: MapStyle;
     homeLocation: HomeLocation;
 
     // Actions
@@ -33,6 +35,7 @@ interface SettingsStore {
     setDateFormat: (format: DateFormat) => void;
     setNotifications: (enabled: boolean) => void;
     setDataSource: (source: DataSource) => void;
+    setMapStyle: (style: MapStyle) => void;
     setHomeLocation: (location: HomeLocation) => void;
     loadFromDatabase: () => Promise<void>;
     saveToDatabase: () => Promise<void>;
@@ -47,6 +50,7 @@ const defaultSettings = {
     dateFormat: 'DD/MM' as DateFormat,
     notifications: true,
     dataSource: 'polling' as DataSource,
+    mapStyle: 'streets' as MapStyle,
     homeLocation: { latitude: null, longitude: null } as HomeLocation,
 };
 
@@ -72,6 +76,8 @@ export const useSettingsStore = create<SettingsStore>()(
 
             setDataSource: (dataSource) => set({ dataSource }),
 
+            setMapStyle: (mapStyle) => set({ mapStyle }),
+
             setHomeLocation: (homeLocation) => set({ homeLocation }),
 
             loadFromDatabase: async () => {
@@ -88,6 +94,7 @@ export const useSettingsStore = create<SettingsStore>()(
                             dateFormat: data.settings.dateFormat || 'DD/MM',
                             notifications: data.settings.notifications,
                             dataSource: data.settings.dataSource,
+                            mapStyle: data.settings.mapStyle || 'streets',
                         });
                     }
                 } catch (err) {
@@ -109,6 +116,7 @@ export const useSettingsStore = create<SettingsStore>()(
                             dateFormat: state.dateFormat,
                             notifications: state.notifications,
                             dataSource: state.dataSource,
+                            mapStyle: state.mapStyle,
                         }),
                     });
                 } catch (err) {

@@ -4,6 +4,8 @@ import { useEffect } from 'react'
 import { MapContainer, TileLayer, Marker, Polyline, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
+import { useSettingsStore } from '@/stores/settingsStore'
+import { getMapTileConfig } from '@/lib/maps/style'
 
 // Custom icons for start/end points
 const startIcon = L.divIcon({
@@ -41,6 +43,8 @@ function FitBounds({ bounds }: { bounds: L.LatLngBoundsExpression }) {
 }
 
 export default function TripMiniMap({ startLat, startLon, endLat, endLon }: TripMiniMapProps) {
+    const { mapStyle } = useSettingsStore();
+    const tileConfig = getMapTileConfig(mapStyle);
     const hasEnd = endLat != null && endLon != null;
     const isSinglePoint = !hasEnd || (startLat === endLat && startLon === endLon);
 
@@ -73,7 +77,8 @@ export default function TripMiniMap({ startLat, startLon, endLat, endLon }: Trip
                 attributionControl={false}
             >
                 <TileLayer
-                    url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+                    attribution={tileConfig.attribution}
+                    url={tileConfig.url}
                 />
 
                 {/* Fit bounds to show both markers */}
