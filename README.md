@@ -23,6 +23,7 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
 
 - **Advanced Analytics**
   - Daily Distance & Energy Consumption bar charts
+  - **All Time analytics support** with daily buckets preserved for long-range driving and charging charts
   - Efficiency by Time of Day (2-hour buckets, bar chart)
   - Aggregated stats with **trend percentages** vs. previous period
   - **Top Trips Leaderboard:** Longest, shortest, and most efficient trips
@@ -30,6 +31,7 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
   - **Vampire Drain:** Estimated energy loss while parked (trip-interstitial method)
   - Charging Sources breakdown (pie chart)
   - **Cost by Charging Source:** Horizontal bar chart showing costs per charger type
+  - **Maintenance analytics tab:** Service volume, spend, average service cost, tyre work, and tracked tyre-set mileage
 
 - **Maintenance & Tyre Tracking**
   - Dedicated maintenance dashboard for tyre sets, seasonal swaps, rotations, and common Tesla service items
@@ -37,6 +39,7 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
   - Record explicit service cost, start odometer, and end odometer for maintenance entries
   - Inline creation of a new tyre set while logging a tyre season change or rotation
   - Maintenance UI follows the app unit setting while persisting odometer values in kilometers
+  - Maintenance analytics uses `This Year`, `Last Year`, and `All Time` filters for service reporting
 
 - **User Preferences & Security**
   - Seamless authentication via **Tesla OAuth** or direct Tesla API token entry
@@ -185,6 +188,7 @@ The production `tesla-ingester.service` now loads its Supabase credentials from 
 - Tyre season and tyre rotation records can link to an existing tyre set or create a new set inline during record creation.
 - Mounted/stored status is derived from seasonal history, while season itself remains the consistent visual accent for tyre sets.
 - The maintenance dashboard now uses modal entry points for the maintenance form and the Tesla maintenance guide so the main page stays focused on KPI, tyre sets, and service history.
+- Maintenance analytics uses the same maintenance data model, including open tyre stints that fall back to the current vehicle odometer when an explicit end odometer is not yet logged.
 
 ## Security Notes
 

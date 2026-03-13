@@ -124,6 +124,10 @@ export default function TripsPage() {
                     fromDate = new Date(toDate.getFullYear(), 0, 1);
                     fromDate.setHours(0, 0, 0, 0);
                     break;
+                case 'alltime':
+                    fromDate = new Date(0);
+                    fromDate.setHours(0, 0, 0, 0);
+                    break;
                 case 'week':
                 default:
                     const day = toDate.getDay();
@@ -497,6 +501,7 @@ const timeframeOptions = [
     { id: '30days', label: 'Last 30 Days' },
     { id: '3months', label: 'Last 3 Months' },
     { id: 'year', label: 'This Year' },
+    { id: 'alltime', label: 'All Time' },
     { id: 'custom', label: 'Custom' },
 ];
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import {
     TrendingUp,
@@ -38,6 +38,9 @@ interface AnalyticTrip {
 
 interface WeeklyDatum {
     day: string;
+    dateKey: string;
+    axisLabel: string;
+    tooltipLabel: string;
     distance: number;
     energy: number;
     trips: number;
@@ -118,9 +121,17 @@ export default function AnalyticsPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [timeframe, customStart, customEnd]);
 
-    const weeklyData = data?.weeklyData || [];
+    const weeklyData = useMemo(() => data?.weeklyData || [], [data]);
     const efficiencyData = data?.efficiencyData || [];
     const summary = data?.summary || { totalDistance: 0, totalEnergy: 0, avgEfficiency: 0, drivingTime: 0, tripCount: 0, vampireDrainKwh: 0 };
+    const axisLabelMap = useMemo(
+        () => Object.fromEntries(weeklyData.map((item) => [item.dateKey, item.axisLabel])),
+        [weeklyData]
+    );
+    const tooltipLabelMap = useMemo(
+        () => Object.fromEntries(weeklyData.map((item) => [item.dateKey, item.tooltipLabel])),
+        [weeklyData]
+    );
 
     return (
         <div className="min-h-screen">
@@ -164,6 +175,9 @@ export default function AnalyticsPage() {
                     </span>
                     <Link href="/dashboard/analytics/charging" className="text-sm font-medium text-slate-400 hover:text-white transition-colors">
                         Charging
+                    </Link>
+                    <Link href="/dashboard/analytics/maintenance" className="text-sm font-medium text-slate-400 hover:text-white transition-colors">
+                        Maintenance
                     </Link>
                 </div>
 
@@ -242,7 +256,13 @@ export default function AnalyticsPage() {
                         <ResponsiveContainer width="100%" height={250}>
                             <BarChart data={weeklyData}>
                                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                                <XAxis dataKey="day" stroke="#94a3b8" fontSize={12} />
+                                <XAxis
+                                    dataKey="dateKey"
+                                    stroke="#94a3b8"
+                                    fontSize={12}
+                                    interval={0}
+                                    tickFormatter={(value) => axisLabelMap[String(value)] || ''}
+                                />
                                 <YAxis stroke="#94a3b8" fontSize={12} />
                                 <Tooltip
                                     contentStyle={{
@@ -250,6 +270,7 @@ export default function AnalyticsPage() {
                                         border: '1px solid #334155',
                                         borderRadius: '8px',
                                     }}
+                                    labelFormatter={(value) => tooltipLabelMap[String(value)] || value}
                                 />
                                 <Bar dataKey="distance" fill="#ef4444" radius={[4, 4, 0, 0]} />
                             </BarChart>
@@ -262,7 +283,13 @@ export default function AnalyticsPage() {
                         <ResponsiveContainer width="100%" height={250}>
                             <BarChart data={weeklyData}>
                                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                                <XAxis dataKey="day" stroke="#94a3b8" fontSize={12} />
+                                <XAxis
+                                    dataKey="dateKey"
+                                    stroke="#94a3b8"
+                                    fontSize={12}
+                                    interval={0}
+                                    tickFormatter={(value) => axisLabelMap[String(value)] || ''}
+                                />
                                 <YAxis stroke="#94a3b8" fontSize={12} />
                                 <Tooltip
                                     contentStyle={{
@@ -270,6 +297,7 @@ export default function AnalyticsPage() {
                                         border: '1px solid #334155',
                                         borderRadius: '8px',
                                     }}
+                                    labelFormatter={(value) => tooltipLabelMap[String(value)] || value}
                                     formatter={(value: number) => [`${value} kWh`, 'Energy']}
                                 />
                                 <Bar dataKey="energy" fill="#22c55e" radius={[4, 4, 0, 0]} />
@@ -437,6 +465,7 @@ const timeframeOptions = [
     { id: '30days', label: 'Last 30 Days' },
     { id: '3months', label: 'Last 3 Months' },
     { id: 'year', label: 'This Year' },
+    { id: 'alltime', label: 'All Time' },
     { id: 'custom', label: 'Custom' },
 ];
 
