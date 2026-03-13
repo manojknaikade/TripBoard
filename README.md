@@ -154,6 +154,7 @@ TripBoard uses a **database-level trigger** (`process_telemetry`) on the `teleme
 
 The Go telemetry server on the VPS ingests raw Tesla Fleet Telemetry and inserts into `telemetry_raw`. All trip/charging logic runs as PL/pgSQL triggers in Supabase.
 The legacy `scripts/vps-telemetry-server.js` charging detector is no longer part of the intended production path.
+After applying the charging-detection migration in Supabase, stop any still-running legacy Node detector on the VPS to avoid duplicate `charging_sessions` writes.
 The production `tesla-ingester.service` now loads its Supabase credentials from `/home/ubuntu/.env` via `EnvironmentFile=` instead of hardcoding secrets in the unit file. The Go binary expects `SUPABASE_KEY`, and that value should be the Supabase service role key.
 
 ## Security Notes

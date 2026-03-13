@@ -142,6 +142,7 @@ Updating the code logic *does not* automatically change what the car streams. A 
 Trip and charging-session detection now live directly inside Supabase in the `process_telemetry()` trigger function on `telemetry_raw`. The Go ingester is only responsible for receiving Tesla Fleet Telemetry and writing raw payloads into Supabase.
 
 For long-running edge cases, Supabase can also close stale open charging sessions with `reconcile_stale_charging_sessions(interval '15 minutes')`. If you enable `pg_cron`, schedule it every 10-15 minutes so the database can clean up any session that never received an explicit `Complete` or `Disconnected` event.
+Once that migration is applied, stop any legacy `vps-telemetry-server.js` process on the VPS so only the database trigger owns charging-session creation.
 
 ### E. Extracting Location Names (Reverse Geocoding)
 
