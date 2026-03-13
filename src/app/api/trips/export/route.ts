@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
+import { getEffectiveChargingEnergyKwh } from '@/lib/charging/energy';
 
 const MINIMUM_DISTANCE_MILES = 0.3;
 
@@ -69,6 +70,7 @@ type ChargeExportRow = {
     latitude: number | string | null;
     longitude: number | string | null;
     energy_added_kwh: number | string | null;
+    energy_delivered_kwh: number | string | null;
     charge_rate_kw: number | string | null;
     start_battery_pct: number | string | null;
     end_battery_pct: number | string | null;
@@ -181,7 +183,10 @@ function transformCharge(charge: ChargeExportRow) {
         end_latitude: null,
         end_longitude: null,
         distance_mi: null,
-        energy_kwh: round(toNumber(charge.energy_added_kwh)),
+        energy_kwh: round(getEffectiveChargingEnergyKwh({
+            energy_added_kwh: toNumber(charge.energy_added_kwh),
+            energy_delivered_kwh: toNumber(charge.energy_delivered_kwh),
+        })),
         efficiency_wh_mi: null,
         max_speed_mph: null,
         avg_speed_mph: null,

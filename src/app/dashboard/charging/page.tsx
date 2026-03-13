@@ -15,6 +15,7 @@ import {
 import Header from '@/components/Header';
 import { useSettingsStore } from '@/stores/settingsStore';
 import dynamic from 'next/dynamic';
+import { getEffectiveChargingEnergyKwh, hasDeliveredEnergyGap } from '@/lib/charging/energy';
 
 const TripMiniMap = dynamic(() => import('@/components/TripMiniMap'), {
     ssr: false,
@@ -29,6 +30,7 @@ interface ChargingSession {
     start_battery_pct: number | null;
     end_battery_pct: number | null;
     energy_added_kwh: number | null;
+    energy_delivered_kwh: number | null;
     charge_rate_kw: number | null;
     latitude: number | null;
     longitude: number | null;
@@ -326,12 +328,14 @@ export default function ChargingPage() {
     }, {} as Record<string, ChargingSession[]>);
 
     const totalSessions = filteredSessions.length;
-    const totalEnergy = filteredSessions.reduce((sum, s) => sum + (s.energy_added_kwh || 0), 0);
+    const totalEnergy = filteredSessions.reduce((sum, s) => sum + (getEffectiveChargingEnergyKwh(s) || 0), 0);
     const maxChargeRate = Math.max(...filteredSessions.map(s => s.charge_rate_kw || 0), 0);
 
     // Cost calculation (simplified summation assuming mostly 1 currency)
-    const baseCurrencySessions = filteredSessions.filter(s => s.cost_user_entered && (s.currency === preferredCurrency || !s.currency));
-    const totalCost = baseCurrencySessions.reduce((sum, s) => sum + (s.cost_user_entered || 0), 0);
+    const baseCurrencySessions = filteredSessions.filter(
+        (s) => (s.cost_user_entered ?? s.cost_estimate) != null && (s.currency === preferredCurrency || !s.currency)
+    );
+    const totalCost = baseCurrencySessions.reduce((sum, s) => sum + (s.cost_user_entered ?? s.cost_estimate ?? 0), 0);
 
     return (
         <div className="min-h-screen">
@@ -422,7 +426,7 @@ export default function ChargingPage() {
                     />
                     <StatCard
                         icon={<Battery className="h-5 w-5" />}
-                        label="Energy Added"
+                        label="Energy"
                         value={`${totalEnergy.toFixed(1)} kWh`}
                         color="green"
                     />
@@ -474,7 +478,7 @@ export default function ChargingPage() {
                                             preferredCurrency={preferredCurrency}
                                             onAddCost={() => {
                                                 setEditingSession(session);
-                                                setCostInput(session.cost_user_entered ? session.cost_user_entered.toString() : '');
+                                                setCostInput((session.cost_user_entered ?? session.cost_estimate)?.toString() || '');
                                                 setCurrencyInput(session.currency || preferredCurrency);
                                             }}
                                         />
@@ -503,6 +507,9 @@ function SessionCard({
     const isSupercharger = session.charger_type?.toLowerCase().includes('supercharger');
     const isDC = session.charger_type?.toLowerCase().includes('3rd_party_fast') || isSupercharger;
     const hasLocation = session.latitude && session.longitude;
+    const effectiveEnergy = getEffectiveChargingEnergyKwh(session);
+    const showDeliveredGap = hasDeliveredEnergyGap(session);
+    const displayCost = session.cost_user_entered ?? session.cost_estimate;
 
     return (
         <Link
@@ -551,10 +558,11 @@ function SessionCard({
                                     <span className="text-slate-600 mx-0.5">•</span>
                                     {formatDuration(session.start_time, session.end_time)}
                                 </span>
-                                {session.energy_added_kwh && (
+                                {effectiveEnergy != null && (
                                     <span className="flex items-center gap-1">
                                         <Battery className="h-3 w-3" />
-                                        +{session.energy_added_kwh.toFixed(1)} kWh
+                                        +{effectiveEnergy.toFixed(1)} kWh
+                                        {showDeliveredGap ? ' delivered' : ''}
                                     </span>
                                 )}
                                 {session.charge_rate_kw && (
@@ -568,17 +576,17 @@ function SessionCard({
 
                         {/* Cost Display / Button */}
                         <div className="text-right ml-4">
-                            {session.cost_user_entered ? (
+                            {displayCost != null ? (
                                 <button
                                     onClick={(e) => { e.preventDefault(); onAddCost(); }}
                                     className="group flex flex-col items-end text-sm transition-colors hover:opacity-80"
                                 >
                                     <span className="font-bold text-lg text-white group-hover:text-red-400 transition-colors">
-                                        {session.currency || preferredCurrency} {session.cost_user_entered.toFixed(2)}
+                                        {session.currency || preferredCurrency} {displayCost.toFixed(2)}
                                     </span>
-                                    {session.energy_added_kwh && session.cost_user_entered > 0 && (
+                                    {effectiveEnergy != null && displayCost > 0 && (
                                         <span className="text-xs text-slate-500">
-                                            {((session.cost_user_entered / session.energy_added_kwh)).toFixed(2)} / kWh
+                                            {((displayCost / effectiveEnergy)).toFixed(2)} / kWh
                                         </span>
                                     )}
                                 </button>

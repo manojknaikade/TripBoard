@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import Header from '@/components/Header';
 import dynamic from 'next/dynamic';
+import { getEffectiveChargingEnergyKwh, hasDeliveredEnergyGap } from '@/lib/charging/energy';
 
 const TripDetailMap = dynamic(() => import('@/components/TripDetailMap'), {
     loading: () => <div className="h-96 w-full animate-pulse rounded-xl bg-slate-800" />,
@@ -31,6 +32,7 @@ interface ChargingSession {
     start_battery_pct: number | null;
     end_battery_pct: number | null;
     energy_added_kwh: number | null;
+    energy_delivered_kwh: number | null;
     charge_rate_kw: number | null;
     latitude: number | null;
     longitude: number | null;
@@ -187,6 +189,9 @@ export default function ChargingDetailPage() {
     const hasCoords = session.latitude && session.longitude;
     const isSupercharger = session.charger_type?.toLowerCase().includes('supercharger');
     const isDC = session.charger_type?.toLowerCase().includes('3rd_party_fast') || isSupercharger;
+    const effectiveEnergy = getEffectiveChargingEnergyKwh(session);
+    const showDeliveredGap = hasDeliveredEnergyGap(session);
+    const displayCost = session.cost_user_entered ?? session.cost_estimate;
 
     return (
         <div className="min-h-screen">
@@ -281,7 +286,7 @@ export default function ChargingDetailPage() {
 
                     <button
                         onClick={() => {
-                            setCostInput(session.cost_user_entered ? session.cost_user_entered.toString() : '');
+                            setCostInput((session.cost_user_entered ?? session.cost_estimate)?.toString() || '');
                             setCurrencyInput(session.currency || preferredCurrency);
                             setIsEditingCost(true);
                         }}
@@ -331,9 +336,13 @@ export default function ChargingDetailPage() {
                     {/* Energy & Speed */}
                     <StatBox
                         icon={<Battery className="h-5 w-5" />}
-                        label="Energy Added"
-                        value={session.energy_added_kwh ? `+${session.energy_added_kwh.toFixed(1)} kWh` : 'N/A'}
+                        label={session.energy_delivered_kwh != null ? 'Energy Delivered' : 'Energy Added'}
+                        value={effectiveEnergy != null ? `+${effectiveEnergy.toFixed(2)} kWh` : 'N/A'}
                         color="green"
+                        subtext={showDeliveredGap && session.energy_added_kwh != null
+                            ? `Battery received ${session.energy_added_kwh.toFixed(2)} kWh`
+                            : undefined
+                        }
                     />
                     <StatBox
                         icon={<Activity className="h-5 w-5" />}
@@ -346,12 +355,12 @@ export default function ChargingDetailPage() {
                     <StatBox
                         icon={<Banknote className="h-5 w-5" />}
                         label="Total Cost"
-                        value={session.cost_user_entered
-                            ? `${session.currency || preferredCurrency} ${session.cost_user_entered.toFixed(2)}`
+                        value={displayCost != null
+                            ? `${session.currency || preferredCurrency} ${displayCost.toFixed(2)}`
                             : 'Not entered'}
-                        color={session.cost_user_entered ? "green" : "slate"}
-                        subtext={session.cost_user_entered && session.energy_added_kwh
-                            ? `${(session.cost_user_entered / session.energy_added_kwh).toFixed(2)} / kWh`
+                        color={displayCost != null ? "green" : "slate"}
+                        subtext={displayCost != null && effectiveEnergy
+                            ? `${(displayCost / effectiveEnergy).toFixed(2)} / kWh`
                             : undefined
                         }
                     />

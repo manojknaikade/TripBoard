@@ -1,6 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { NextRequest, NextResponse } from 'next/server'
 import { getTeslaSession } from '@/lib/tesla/auth-server'
+import { getEffectiveChargingEnergyKwh } from '@/lib/charging/energy';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,8 +23,10 @@ type TripRecord = {
 type ChargingSessionRecord = {
     start_time: string;
     energy_added_kwh: number | null;
+    energy_delivered_kwh: number | null;
     charger_type: string | null;
     cost_user_entered: number | null;
+    cost_estimate: number | null;
 };
 
 type SnapshotRecord = {
@@ -320,7 +323,7 @@ export async function GET(request: NextRequest) {
         // Fetch charging sessions for the period
         const { data: chargingSessions, error: chargingError } = await supabase
             .from('charging_sessions')
-            .select('id, energy_added_kwh, charger_type, cost_user_entered, currency, start_time')
+            .select('id, energy_added_kwh, energy_delivered_kwh, charger_type, cost_user_entered, cost_estimate, currency, start_time')
             .eq('is_complete', true)
             .gte('start_time', fromDate.toISOString())
             .lte('start_time', toDate.toISOString())
@@ -352,11 +355,11 @@ export async function GET(request: NextRequest) {
                                 'other';
 
             // Accumulate cost by type (for ALL sessions, even without energy)
-            const sessionCost = session.cost_user_entered || 0;
+            const sessionCost = session.cost_user_entered ?? session.cost_estimate ?? 0;
             if (!costByType[normalisedKey]) costByType[normalisedKey] = 0;
             costByType[normalisedKey] += sessionCost;
 
-            const energy = session.energy_added_kwh || 0;
+            const energy = getEffectiveChargingEnergyKwh(session) || 0;
             if (energy <= 0) continue;
 
             totalChargingEnergy += energy;
@@ -379,13 +382,13 @@ export async function GET(request: NextRequest) {
 
         for (const session of typedChargingSessions) {
             // Aggregate Total Cost (simple sum here, ignoring currency conversion complexity for MVP)
-            const cost = session.cost_user_entered || 0;
+            const cost = session.cost_user_entered ?? session.cost_estimate ?? 0;
             totalChargingCost += cost;
 
             const bucketKey = getBucketKey(session.start_time, bucketMode);
             const bucket = chargingBucketData.get(bucketKey);
             if (bucket) {
-                bucket.energy += (session.energy_added_kwh || 0);
+                bucket.energy += (getEffectiveChargingEnergyKwh(session) || 0);
                 bucket.cost += cost;
                 bucket.sessions += 1;
             }

@@ -144,12 +144,15 @@ CREATE TABLE IF NOT EXISTS charging_sessions (
   start_battery_pct INTEGER,
   end_battery_pct INTEGER,
   energy_added_kwh DOUBLE PRECISION,
+  energy_delivered_kwh DOUBLE PRECISION,
   charge_rate_kw DOUBLE PRECISION,
   latitude DOUBLE PRECISION,
   longitude DOUBLE PRECISION,
   location_name TEXT,
   charger_type TEXT, -- 'home', 'supercharger', 'destination', 'other'
   cost_estimate DOUBLE PRECISION,
+  charger_price_per_kwh DOUBLE PRECISION,
+  tesla_charge_event_id TEXT,
   is_complete BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
