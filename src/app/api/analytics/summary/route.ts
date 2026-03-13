@@ -37,6 +37,77 @@ type LeaderboardTrip = TripRecord & {
     calculatedEfficiency: number;
 };
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+function buildBuckets(
+    fromDate: Date,
+    toDate: Date,
+    timeframe: string,
+    userDateFormat: 'DD/MM' | 'MM/DD'
+) {
+    if (timeframe === 'week') {
+        const weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+        return {
+            mode: 'weekday' as const,
+            buckets: weekDays.map((day) => ({ key: day, label: day, axisLabel: day, tooltipLabel: day })),
+        };
+    }
+
+    const rangeDays = Math.ceil((toDate.getTime() - fromDate.getTime()) / MS_PER_DAY) + 1;
+    const buckets: Array<{ key: string; label: string; axisLabel: string; tooltipLabel: string }> = [];
+    const cursor = new Date(fromDate);
+    let dayIndex = 0;
+    while (cursor <= toDate) {
+        const key = cursor.toISOString().slice(0, 10);
+        const m = cursor.getMonth() + 1;
+        const d = cursor.getDate();
+        const shortLabel = userDateFormat === 'MM/DD' ? `${m}/${d}` : `${d}/${m}`;
+        const tooltipLabel = cursor.toLocaleDateString('en-GB', {
+            day: 'numeric',
+            month: 'short',
+            year: rangeDays > 366 ? '2-digit' : undefined,
+        });
+
+        let axisLabel = '';
+        const isStart = dayIndex === 0;
+        const isEnd = cursor.toISOString().slice(0, 10) === toDate.toISOString().slice(0, 10);
+        const isMonthStart = cursor.getDate() === 1;
+
+        if (rangeDays <= 14) {
+            axisLabel = dayIndex % 2 === 0 || isStart || isEnd ? shortLabel : '';
+        } else if (rangeDays <= 45) {
+            axisLabel = dayIndex % 7 === 0 || isStart || isEnd ? shortLabel : '';
+        } else if (rangeDays <= 180) {
+            axisLabel = isMonthStart || isStart || isEnd
+                ? cursor.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+                : '';
+        } else {
+            axisLabel = isMonthStart || isStart || isEnd
+                ? cursor.toLocaleDateString('en-GB', {
+                    month: 'short',
+                    year: rangeDays > 366 && cursor.getMonth() === 0 ? '2-digit' : undefined,
+                })
+                : '';
+        }
+
+        buckets.push({ key, label: shortLabel, axisLabel, tooltipLabel });
+        cursor.setDate(cursor.getDate() + 1);
+        dayIndex += 1;
+    }
+
+    return { mode: 'day' as const, buckets };
+}
+
+function getBucketKey(timestamp: string, mode: 'weekday' | 'day') {
+    const date = new Date(timestamp);
+
+    if (mode === 'weekday') {
+        return date.toLocaleDateString('en-US', { weekday: 'short' });
+    }
+
+    return date.toISOString().slice(0, 10);
+}
+
 export async function GET(request: NextRequest) {
     try {
         const supabase = createAdminClient()
@@ -96,12 +167,44 @@ export async function GET(request: NextRequest) {
         } else if (timeframe === 'year') {
             fromDate = new Date(toDate.getFullYear(), 0, 1);
             fromDate.setHours(0, 0, 0, 0);
+        } else if (timeframe === 'alltime') {
+            fromDate = new Date(0);
+            fromDate.setHours(0, 0, 0, 0);
         } else {
             // Default: 'week' - Monday to Sunday of current week
             const day = toDate.getDay();
             const diff = toDate.getDate() - day + (day === 0 ? -6 : 1);
             fromDate = new Date(toDate.getFullYear(), toDate.getMonth(), diff);
             fromDate.setHours(0, 0, 0, 0);
+        }
+
+        if (timeframe === 'alltime') {
+            const [{ data: firstTrip }, { data: firstCharge }] = await Promise.all([
+                supabase
+                    .from('trips')
+                    .select('start_time')
+                    .eq('is_complete', true)
+                    .order('start_time', { ascending: true })
+                    .limit(1)
+                    .maybeSingle(),
+                supabase
+                    .from('charging_sessions')
+                    .select('start_time')
+                    .eq('is_complete', true)
+                    .order('start_time', { ascending: true })
+                    .limit(1)
+                    .maybeSingle(),
+            ]);
+
+            const candidateTimes = [firstTrip?.start_time, firstCharge?.start_time]
+                .filter((value): value is string => Boolean(value))
+                .map((value) => new Date(value).getTime())
+                .filter((value) => Number.isFinite(value));
+
+            if (candidateTimes.length > 0) {
+                fromDate = new Date(Math.min(...candidateTimes));
+                fromDate.setHours(0, 0, 0, 0);
+            }
         }
 
         // Fetch completed trips in the date range
@@ -118,11 +221,23 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({ error: error.message }, { status: 500 })
         }
 
+        const { mode: bucketMode, buckets } = buildBuckets(fromDate, toDate, timeframe, userDateFormat);
+        const tripBucketData = new Map(
+            buckets.map((bucket) => [bucket.key, {
+                day: bucket.label,
+                dateKey: bucket.key,
+                axisLabel: bucket.axisLabel,
+                tooltipLabel: bucket.tooltipLabel,
+                distance: 0,
+                energy: 0,
+                trips: 0,
+            }])
+        );
+
         // Calculate summary stats
         let totalDistance = 0
         let totalEnergy = 0
         let totalDrivingTime = 0
-        const dailyData: Record<string, { distance: number; energy: number; trips: number }> = {}
         const hourlyEfficiency: Record<number, { total: number; count: number }> = {}
         const distanceMultiplier = userUnits === 'metric' ? 1.60934 : 1;
 
@@ -147,96 +262,38 @@ export async function GET(request: NextRequest) {
                 totalDrivingTime += duration / (1000 * 60 * 60) // Hours
             }
 
-            // Daily aggregation
-            const day = new Date(trip.start_time).toLocaleDateString('en-US', { weekday: 'short' })
-            if (!dailyData[day]) {
-                dailyData[day] = { distance: 0, energy: 0, trips: 0 }
+            // Bucket aggregation for charts
+            const bucketKey = getBucketKey(trip.start_time, bucketMode);
+            const bucket = tripBucketData.get(bucketKey);
+            if (bucket) {
+                bucket.distance += distance;
+                bucket.energy += energy;
+                bucket.trips += 1;
             }
-            dailyData[day].distance += distance
-            dailyData[day].energy += energy
-            dailyData[day].trips += 1
 
             // Bucket trip into 2-hour time slot for efficiency chart
             const hour = new Date(trip.start_time).getHours()
-            const bucket = Math.floor(hour / 2) * 2;
+            const hourBucket = Math.floor(hour / 2) * 2;
             const distInUserUnit = distance * distanceMultiplier;
             const efficiency = distInUserUnit > 0 ? (energy * 1000) / distInUserUnit : 0
             if (efficiency > 0) {
-                if (!hourlyEfficiency[bucket]) {
-                    hourlyEfficiency[bucket] = { total: 0, count: 0 }
+                if (!hourlyEfficiency[hourBucket]) {
+                    hourlyEfficiency[hourBucket] = { total: 0, count: 0 }
                 }
-                hourlyEfficiency[bucket].total += efficiency
-                hourlyEfficiency[bucket].count += 1
+                hourlyEfficiency[hourBucket].total += efficiency
+                hourlyEfficiency[hourBucket].count += 1
             }
         }
 
-        // Format data for charts based on timeframe
-        let weeklyData: Array<{ day: string; distance: number; energy: number; trips: number }>;
-
-        if (timeframe === 'week') {
-            // For weekly view, use weekday names
-            const weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-            weeklyData = weekDays.map(day => {
-                const rawDistance = dailyData[day]?.distance || 0;
-                const convertedDistance = Math.round(rawDistance * distanceMultiplier * 10) / 10;
-                return {
-                    day,
-                    distance: convertedDistance,
-                    energy: Math.round((dailyData[day]?.energy || 0) * 10) / 10,
-                    trips: dailyData[day]?.trips || 0,
-                };
-            });
-        } else {
-            // For month/30days/3months, generate date-based data
-            const dataByDate: Record<string, { distance: number; energy: number; trips: number }> = {};
-
-            for (const trip of trips || []) {
-                const tripDate = new Date(trip.start_time);
-                const m = tripDate.getMonth() + 1;
-                const d = tripDate.getDate();
-                const dateKey = userDateFormat === 'MM/DD' ? `${m}/${d}` : `${d}/${m}`;
-
-                // Get distance (with fallback to odometer)
-                const distance = trip.distance_miles ||
-                    ((trip.end_odometer && trip.start_odometer)
-                        ? trip.end_odometer - trip.start_odometer
-                        : 0);
-
-                // Get energy (with fallback to battery delta)
-                let energy = trip.energy_used_kwh || 0;
-                if (!energy && trip.start_battery_pct && trip.end_battery_pct) {
-                    const delta = trip.start_battery_pct - trip.end_battery_pct;
-                    if (delta > 0) {
-                        energy = (delta / 100) * 75; // Approximate kWh for Tesla
-                    }
-                }
-
-                if (!dataByDate[dateKey]) {
-                    dataByDate[dateKey] = { distance: 0, energy: 0, trips: 0 };
-                }
-                dataByDate[dateKey].distance += distance;
-                dataByDate[dateKey].energy += energy;
-                dataByDate[dateKey].trips += 1;
-            }
-
-            // Generate array with one entry per day in range
-            const currentDate = new Date(fromDate);
-            const endDateCalc = new Date(toDate);
-            weeklyData = [];
-
-            while (currentDate <= endDateCalc) {
-                const m = currentDate.getMonth() + 1;
-                const d = currentDate.getDate();
-                const dateKey = userDateFormat === 'MM/DD' ? `${m}/${d}` : `${d}/${m}`;
-                weeklyData.push({
-                    day: dateKey,
-                    distance: Math.round((dataByDate[dateKey]?.distance || 0) * distanceMultiplier * 10) / 10,
-                    energy: Math.round((dataByDate[dateKey]?.energy || 0) * 10) / 10,
-                    trips: dataByDate[dateKey]?.trips || 0,
-                });
-                currentDate.setDate(currentDate.getDate() + 1);
-            }
-        }
+        const weeklyData = [...tripBucketData.values()].map((bucket) => ({
+            day: bucket.day,
+            dateKey: bucket.dateKey,
+            axisLabel: bucket.axisLabel,
+            tooltipLabel: bucket.tooltipLabel,
+            distance: Math.round(bucket.distance * distanceMultiplier * 10) / 10,
+            energy: Math.round(bucket.energy * 10) / 10,
+            trips: bucket.trips,
+        }));
 
         // Format efficiency by time of day — 12 slots, 2-hour buckets
         const timeSlots = [
@@ -308,45 +365,41 @@ export async function GET(request: NextRequest) {
 
         // --- NEW: Calculate Total Cost & Daily Charging Data ---
         let totalChargingCost = 0;
-        const dailyChargingData: Record<string, { energy: number; cost: number; sessions: number }> = {};
+        const chargingBucketData = new Map(
+            buckets.map((bucket) => [bucket.key, {
+                day: bucket.label,
+                dateKey: bucket.key,
+                axisLabel: bucket.axisLabel,
+                tooltipLabel: bucket.tooltipLabel,
+                energy: 0,
+                cost: 0,
+                sessions: 0,
+            }])
+        );
 
         for (const session of typedChargingSessions) {
             // Aggregate Total Cost (simple sum here, ignoring currency conversion complexity for MVP)
             const cost = session.cost_user_entered || 0;
             totalChargingCost += cost;
 
-            // Group by Day (using the same 'day' keys as weeklyData depending on timeframe)
-            const d = new Date(session.start_time);
-            let dayKey = d.toLocaleDateString('en-US', { weekday: 'short' });
-            if (timeframe !== 'week') {
-                const m = d.getMonth() + 1;
-                const dNum = d.getDate();
-                dayKey = userDateFormat === 'MM/DD' ? `${m}/${dNum}` : `${dNum}/${m}`;
+            const bucketKey = getBucketKey(session.start_time, bucketMode);
+            const bucket = chargingBucketData.get(bucketKey);
+            if (bucket) {
+                bucket.energy += (session.energy_added_kwh || 0);
+                bucket.cost += cost;
+                bucket.sessions += 1;
             }
-
-            if (!dailyChargingData[dayKey]) {
-                dailyChargingData[dayKey] = { energy: 0, cost: 0, sessions: 0 };
-            }
-
-            dailyChargingData[dayKey].energy += (session.energy_added_kwh || 0);
-            dailyChargingData[dayKey].cost += cost;
-            dailyChargingData[dayKey].sessions += 1;
         }
 
-        // Format daily charging array to match weeklyData exactly
-        const formattedDailyChargingData = timeframe === 'week'
-            ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => ({
-                day,
-                energy: Math.round((dailyChargingData[day]?.energy || 0) * 10) / 10,
-                cost: Math.round((dailyChargingData[day]?.cost || 0) * 100) / 100,
-                sessions: dailyChargingData[day]?.sessions || 0,
-            }))
-            : weeklyData.map(w => ({
-                day: w.day,
-                energy: Math.round((dailyChargingData[w.day]?.energy || 0) * 10) / 10,
-                cost: Math.round((dailyChargingData[w.day]?.cost || 0) * 100) / 100,
-                sessions: dailyChargingData[w.day]?.sessions || 0,
-            }));
+        const formattedDailyChargingData = [...chargingBucketData.values()].map((bucket) => ({
+            day: bucket.day,
+            dateKey: bucket.dateKey,
+            axisLabel: bucket.axisLabel,
+            tooltipLabel: bucket.tooltipLabel,
+            energy: Math.round(bucket.energy * 10) / 10,
+            cost: Math.round(bucket.cost * 100) / 100,
+            sessions: bucket.sessions,
+        }));
 
         // Calculate average cost per kwh
         const avgCostPerKwh = totalChargingEnergy > 0 ? totalChargingCost / totalChargingEnergy : 0;

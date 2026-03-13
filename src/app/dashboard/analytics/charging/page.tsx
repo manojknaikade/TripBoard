@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import {
     Zap,
@@ -32,7 +32,7 @@ interface AnalyticsData {
         totalChargingCost: number;
         avgCostPerKwh: number;
     };
-    dailyChargingData: Array<{ day: string; energy: number; cost: number; sessions: number; }>;
+    dailyChargingData: Array<{ day: string; dateKey: string; axisLabel: string; tooltipLabel: string; energy: number; cost: number; sessions: number; }>;
     chargingMix: Array<{ name: string; value: number; color: string; }>;
     costBySource: Array<{ name: string; cost: number; color: string; }>;
 }
@@ -84,10 +84,18 @@ export default function ChargingAnalyticsPage() {
         fetchAnalytics();
     }, [fetchAnalytics]);
 
-    const dailyData = data?.dailyChargingData || [];
+    const dailyData = useMemo(() => data?.dailyChargingData || [], [data]);
     const chargingMix = data?.chargingMix || [];
     const costBySource = data?.costBySource || [];
     const summary = data?.summary || { chargingSessions: 0, totalChargingEnergy: 0, totalChargingCost: 0, avgCostPerKwh: 0 };
+    const axisLabelMap = useMemo(
+        () => Object.fromEntries(dailyData.map((item) => [item.dateKey, item.axisLabel])),
+        [dailyData]
+    );
+    const tooltipLabelMap = useMemo(
+        () => Object.fromEntries(dailyData.map((item) => [item.dateKey, item.tooltipLabel])),
+        [dailyData]
+    );
 
     const hasRealChargingData =
         chargingMix.length > 0 &&
@@ -134,6 +142,9 @@ export default function ChargingAnalyticsPage() {
                     <span className="text-sm font-medium text-white border-b-2 border-red-500 pb-4 -mb-[18px]">
                         Charging
                     </span>
+                    <Link href="/dashboard/analytics/maintenance" className="text-sm font-medium text-slate-400 hover:text-white transition-colors">
+                        Maintenance
+                    </Link>
                 </div>
 
                 {/* Stats Cards */}
@@ -173,10 +184,17 @@ export default function ChargingAnalyticsPage() {
                         <ResponsiveContainer width="100%" height={250}>
                             <BarChart data={dailyData}>
                                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                                <XAxis dataKey="day" stroke="#94a3b8" fontSize={12} />
+                                <XAxis
+                                    dataKey="dateKey"
+                                    stroke="#94a3b8"
+                                    fontSize={12}
+                                    interval={0}
+                                    tickFormatter={(value) => axisLabelMap[String(value)] || ''}
+                                />
                                 <YAxis stroke="#94a3b8" fontSize={12} />
                                 <Tooltip
                                     contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
+                                    labelFormatter={(value) => tooltipLabelMap[String(value)] || value}
                                     formatter={(value: number) => [`${value} kWh`, 'Energy']}
                                 />
                                 <Bar dataKey="energy" fill="#22c55e" radius={[4, 4, 0, 0]} />
@@ -190,10 +208,17 @@ export default function ChargingAnalyticsPage() {
                         <ResponsiveContainer width="100%" height={250}>
                             <BarChart data={dailyData}>
                                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                                <XAxis dataKey="day" stroke="#94a3b8" fontSize={12} />
+                                <XAxis
+                                    dataKey="dateKey"
+                                    stroke="#94a3b8"
+                                    fontSize={12}
+                                    interval={0}
+                                    tickFormatter={(value) => axisLabelMap[String(value)] || ''}
+                                />
                                 <YAxis stroke="#94a3b8" fontSize={12} />
                                 <Tooltip
                                     contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
+                                    labelFormatter={(value) => tooltipLabelMap[String(value)] || value}
                                     formatter={(value: number) => [`${value} ${preferredCurrency}`, 'Cost']}
                                 />
                                 <Bar dataKey="cost" fill="#a855f7" radius={[4, 4, 0, 0]} />
@@ -308,7 +333,7 @@ function TimeframeSelector({ selected, onSelect, customStart, customEnd, onCusto
     const options = [
         { id: 'week', label: 'This Week' }, { id: '7days', label: 'Last 7 Days' },
         { id: 'month', label: 'This Month' }, { id: '30days', label: 'Last 30 Days' },
-        { id: '3months', label: 'Last 3 Months' }, { id: 'year', label: 'This Year' }, { id: 'custom', label: 'Custom' },
+        { id: '3months', label: 'Last 3 Months' }, { id: 'year', label: 'This Year' }, { id: 'alltime', label: 'All Time' }, { id: 'custom', label: 'Custom' },
     ];
     return (
         <div className="flex flex-col gap-3">
