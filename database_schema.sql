@@ -55,6 +55,20 @@ CREATE TABLE public.notifications (
   CONSTRAINT notifications_pkey PRIMARY KEY (id),
   CONSTRAINT notifications_vehicle_id_fkey FOREIGN KEY (vehicle_id) REFERENCES public.vehicles(id)
 );
+CREATE TABLE public.tyre_sets (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  source_key text,
+  name text NOT NULL,
+  season text NOT NULL CHECK (season = ANY (ARRAY['summer'::text, 'winter'::text, 'all_season'::text])),
+  purchase_date date,
+  purchase_odometer_km integer CHECK (purchase_odometer_km IS NULL OR purchase_odometer_km >= 0),
+  status text NOT NULL DEFAULT 'active'::text CHECK (status = ANY (ARRAY['active'::text, 'retired'::text])),
+  notes text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT tyre_sets_pkey PRIMARY KEY (id),
+  CONSTRAINT tyre_sets_source_key_key UNIQUE (source_key)
+);
 CREATE TABLE public.polling_settings (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),
   vehicle_id uuid NOT NULL UNIQUE,
@@ -250,6 +264,28 @@ CREATE TABLE public.vehicle_status (
   home_latitude numeric,
   home_longitude numeric,
   CONSTRAINT vehicle_status_pkey PRIMARY KEY (vin)
+);
+CREATE TABLE public.maintenance_records (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  source_key text,
+  tyre_set_id uuid,
+  service_type text NOT NULL CHECK (service_type = ANY (ARRAY['tyre_season'::text, 'tyre_rotation'::text, 'wheel_alignment'::text, 'cabin_air_filter'::text, 'hepa_filter'::text, 'brake_fluid_check'::text, 'brake_service'::text, 'wiper_blades'::text, 'ac_desiccant_bag'::text, 'twelve_volt_battery'::text, 'other'::text])),
+  title text NOT NULL,
+  start_date date NOT NULL,
+  end_date date,
+  start_odometer_km integer CHECK (start_odometer_km IS NULL OR start_odometer_km >= 0),
+  end_odometer_km integer CHECK (end_odometer_km IS NULL OR end_odometer_km >= 0),
+  odometer_km integer CHECK (odometer_km IS NULL OR odometer_km >= 0),
+  cost_amount numeric CHECK (cost_amount IS NULL OR cost_amount >= 0),
+  cost_currency text,
+  season text CHECK (season IS NULL OR season = ANY (ARRAY['summer'::text, 'winter'::text, 'all_season'::text])),
+  rotation_status text NOT NULL DEFAULT 'not_applicable'::text CHECK (rotation_status = ANY (ARRAY['rotated'::text, 'not_rotated'::text, 'unknown'::text, 'not_applicable'::text])),
+  notes text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT maintenance_records_pkey PRIMARY KEY (id),
+  CONSTRAINT maintenance_records_source_key_key UNIQUE (source_key),
+  CONSTRAINT maintenance_records_tyre_set_id_fkey FOREIGN KEY (tyre_set_id) REFERENCES public.tyre_sets(id) ON DELETE SET NULL
 );
 CREATE TABLE public.vehicles (
   id uuid NOT NULL DEFAULT uuid_generate_v4(),

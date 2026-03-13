@@ -11,6 +11,7 @@ import {
     History,
     BarChart3,
     Settings,
+    Wrench,
     LogOut,
     Menu,
     X,
@@ -48,6 +49,9 @@ export default function Header() {
                     </NavLink>
                     <NavLink href="/dashboard/analytics" icon={<BarChart3 className="h-4 w-4" />} active={pathname?.startsWith('/dashboard/analytics')}>
                         Analytics
+                    </NavLink>
+                    <NavLink href="/dashboard/maintenance" icon={<Wrench className="h-4 w-4" />} active={pathname?.startsWith('/dashboard/maintenance')}>
+                        Maintenance
                     </NavLink>
                     <NavLink href="/dashboard/settings" icon={<Settings className="h-4 w-4" />} active={pathname === '/dashboard/settings'}>
                         Settings
@@ -111,6 +115,14 @@ export default function Header() {
                             onClick={toggleMobileMenu}
                         >
                             Analytics
+                        </MobileNavLink>
+                        <MobileNavLink
+                            href="/dashboard/maintenance"
+                            icon={<Wrench className="h-5 w-5" />}
+                            active={pathname?.startsWith('/dashboard/maintenance')}
+                            onClick={toggleMobileMenu}
+                        >
+                            Maintenance
                         </MobileNavLink>
                         <MobileNavLink
                             href="/dashboard/settings"

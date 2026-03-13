@@ -240,6 +240,55 @@ CREATE TABLE IF NOT EXISTS notifications (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS tyre_sets (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  source_key TEXT UNIQUE,
+  name TEXT NOT NULL,
+  season TEXT NOT NULL CHECK (season IN ('summer', 'winter', 'all_season')),
+  purchase_date DATE,
+  purchase_odometer_km INTEGER CHECK (purchase_odometer_km IS NULL OR purchase_odometer_km >= 0),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'retired')),
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS maintenance_records (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  source_key TEXT UNIQUE,
+  tyre_set_id UUID REFERENCES tyre_sets(id) ON DELETE SET NULL,
+  service_type TEXT NOT NULL CHECK (
+    service_type IN (
+      'tyre_season',
+      'tyre_rotation',
+      'wheel_alignment',
+      'cabin_air_filter',
+      'hepa_filter',
+      'brake_fluid_check',
+      'brake_service',
+      'wiper_blades',
+      'ac_desiccant_bag',
+      'twelve_volt_battery',
+      'other'
+    )
+  ),
+  title TEXT NOT NULL,
+  start_date DATE NOT NULL,
+  end_date DATE,
+  start_odometer_km INTEGER CHECK (start_odometer_km IS NULL OR start_odometer_km >= 0),
+  end_odometer_km INTEGER CHECK (end_odometer_km IS NULL OR end_odometer_km >= 0),
+  odometer_km INTEGER CHECK (odometer_km IS NULL OR odometer_km >= 0),
+  cost_amount NUMERIC CHECK (cost_amount IS NULL OR cost_amount >= 0),
+  cost_currency TEXT,
+  season TEXT CHECK (season IS NULL OR season IN ('summer', 'winter', 'all_season')),
+  rotation_status TEXT NOT NULL DEFAULT 'not_applicable' CHECK (
+    rotation_status IN ('rotated', 'not_rotated', 'unknown', 'not_applicable')
+  ),
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Create indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_vehicles_user_id ON vehicles(user_id);
 CREATE INDEX IF NOT EXISTS idx_trips_vehicle_id ON trips(vehicle_id);
@@ -249,6 +298,10 @@ CREATE INDEX IF NOT EXISTS idx_charging_sessions_vehicle_id ON charging_sessions
 CREATE INDEX IF NOT EXISTS idx_vehicle_snapshots_vehicle_id_timestamp ON vehicle_snapshots(vehicle_id, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(vehicle_id, is_read, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_type ON notifications(type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tyre_sets_status ON tyre_sets(status, season, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_maintenance_records_start_date ON maintenance_records(start_date DESC);
+CREATE INDEX IF NOT EXISTS idx_maintenance_records_service_type ON maintenance_records(service_type, start_date DESC);
+CREATE INDEX IF NOT EXISTS idx_maintenance_records_tyre_set_id ON maintenance_records(tyre_set_id, start_date DESC);
 
 -- Enable Row Level Security
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
@@ -264,6 +317,8 @@ ALTER TABLE vehicle_snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE telemetry_raw ENABLE ROW LEVEL SECURITY;
 ALTER TABLE vehicle_status ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tyre_sets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE maintenance_records ENABLE ROW LEVEL SECURITY;
 
 -- RLS Policies: Users can only access their own data
 
@@ -355,6 +410,15 @@ CREATE POLICY "Service role can manage notifications" ON notifications FOR ALL T
   USING (true)
   WITH CHECK (true);
 
+CREATE POLICY "Service role can manage tyre sets" ON tyre_sets FOR ALL TO service_role
+  USING (true)
+  WITH CHECK (true);
+
+-- Maintenance log is currently managed through server-side flows only.
+CREATE POLICY "Service role can manage maintenance records" ON maintenance_records FOR ALL TO service_role
+  USING (true)
+  WITH CHECK (true);
+
 -- Function to auto-create profile on user signup
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
@@ -386,5 +450,120 @@ CREATE TRIGGER update_vehicles_updated_at BEFORE UPDATE ON vehicles FOR EACH ROW
 CREATE TRIGGER update_app_settings_updated_at BEFORE UPDATE ON app_settings FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_user_settings_updated_at BEFORE UPDATE ON user_settings FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_polling_settings_updated_at BEFORE UPDATE ON polling_settings FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_tyre_sets_updated_at BEFORE UPDATE ON tyre_sets FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_maintenance_records_updated_at BEFORE UPDATE ON maintenance_records FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 INSERT INTO app_settings (id) VALUES ('default') ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO tyre_sets (
+  source_key,
+  name,
+  season,
+  purchase_date,
+  purchase_odometer_km,
+  status,
+  notes
+)
+VALUES
+  (
+    'initial-tyre-set-summer',
+    'Summer set',
+    'summer',
+    NULL,
+    NULL,
+    'active',
+    'Inferred from existing seasonal tyre history.'
+  ),
+  (
+    'initial-tyre-set-winter',
+    'Winter set',
+    'winter',
+    NULL,
+    NULL,
+    'active',
+    'Inferred from existing seasonal tyre history.'
+  )
+ON CONFLICT (source_key) DO NOTHING;
+
+INSERT INTO maintenance_records (
+  source_key,
+  tyre_set_id,
+  service_type,
+  title,
+  start_date,
+  end_date,
+  start_odometer_km,
+  end_odometer_km,
+  odometer_km,
+  cost_amount,
+  cost_currency,
+  season,
+  rotation_status,
+  notes
+)
+VALUES
+  (
+    'initial-tyre-summer-2024',
+    (SELECT id FROM tyre_sets WHERE source_key = 'initial-tyre-set-summer'),
+    'tyre_season',
+    'Summer tyres installed',
+    DATE '2024-05-01',
+    DATE '2024-10-10',
+    0,
+    6881,
+    6881,
+    NULL,
+    NULL,
+    'summer',
+    'unknown',
+    'Odometer reading logged at changeover. Start month provided as May 2024; assumed 2024-05-01.'
+  ),
+  (
+    'initial-tyre-winter-2024',
+    (SELECT id FROM tyre_sets WHERE source_key = 'initial-tyre-set-winter'),
+    'tyre_season',
+    'Winter tyres installed',
+    DATE '2024-10-10',
+    DATE '2025-04-16',
+    6881,
+    15841,
+    15841,
+    NULL,
+    NULL,
+    'winter',
+    'unknown',
+    'Odometer reading logged at changeover.'
+  ),
+  (
+    'initial-tyre-summer-2025',
+    (SELECT id FROM tyre_sets WHERE source_key = 'initial-tyre-set-summer'),
+    'tyre_season',
+    'Summer tyres installed',
+    DATE '2025-04-16',
+    DATE '2025-10-30',
+    15841,
+    27848,
+    27848,
+    NULL,
+    NULL,
+    'summer',
+    'unknown',
+    'Odometer reading logged at changeover. Original note: "Summer without rotation?"'
+  ),
+  (
+    'initial-tyre-winter-2025',
+    (SELECT id FROM tyre_sets WHERE source_key = 'initial-tyre-set-winter'),
+    'tyre_season',
+    'Winter tyres installed',
+    DATE '2025-10-30',
+    NULL,
+    27848,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    'winter',
+    'not_applicable',
+    'Current open winter season. No odometer value was provided in the source log.'
+  )
+ON CONFLICT (source_key) DO NOTHING;
