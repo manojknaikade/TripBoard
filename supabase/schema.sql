@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS app_settings (
   home_address TEXT,
   currency TEXT DEFAULT 'CHF',
   date_format TEXT DEFAULT 'DD/MM',
+  map_style TEXT DEFAULT 'streets' CHECK (map_style IN ('streets', 'dark')),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );

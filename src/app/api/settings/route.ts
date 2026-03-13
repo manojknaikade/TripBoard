@@ -1,24 +1,25 @@
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
+import { getTeslaSession } from '@/lib/tesla/auth-server'
 import { NextRequest, NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+export async function GET(request: NextRequest) {
+    const session = await getTeslaSession(request);
 
-    if (!user) {
+    if (!session) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
+    const supabase = createAdminClient();
+
     const { data: settings, error } = await supabase
-        .from('user_settings')
+        .from('app_settings')
         .select('*')
-        .eq('user_id', user.id)
+        .eq('id', 'default')
         .single();
 
     if (error && error.code === 'PGRST116') {
-        // Return defaults if no settings exist yet
         return NextResponse.json({
             success: true,
             settings: {
@@ -64,10 +65,9 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const session = await getTeslaSession(request);
 
-    if (!user) {
+    if (!session) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
@@ -75,10 +75,11 @@ export async function POST(request: NextRequest) {
         const body = await request.json()
         const { pollingConfig, region, units, currency, dateFormat, notifications, dataSource, mapStyle } = body
 
+        const supabase = createAdminClient();
+
         const { error } = await supabase
-            .from('user_settings')
-            .upsert({
-                user_id: user.id,
+            .from('app_settings')
+            .update({
                 polling_driving: pollingConfig?.driving,
                 polling_charging: pollingConfig?.charging,
                 polling_parked: pollingConfig?.parked,
@@ -91,9 +92,8 @@ export async function POST(request: NextRequest) {
                 data_source: dataSource,
                 map_style: mapStyle,
                 updated_at: new Date().toISOString(),
-            }, {
-                onConflict: 'user_id'
             })
+            .eq('id', 'default')
 
         if (error) {
             return NextResponse.json({ error: error.message }, { status: 500 })
