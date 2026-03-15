@@ -29,10 +29,25 @@ interface AnalyticsData {
     summary: {
         chargingSessions: number;
         totalChargingEnergy: number;
+        totalChargingBatteryEnergy: number;
+        totalChargingDeliveredEnergy: number;
+        totalChargingLossEnergy: number;
+        totalChargingLossCost: number;
         totalChargingCost: number;
         avgCostPerKwh: number;
+        avgChargingLossPct: number;
     };
-    dailyChargingData: Array<{ day: string; dateKey: string; axisLabel: string; tooltipLabel: string; energy: number; cost: number; sessions: number; }>;
+    dailyChargingData: Array<{
+        day: string;
+        dateKey: string;
+        axisLabel: string;
+        tooltipLabel: string;
+        batteryEnergy: number;
+        deliveredEnergy: number;
+        lossEnergy: number;
+        cost: number;
+        sessions: number;
+    }>;
     chargingMix: Array<{ name: string; value: number; color: string; }>;
     costBySource: Array<{ name: string; cost: number; color: string; }>;
 }
@@ -87,7 +102,17 @@ export default function ChargingAnalyticsPage() {
     const dailyData = useMemo(() => data?.dailyChargingData || [], [data]);
     const chargingMix = data?.chargingMix || [];
     const costBySource = data?.costBySource || [];
-    const summary = data?.summary || { chargingSessions: 0, totalChargingEnergy: 0, totalChargingCost: 0, avgCostPerKwh: 0 };
+    const summary = data?.summary || {
+        chargingSessions: 0,
+        totalChargingEnergy: 0,
+        totalChargingBatteryEnergy: 0,
+        totalChargingDeliveredEnergy: 0,
+        totalChargingLossEnergy: 0,
+        totalChargingLossCost: 0,
+        totalChargingCost: 0,
+        avgCostPerKwh: 0,
+        avgChargingLossPct: 0,
+    };
     const axisLabelMap = useMemo(
         () => Object.fromEntries(dailyData.map((item) => [item.dateKey, item.axisLabel])),
         [dailyData]
@@ -148,24 +173,38 @@ export default function ChargingAnalyticsPage() {
                 </div>
 
                 {/* Stats Cards */}
-                <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
                     <StatCard
                         icon={<Battery className="h-5 w-5" />}
-                        label="Energy Added"
-                        value={`${summary.totalChargingEnergy} kWh`}
+                        label="Energy to Battery"
+                        value={`${summary.totalChargingBatteryEnergy} kWh`}
                         color="green"
+                    />
+                    <StatCard
+                        icon={<Zap className="h-5 w-5" />}
+                        label="Energy Delivered"
+                        value={`${summary.totalChargingDeliveredEnergy} kWh`}
+                        color="blue"
+                    />
+                    <StatCard
+                        icon={<Activity className="h-5 w-5" />}
+                        label="Charging Loss"
+                        value={`${summary.totalChargingLossEnergy} kWh`}
+                        detail={`${summary.avgChargingLossPct.toFixed(1)}% of delivered`}
+                        color="orange"
+                    />
+                    <StatCard
+                        icon={<Banknote className="h-5 w-5" />}
+                        label="Wasted Cost"
+                        value={`${summary.totalChargingLossCost.toFixed(2)} ${preferredCurrency}`}
+                        color="purple"
                     />
                     <StatCard
                         icon={<Banknote className="h-5 w-5" />}
                         label="Total Cost"
                         value={`${summary.totalChargingCost.toFixed(2)} ${preferredCurrency}`}
+                        detail={`${summary.avgCostPerKwh.toFixed(2)} ${preferredCurrency}/delivered kWh`}
                         color="purple"
-                    />
-                    <StatCard
-                        icon={<Activity className="h-5 w-5" />}
-                        label="Average Cost"
-                        value={`${summary.avgCostPerKwh.toFixed(2)} ${preferredCurrency}/kWh`}
-                        color="blue"
                     />
                     <StatCard
                         icon={<Zap className="h-5 w-5" />}
@@ -180,7 +219,7 @@ export default function ChargingAnalyticsPage() {
 
                     {/* Energy by Day */}
                     <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
-                        <h2 className="mb-6 text-lg font-semibold">Energy Added (Daily)</h2>
+                        <h2 className="mb-6 text-lg font-semibold">Charging Energy (Daily)</h2>
                         <ResponsiveContainer width="100%" height={250}>
                             <BarChart data={dailyData}>
                                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
@@ -195,11 +234,21 @@ export default function ChargingAnalyticsPage() {
                                 <Tooltip
                                     contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
                                     labelFormatter={(value) => tooltipLabelMap[String(value)] || value}
-                                    formatter={(value: number) => [`${value} kWh`, 'Energy']}
+                                    formatter={(value: number, name: string) => {
+                                        const labelMap: Record<string, string> = {
+                                            batteryEnergy: 'Battery',
+                                            lossEnergy: 'Loss',
+                                        };
+                                        return [`${value} kWh`, labelMap[name] || name];
+                                    }}
                                 />
-                                <Bar dataKey="energy" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                                <Bar dataKey="batteryEnergy" stackId="energy" fill="#22c55e" radius={[0, 0, 4, 4]} />
+                                <Bar dataKey="lossEnergy" stackId="energy" fill="#f59e0b" radius={[4, 4, 0, 0]} />
                             </BarChart>
                         </ResponsiveContainer>
+                        <p className="mt-4 text-sm text-slate-400">
+                            Green is energy stored in the battery. Amber is measured charging loss where Tesla delivered energy is available.
+                        </p>
                     </div>
 
                     {/* Cost by Day */}
@@ -313,7 +362,7 @@ export default function ChargingAnalyticsPage() {
     );
 }
 
-function StatCard({ icon, label, value, color }: { icon: React.ReactNode; label: string; value: string; color: 'blue' | 'green' | 'purple' | 'orange'; }) {
+function StatCard({ icon, label, value, color, detail }: { icon: React.ReactNode; label: string; value: string; color: 'blue' | 'green' | 'purple' | 'orange'; detail?: string; }) {
     const colors = {
         blue: 'bg-blue-500/10 text-blue-400',
         green: 'bg-green-500/10 text-green-400',
@@ -325,6 +374,7 @@ function StatCard({ icon, label, value, color }: { icon: React.ReactNode; label:
             <div className={`mb-3 inline-flex rounded-lg p-2 ${colors[color]}`}>{icon}</div>
             <p className="text-sm text-slate-400">{label}</p>
             <p className="text-2xl font-bold">{value}</p>
+            {detail && <p className="mt-1 text-xs text-slate-500">{detail}</p>}
         </div>
     );
 }

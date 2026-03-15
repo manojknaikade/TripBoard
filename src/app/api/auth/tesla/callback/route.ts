@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { discoverTeslaVehicles } from '@/lib/tesla/api';
 import { setTeslaSession } from '@/lib/tesla/auth-server';
+import { createClient } from '@/lib/supabase/server';
 
 const TESLA_TOKEN_URL = 'https://auth.tesla.com/oauth2/v3/token';
 const TESLA_CLIENT_ID = process.env.TESLA_CLIENT_ID!;
@@ -91,6 +92,9 @@ export async function GET(request: NextRequest) {
             new URL('/dashboard?tesla_connected=true', request.url)
         );
 
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+
         response.cookies.delete('tesla_oauth_state');
         response.cookies.delete('tesla_code_verifier');
 
@@ -98,6 +102,8 @@ export async function GET(request: NextRequest) {
             accessToken: tokens.access_token,
             refreshToken: tokens.refresh_token,
             region: discovery.region,
+        }, {
+            userId: user?.id ?? null,
         });
 
         return response;

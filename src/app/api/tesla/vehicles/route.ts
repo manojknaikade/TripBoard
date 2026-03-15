@@ -6,6 +6,7 @@ import {
     type TeslaRegion,
 } from '@/lib/tesla/api';
 import { getTeslaSession, setTeslaSession } from '@/lib/tesla/auth-server';
+import { createClient } from '@/lib/supabase/server';
 
 async function fetchVehicles(accessToken: string, region: TeslaRegion) {
     const response = await fetchTeslaApi(accessToken, region, '/api/1/vehicles');
@@ -33,11 +34,15 @@ export async function POST(request: NextRequest) {
         }
 
         const appResponse = NextResponse.json(discovery.data);
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
 
         await setTeslaSession(request, appResponse, {
             accessToken,
             refreshToken,
             region: discovery.region,
+        }, {
+            userId: user?.id ?? null,
         });
 
         return appResponse;
