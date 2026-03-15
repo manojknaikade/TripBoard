@@ -12,35 +12,9 @@ import {
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import AnalyticsChartsSkeleton from '@/components/analytics/AnalyticsChartsSkeleton';
-import { fetchCachedJson, readCachedJson } from '@/lib/client/fetchCache';
+import { fetchCachedJson, readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
 import { useSettingsStore } from '@/stores/settingsStore';
-
-interface AnalyticsData {
-    summary: {
-        chargingSessions: number;
-        totalChargingEnergy: number;
-        totalChargingBatteryEnergy: number;
-        totalChargingDeliveredEnergy: number;
-        totalChargingLossEnergy: number;
-        totalChargingLossCost: number;
-        totalChargingCost: number;
-        avgCostPerKwh: number;
-        avgChargingLossPct: number;
-    };
-    dailyChargingData: Array<{
-        day: string;
-        dateKey: string;
-        axisLabel: string;
-        tooltipLabel: string;
-        batteryEnergy: number;
-        deliveredEnergy: number;
-        lossEnergy: number;
-        cost: number;
-        sessions: number;
-    }>;
-    chargingMix: Array<{ name: string; value: number; color: string; }>;
-    costBySource: Array<{ name: string; cost: number; color: string; }>;
-}
+import type { ChargingAnalyticsData } from '@/lib/analytics/types';
 
 interface TimeframeSelectorProps {
     selected: string;
@@ -59,25 +33,43 @@ const ChargingAnalyticsCharts = dynamic(() => import('@/components/analytics/Cha
 });
 
 const ANALYTICS_CACHE_TTL_MS = 45_000;
+const DEFAULT_CHARGING_TIMEFRAME = '7days';
 
-export default function ChargingAnalyticsClient() {
-    const [timeframe, setTimeframe] = useState('7days');
+function buildChargingAnalyticsUrl(timeframe: string, customStart: string, customEnd: string) {
+    let url = `/api/analytics/summary?scope=charging&timeframe=${timeframe}`;
+    if (timeframe === 'custom' && customStart && customEnd) {
+        url += `&startDate=${customStart}&endDate=${customEnd}`;
+    }
+
+    return url;
+}
+
+export default function ChargingAnalyticsClient({ initialData = null }: { initialData?: ChargingAnalyticsData | null }) {
+    const [timeframe, setTimeframe] = useState(DEFAULT_CHARGING_TIMEFRAME);
     const [customStart, setCustomStart] = useState('');
     const [customEnd, setCustomEnd] = useState('');
     const [showCustomPicker, setShowCustomPicker] = useState(false);
-    const [loading, setLoading] = useState(true);
-    const [data, setData] = useState<AnalyticsData | null>(null);
+    const [loading, setLoading] = useState(!initialData);
+    const [data, setData] = useState<ChargingAnalyticsData | null>(initialData);
     const preferredCurrency = useSettingsStore((state) => state.currency);
     const hasCompleteDateRange = timeframe !== 'custom' || (!!customStart && !!customEnd);
 
-    const fetchAnalytics = useCallback(async () => {
-        let url = `/api/analytics/summary?scope=charging&timeframe=${timeframe}`;
-        if (timeframe === 'custom' && customStart && customEnd) {
-            url += `&startDate=${customStart}&endDate=${customEnd}`;
+    useEffect(() => {
+        if (!initialData) {
+            return;
         }
 
+        writeCachedJson(
+            `analytics:charging:${buildChargingAnalyticsUrl(DEFAULT_CHARGING_TIMEFRAME, '', '')}`,
+            initialData,
+            ANALYTICS_CACHE_TTL_MS
+        );
+    }, [initialData]);
+
+    const fetchAnalytics = useCallback(async () => {
+        const url = buildChargingAnalyticsUrl(timeframe, customStart, customEnd);
         const cacheKey = `analytics:charging:${url}`;
-        const cached = readCachedJson<AnalyticsData>(cacheKey);
+        const cached = readCachedJson<ChargingAnalyticsData>(cacheKey);
         if (cached) {
             setData(cached);
             setLoading(false);
@@ -86,7 +78,7 @@ export default function ChargingAnalyticsClient() {
 
         setLoading(true);
         try {
-            const json = await fetchCachedJson<AnalyticsData & { success?: boolean }>(
+            const json = await fetchCachedJson<ChargingAnalyticsData & { success?: boolean }>(
                 cacheKey,
                 async () => {
                     const res = await fetch(url);

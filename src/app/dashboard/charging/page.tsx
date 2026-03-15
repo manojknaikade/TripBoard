@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import {
     Zap,
@@ -28,7 +28,8 @@ import {
     getTeslaChargingSyncStatus,
     isSuperchargerChargingSession,
 } from '@/lib/charging/teslaSync';
-import { invalidateCachedJsonMatching, readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
+import { fetchCachedJson, invalidateCachedJsonMatching, readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
+import VirtualizedList from '@/components/VirtualizedList';
 
 const TripMiniMap = dynamic(() => import('@/components/TripMiniMap'), {
     ssr: false,
@@ -84,6 +85,7 @@ interface TimeframeSelectorProps {
 }
 
 const CHARGING_PAGE_SIZE = 20;
+const CHARGING_AUTOLOAD_ROOT_MARGIN = '640px 0px';
 const CHARGING_LABEL_FETCH_ROOT_MARGIN = '320px';
 const CHARGING_BOOTSTRAP_CACHE_TTL_MS = 45_000;
 const chargingLocationLabelCache = new Map<string, string>();
@@ -96,6 +98,10 @@ type ChargingListResponse = {
     nextOffset?: number | null;
     error?: string;
 };
+
+type VirtualChargingListItem =
+    | { key: string; type: 'header'; label: string }
+    | { key: string; type: 'session'; session: ChargingSession };
 
 function formatDuration(start: string, end: string | null): string {
     if (!end) return 'In Progress';
@@ -221,6 +227,8 @@ async function getChargingLocationLabel(session: ChargingSession): Promise<strin
 
 export default function ChargingPage() {
     const preferredCurrency = useSettingsStore((state) => state.currency);
+    const autoLoadTriggerRef = useRef<HTMLDivElement | null>(null);
+    const autoLoadOffsetRef = useRef<number | null>(null);
     const [sessions, setSessions] = useState<ChargingSession[]>([]);
     const [summary, setSummary] = useState<ChargingSummary | null>(null);
     const [loading, setLoading] = useState(true);
@@ -271,6 +279,19 @@ export default function ChargingPage() {
         return { fromDate, toDate };
     }, [timeframe, customStart, customEnd]);
 
+    const getChargingRequestParams = useCallback((offset: number, includeSummary: boolean) => {
+        const { fromDate, toDate } = getDateRange();
+
+        return new URLSearchParams({
+            from: fromDate.toISOString(),
+            to: toDate.toISOString(),
+            limit: String(CHARGING_PAGE_SIZE),
+            offset: String(offset),
+            includeSummary: includeSummary ? '1' : '0',
+            preferredCurrency,
+        });
+    }, [getDateRange, preferredCurrency]);
+
     const handleSaveCost = async () => {
         if (!editingSession || !costInput) return;
         setSavingCost(true);
@@ -312,20 +333,13 @@ export default function ChargingPage() {
         if (reset) {
             setError(null);
             setSummary(null);
+            autoLoadOffsetRef.current = null;
         } else {
             setLoadingMore(true);
         }
 
         try {
-            const { fromDate, toDate } = getDateRange();
-            const params = new URLSearchParams({
-                from: fromDate.toISOString(),
-                to: toDate.toISOString(),
-                limit: String(CHARGING_PAGE_SIZE),
-                offset: String(offset),
-                includeSummary: reset ? '1' : '0',
-                preferredCurrency,
-            });
+            const params = getChargingRequestParams(offset, reset);
 
             requestCacheKey = `charging:list:${params.toString()}`;
 
@@ -343,8 +357,16 @@ export default function ChargingPage() {
                 }
             }
 
-            const response = await fetch(`/api/charging?${params}`);
-            const data = await response.json();
+            const data = !reset
+                ? await fetchCachedJson<ChargingListResponse>(
+                    requestCacheKey,
+                    async () => {
+                        const response = await fetch(`/api/charging?${params}`);
+                        return response.json();
+                    },
+                    CHARGING_BOOTSTRAP_CACHE_TTL_MS
+                )
+                : await fetch(`/api/charging?${params}`).then((response) => response.json());
 
             if (data.success) {
                 if (reset) {
@@ -392,11 +414,12 @@ export default function ChargingPage() {
                 setLoadingMore(false);
             }
         }
-    }, [getDateRange, preferredCurrency]);
+    }, [getChargingRequestParams]);
 
     // Re-fetch when timeframe or custom dates change
     useEffect(() => {
         if (!hasCompleteDateRange) {
+            autoLoadOffsetRef.current = null;
             setNextOffset(null);
             return;
         }
@@ -404,14 +427,84 @@ export default function ChargingPage() {
         void fetchSessions({ reset: true, offset: 0 });
     }, [fetchSessions, hasCompleteDateRange]);
 
+    useEffect(() => {
+        if (!hasCompleteDateRange || loading || loadingMore || nextOffset === null || !autoLoadTriggerRef.current) {
+            return;
+        }
+
+        const observer = new IntersectionObserver(
+            (entries) => {
+                for (const entry of entries) {
+                    if (!entry.isIntersecting) {
+                        if (autoLoadOffsetRef.current === nextOffset) {
+                            autoLoadOffsetRef.current = null;
+                        }
+                        continue;
+                    }
+
+                    if (autoLoadOffsetRef.current === nextOffset) {
+                        continue;
+                    }
+
+                    autoLoadOffsetRef.current = nextOffset;
+                    void fetchSessions({ reset: false, offset: nextOffset });
+                }
+            },
+            { rootMargin: CHARGING_AUTOLOAD_ROOT_MARGIN }
+        );
+
+        observer.observe(autoLoadTriggerRef.current);
+
+        return () => observer.disconnect();
+    }, [fetchSessions, hasCompleteDateRange, loading, loadingMore, nextOffset]);
+
+    useEffect(() => {
+        if (!hasCompleteDateRange || loading || nextOffset === null) {
+            return;
+        }
+
+        const params = getChargingRequestParams(nextOffset, false);
+        const requestCacheKey = `charging:list:${params.toString()}`;
+
+        void fetchCachedJson<ChargingListResponse>(
+            requestCacheKey,
+            async () => {
+                const response = await fetch(`/api/charging?${params}`);
+                return response.json();
+            },
+            CHARGING_BOOTSTRAP_CACHE_TTL_MS
+        ).catch(() => {
+            // Ignore prefetch failures; the visible fetch path handles retries and errors.
+        });
+    }, [getChargingRequestParams, hasCompleteDateRange, loading, nextOffset]);
+
     const displayedSessions = sessions;
 
-    const sessionsByDate = displayedSessions.reduce((acc, session) => {
-        const date = formatDate(session.start_time);
-        if (!acc[date]) acc[date] = [];
-        acc[date].push(session);
-        return acc;
-    }, {} as Record<string, ChargingSession[]>);
+    const virtualChargingListItems = useMemo(() => {
+        const items: VirtualChargingListItem[] = [];
+        let currentDateLabel: string | null = null;
+
+        for (const session of displayedSessions) {
+            const nextDateLabel = formatDate(session.start_time);
+
+            if (nextDateLabel !== currentDateLabel) {
+                currentDateLabel = nextDateLabel;
+                items.push({
+                    key: `header:${nextDateLabel}`,
+                    type: 'header',
+                    label: nextDateLabel,
+                });
+            }
+
+            items.push({
+                key: `session:${session.id}`,
+                type: 'session',
+                session,
+            });
+        }
+
+        return items;
+    }, [displayedSessions]);
 
     const totalSessions = summary?.totalSessions ?? displayedSessions.length;
     const totalBatteryEnergy = summary?.totalBatteryEnergy ?? displayedSessions.reduce((sum, s) => sum + (getChargingBatteryEnergyKwh(s) || 0), 0);
@@ -548,41 +641,47 @@ export default function ChargingPage() {
                     </div>
                 ) : (
                     <>
-                        <div className="space-y-6">
-                            {Object.entries(sessionsByDate).map(([date, dateSessions]) => (
-                                <div key={date}>
-                                    <div className="mb-3 flex items-center gap-2 text-sm text-slate-400">
+                        <VirtualizedList
+                            key={`charging:${virtualChargingListItems[0]?.key || 'empty'}:${virtualChargingListItems[virtualChargingListItems.length - 1]?.key || 'empty'}:${virtualChargingListItems.length}`}
+                            items={virtualChargingListItems}
+                            getItemKey={(item) => item.key}
+                            estimateHeight={(item) => item.type === 'header' ? 40 : 176}
+                            overscanPx={1000}
+                            renderItem={(item) => (
+                                item.type === 'header' ? (
+                                    <div className="flex items-center gap-2 pb-3 text-sm text-slate-400">
                                         <Calendar className="h-4 w-4" />
-                                        {date}
+                                        {item.label}
                                     </div>
-                                    <div className="space-y-3">
-                                        {dateSessions.map((session) => (
-                                            <SessionCard
-                                                key={session.id}
-                                                session={session}
-                                                preferredCurrency={preferredCurrency}
-                                                onAddCost={() => {
-                                                    setEditingSession(session);
-                                                    setCostInput((session.cost_user_entered ?? getChargingDisplayCost(session))?.toString() || '');
-                                                    setCurrencyInput(session.currency || preferredCurrency);
-                                                }}
-                                            />
-                                        ))}
+                                ) : (
+                                    <div className="pb-3">
+                                        <SessionCard
+                                            session={item.session}
+                                            preferredCurrency={preferredCurrency}
+                                            onAddCost={() => {
+                                                const session = item.session;
+                                                setEditingSession(session);
+                                                setCostInput((session.cost_user_entered ?? getChargingDisplayCost(session))?.toString() || '');
+                                                setCurrencyInput(session.currency || preferredCurrency);
+                                            }}
+                                        />
                                     </div>
-                                </div>
-                            ))}
-                        </div>
+                                )
+                            )}
+                        />
 
                         {nextOffset !== null && (
-                            <div className="mt-8 flex justify-center">
-                                <button
-                                    onClick={() => void fetchSessions({ reset: false, offset: nextOffset })}
-                                    disabled={loadingMore}
-                                    className="flex items-center gap-2 rounded-xl border border-slate-600 bg-slate-800 px-5 py-3 text-sm font-medium text-slate-200 transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
-                                >
-                                    {loadingMore && <Loader2 className="h-4 w-4 animate-spin" />}
-                                    {loadingMore ? 'Loading more sessions...' : 'Load more sessions'}
-                                </button>
+                            <div ref={autoLoadTriggerRef} className="mt-8 flex justify-center py-4">
+                                {loadingMore ? (
+                                    <div className="flex items-center gap-2 text-sm text-slate-400">
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                        Loading more sessions...
+                                    </div>
+                                ) : (
+                                    <div className="text-xs text-slate-600">
+                                        Scroll for more sessions
+                                    </div>
+                                )}
                             </div>
                         )}
                     </>

@@ -105,10 +105,11 @@ export default function LocationPicker({ latitude, longitude, address, onLocatio
         searchAbortRef.current = controller;
         setIsSearching(true);
         try {
-            const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(normalizedQuery)}`, {
+            const res = await fetch(`/api/geocode?q=${encodeURIComponent(normalizedQuery)}`, {
                 signal: controller.signal,
             });
-            const data: SearchResult[] = await res.json();
+            const payload = await res.json();
+            const data: SearchResult[] = Array.isArray(payload.results) ? payload.results : [];
             if (controller.signal.aborted) {
                 return;
             }

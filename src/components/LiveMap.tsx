@@ -6,6 +6,7 @@ import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { getMapTileConfig } from '@/lib/maps/style'
+import { fetchSharedLiveVehicleJson } from '@/lib/vehicle/liveData'
 
 interface VehicleStatus {
     lat: number;
@@ -13,6 +14,16 @@ interface VehicleStatus {
     speed?: number | null;
     battery_level?: number | null;
 }
+
+type TelemetryVehicleResponse = {
+    success?: boolean;
+    vehicle?: {
+        latitude?: number | null;
+        longitude?: number | null;
+        speed?: number | null;
+        battery_level?: number | null;
+    };
+};
 
 // Fix for default marker icons in Next.js
 const defaultIcon = L.icon({
@@ -47,12 +58,19 @@ export default function LiveMap() {
             }
 
             try {
-                const res = await fetch('/api/vehicle/status?fields=map', {
-                    cache: 'no-store',
-                });
-                const data = await res.json();
-                if (data.lat && data.lon) {
-                    setVehicle(data);
+                const data = await fetchSharedLiveVehicleJson<TelemetryVehicleResponse>(
+                    'vehicle-live:telemetry',
+                    '/api/tesla/telemetry-status'
+                );
+                const nextVehicle = data.vehicle;
+
+                if (nextVehicle?.latitude != null && nextVehicle?.longitude != null) {
+                    setVehicle({
+                        lat: nextVehicle.latitude,
+                        lon: nextVehicle.longitude,
+                        speed: nextVehicle.speed ?? null,
+                        battery_level: nextVehicle.battery_level ?? null,
+                    });
                 }
             } catch (e) {
                 console.error("Failed to fetch status", e);

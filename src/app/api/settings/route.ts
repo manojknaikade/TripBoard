@@ -1,4 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { getAppSettingsSnapshot } from '@/lib/settings/appSettings';
 import { getTeslaSession } from '@/lib/tesla/auth-server'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -11,57 +12,18 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
-    const supabase = createAdminClient();
-
-    const { data: settings, error } = await supabase
-        .from('app_settings')
-        .select('polling_driving, polling_charging, polling_parked, polling_sleeping, region, units, currency, date_format, notifications_enabled, data_source, map_style')
-        .eq('id', 'default')
-        .single();
-
-    if (error && error.code === 'PGRST116') {
+    try {
+        const settings = await getAppSettingsSnapshot();
         return NextResponse.json({
             success: true,
-            settings: {
-                pollingConfig: {
-                    driving: 30,
-                    charging: 300,
-                    parked: 1800,
-                    sleeping: 3600,
-                },
-                region: 'eu',
-                units: 'imperial',
-                currency: 'CHF',
-                dateFormat: 'DD/MM',
-                notifications: true,
-                dataSource: 'polling',
-                mapStyle: 'streets',
-            }
+            settings,
         });
+    } catch (error) {
+        return NextResponse.json(
+            { error: error instanceof Error ? error.message : 'Failed to load settings' },
+            { status: 500 }
+        );
     }
-
-    if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-
-    return NextResponse.json({
-        success: true,
-        settings: {
-            pollingConfig: {
-                driving: settings.polling_driving,
-                charging: settings.polling_charging,
-                parked: settings.polling_parked,
-                sleeping: settings.polling_sleeping,
-            },
-            region: settings.region,
-            units: settings.units,
-            currency: settings.currency || 'CHF',
-            dateFormat: settings.date_format || 'DD/MM',
-            notifications: settings.notifications_enabled,
-            dataSource: settings.data_source,
-            mapStyle: settings.map_style || 'streets',
-        }
-    })
 }
 
 export async function POST(request: NextRequest) {

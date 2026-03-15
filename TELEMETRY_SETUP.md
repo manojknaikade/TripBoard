@@ -93,10 +93,8 @@ Optional aliases may still exist in your environment, but the deployed ingester 
 
 Use:
 
-- [supabase/schema.sql](/Users/manojnaikade/Documents/TripBoard/supabase/schema.sql) for the bootstrap schema
-- `supabase/migrations/*` for incremental changes
-
-Do not use [database_schema.sql](/Users/manojnaikade/Documents/TripBoard/database_schema.sql) for setup. It is a copied reference snapshot only.
+- [supabase/schema.sql](/Users/manojnaikade/Documents/TripBoard/supabase/schema.sql) for the current schema snapshot on a fresh project
+- `supabase/migrations/*` for incremental changes after that point
 
 Required telemetry-related tables and functions:
 

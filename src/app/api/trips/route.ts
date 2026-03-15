@@ -80,6 +80,28 @@ type TripSummaryRow = Pick<
     | 'end_battery_pct'
 >;
 
+type NumericLike = number | string | null;
+
+type TripListSummaryRpcRow = {
+    total_trips: NumericLike;
+    total_distance: NumericLike;
+    total_energy: NumericLike;
+    avg_efficiency: NumericLike;
+};
+
+function parseNumericLike(value: NumericLike): number {
+    if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : 0;
+    }
+
+    if (typeof value === 'string') {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    return 0;
+}
+
 const MAX_THUMBNAIL_POINTS = 24;
 const MAX_TELEMETRY_THUMBNAIL_FALLBACK_TRIPS = 8;
 const TRIP_LIST_SELECT = [
@@ -144,7 +166,7 @@ function getTripEnergy(trip: TripSummaryRow): number {
     return 0;
 }
 
-async function loadTripSummary(
+async function loadTripSummaryFallback(
     supabase: Awaited<ReturnType<typeof getSupabase>>,
     options: {
         from: string | null;
@@ -194,6 +216,44 @@ async function loadTripSummary(
         totalDistance,
         totalEnergy,
         avgEfficiency: totalDistance > 0 ? (totalEnergy * 1000) / totalDistance : 0,
+    };
+}
+
+async function loadTripSummary(
+    supabase: Awaited<ReturnType<typeof getSupabase>>,
+    options: {
+        from: string | null;
+        to: string | null;
+        vehicleId: string | null;
+    }
+) {
+    const { data, error } = await supabase.rpc('get_trip_list_summary', {
+        p_from: options.from,
+        p_to: options.to,
+        p_vehicle_id: options.vehicleId,
+    });
+
+    if (error) {
+        console.warn('Trip list summary RPC unavailable, using in-route fallback:', error.message);
+        return loadTripSummaryFallback(supabase, options);
+    }
+
+    const summaryRow = (data?.[0] ?? null) as TripListSummaryRpcRow | null;
+
+    if (!summaryRow) {
+        return {
+            totalTrips: 0,
+            totalDistance: 0,
+            totalEnergy: 0,
+            avgEfficiency: 0,
+        };
+    }
+
+    return {
+        totalTrips: Math.round(parseNumericLike(summaryRow.total_trips)),
+        totalDistance: parseNumericLike(summaryRow.total_distance),
+        totalEnergy: parseNumericLike(summaryRow.total_energy),
+        avgEfficiency: parseNumericLike(summaryRow.avg_efficiency),
     };
 }
 

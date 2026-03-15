@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
+import { cookies } from 'next/headers';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { normalizeTeslaRegion, type TeslaRegion } from '@/lib/tesla/api';
 
@@ -271,6 +272,10 @@ export async function getTeslaSession(request: NextRequest): Promise<TeslaSessio
         return null;
     }
 
+    return getTeslaSessionFromToken(sessionToken);
+}
+
+async function getTeslaSessionFromToken(sessionToken: string): Promise<TeslaSession | null> {
     const row = await getTeslaSessionRow(sessionToken);
     if (!row) {
         return null;
@@ -327,6 +332,17 @@ export async function getTeslaSession(request: NextRequest): Promise<TeslaSessio
         await deleteTeslaSessionRecord(sessionToken);
         return null;
     }
+}
+
+export async function getTeslaSessionFromServerCookies(): Promise<TeslaSession | null> {
+    const cookieStore = await cookies();
+    const sessionToken = cookieStore.get(TESLA_SESSION_COOKIE)?.value;
+
+    if (!sessionToken) {
+        return null;
+    }
+
+    return getTeslaSessionFromToken(sessionToken);
 }
 
 export async function clearTeslaSession(request: NextRequest, response: NextResponse) {

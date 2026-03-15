@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useSettingsStore } from '@/stores/settingsStore';
 import {
@@ -18,7 +18,8 @@ import {
 import Header from '@/components/Header';
 import dynamic from 'next/dynamic';
 import type { TripRoutePoint } from '@/lib/trips/routePoints';
-import { readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
+import { fetchCachedJson, readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
+import VirtualizedList from '@/components/VirtualizedList';
 
 // Dynamic import to avoid SSR issues with Leaflet
 const TripMiniMap = dynamic(() => import('@/components/TripMiniMap'), {
@@ -56,6 +57,7 @@ interface TripsSummary {
 }
 
 const THUMBNAIL_FETCH_ROOT_MARGIN = '320px';
+const TRIPS_AUTOLOAD_ROOT_MARGIN = '640px 0px';
 const TRIPS_PAGE_SIZE = 20;
 const TRIPS_BOOTSTRAP_CACHE_TTL_MS = 45_000;
 const thumbnailRouteCache = new Map<string, TripRoutePoint[]>();
@@ -68,6 +70,10 @@ type TripsListResponse = {
     nextOffset?: number | null;
     error?: string;
 };
+
+type VirtualTripListItem =
+    | { key: string; type: 'header'; label: string }
+    | { key: string; type: 'trip'; trip: Trip };
 
 async function getTripThumbnailRoutePoints(tripId: string): Promise<TripRoutePoint[]> {
     if (thumbnailRouteCache.has(tripId)) {
@@ -203,6 +209,18 @@ export default function TripsPage() {
         return { fromDate, toDate };
     }, [timeframe, customStart, customEnd]);
 
+    const getTripsRequestParams = useCallback((offset: number, includeSummary: boolean) => {
+        const { fromDate, toDate } = getDateRange();
+
+        return new URLSearchParams({
+            from: fromDate.toISOString(),
+            to: toDate.toISOString(),
+            limit: String(TRIPS_PAGE_SIZE),
+            offset: String(offset),
+            includeSummary: includeSummary ? '1' : '0',
+        });
+    }, [getDateRange]);
+
     const fetchTrips = useCallback(async ({ reset, offset }: { reset: boolean; offset: number }) => {
         let hydratedFromCache = false;
         let requestCacheKey = '';
@@ -216,14 +234,7 @@ export default function TripsPage() {
         }
 
         try {
-            const { fromDate, toDate } = getDateRange();
-            const params = new URLSearchParams({
-                from: fromDate.toISOString(),
-                to: toDate.toISOString(),
-                limit: String(TRIPS_PAGE_SIZE),
-                offset: String(offset),
-                includeSummary: reset ? '1' : '0',
-            });
+            const params = getTripsRequestParams(offset, reset);
 
             requestCacheKey = `trips:list:${params.toString()}`;
 
@@ -241,10 +252,21 @@ export default function TripsPage() {
                 }
             }
 
-            const response = await fetch(`/api/trips?${params}`, {
-                cache: 'no-store',
-            });
-            const data = await response.json();
+            const data = !reset
+                ? await fetchCachedJson<TripsListResponse>(
+                    requestCacheKey,
+                    async () => {
+                        const response = await fetch(`/api/trips?${params}`, {
+                            cache: 'no-store',
+                        });
+
+                        return response.json();
+                    },
+                    TRIPS_BOOTSTRAP_CACHE_TTL_MS
+                )
+                : await fetch(`/api/trips?${params}`, {
+                    cache: 'no-store',
+                }).then((response) => response.json());
 
             if (data.success) {
                 if (reset) {
@@ -292,7 +314,7 @@ export default function TripsPage() {
                 setLoadingMore(false);
             }
         }
-    }, [getDateRange]);
+    }, [getTripsRequestParams]);
 
     // Re-fetch when timeframe or custom dates change
     useEffect(() => {
@@ -328,7 +350,7 @@ export default function TripsPage() {
                     void fetchTrips({ reset: false, offset: nextOffset });
                 }
             },
-            { rootMargin: '360px 0px' }
+            { rootMargin: TRIPS_AUTOLOAD_ROOT_MARGIN }
         );
 
         observer.observe(autoLoadTriggerRef.current);
@@ -336,20 +358,59 @@ export default function TripsPage() {
         return () => observer.disconnect();
     }, [fetchTrips, hasCompleteDateRange, loading, loadingMore, nextOffset]);
 
+    useEffect(() => {
+        if (!hasCompleteDateRange || loading || nextOffset === null) {
+            return;
+        }
+
+        const params = getTripsRequestParams(nextOffset, false);
+        const requestCacheKey = `trips:list:${params.toString()}`;
+
+        void fetchCachedJson<TripsListResponse>(
+            requestCacheKey,
+            async () => {
+                const response = await fetch(`/api/trips?${params}`, {
+                    cache: 'no-store',
+                });
+
+                return response.json();
+            },
+            TRIPS_BOOTSTRAP_CACHE_TTL_MS
+        ).catch(() => {
+            // Ignore prefetch failures; the visible fetch path handles retries and errors.
+        });
+    }, [getTripsRequestParams, hasCompleteDateRange, loading, nextOffset]);
+
     // Trips are already filtered server-side
     const filteredTrips = trips;
 
     const displayedTrips = filteredTrips;
 
-    // Group trips by date
-    const tripsByDate = displayedTrips.reduce((acc, trip) => {
-        const date = formatDate(trip.started_at);
-        if (!acc[date]) {
-            acc[date] = [];
+    const virtualTripListItems = useMemo(() => {
+        const items: VirtualTripListItem[] = [];
+        let currentDateLabel: string | null = null;
+
+        for (const trip of displayedTrips) {
+            const nextDateLabel = formatDate(trip.started_at);
+
+            if (nextDateLabel !== currentDateLabel) {
+                currentDateLabel = nextDateLabel;
+                items.push({
+                    key: `header:${nextDateLabel}`,
+                    type: 'header',
+                    label: nextDateLabel,
+                });
+            }
+
+            items.push({
+                key: `trip:${trip.id}`,
+                type: 'trip',
+                trip,
+            });
         }
-        acc[date].push(trip);
-        return acc;
-    }, {} as Record<string, Trip[]>);
+
+        return items;
+    }, [displayedTrips]);
 
     const totalTrips = summary?.totalTrips ?? displayedTrips.length;
     const totalMiles = summary?.totalDistance ?? displayedTrips.reduce((sum, t) => sum + (t.distance_miles || 0), 0);
@@ -448,21 +509,25 @@ export default function TripsPage() {
                 {/* Trips List */}
                 {!loading && trips.length > 0 && (
                     <>
-                        <div className="space-y-6">
-                            {Object.entries(tripsByDate).map(([date, dateTrips]) => (
-                                <div key={date}>
-                                    <div className="mb-3 flex items-center gap-2 text-sm text-slate-400">
+                        <VirtualizedList
+                            key={`trips:${virtualTripListItems[0]?.key || 'empty'}:${virtualTripListItems[virtualTripListItems.length - 1]?.key || 'empty'}:${virtualTripListItems.length}`}
+                            items={virtualTripListItems}
+                            getItemKey={(item) => item.key}
+                            estimateHeight={(item) => item.type === 'header' ? 40 : 170}
+                            overscanPx={1000}
+                            renderItem={(item) => (
+                                item.type === 'header' ? (
+                                    <div className="flex items-center gap-2 pb-3 text-sm text-slate-400">
                                         <Calendar className="h-4 w-4" />
-                                        {date}
+                                        {item.label}
                                     </div>
-                                    <div className="space-y-3">
-                                        {dateTrips.map((trip) => (
-                                            <TripCard key={trip.id} trip={trip} units={units} />
-                                        ))}
+                                ) : (
+                                    <div className="pb-3">
+                                        <TripCard trip={item.trip} units={units} />
                                     </div>
-                                </div>
-                            ))}
-                        </div>
+                                )
+                            )}
+                        />
 
                         {nextOffset !== null && (
                             <div ref={autoLoadTriggerRef} className="mt-8 flex justify-center py-4">

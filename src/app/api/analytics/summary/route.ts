@@ -14,7 +14,6 @@ export const dynamic = 'force-dynamic';
 type AnalyticsScope = 'all' | 'driving' | 'charging';
 type UserUnits = 'imperial' | 'metric';
 type UserDateFormat = 'DD/MM' | 'MM/DD';
-type ChargeTypeKey = 'home' | 'supercharger' | 'destination' | '3rd_party_fast' | 'other';
 
 type TripRecord = {
     id: string;
@@ -54,9 +53,32 @@ type ChargingSessionTimingRecord = {
     start_time: string;
 };
 
-type SnapshotRecord = {
-    timestamp: string;
-    outside_temp: number | null;
+type ChargingSummaryRow = {
+    total_sessions: number;
+    total_battery_energy: number | null;
+    total_delivered_energy: number | null;
+    total_loss_energy: number | null;
+    total_loss_cost: number | null;
+    total_cost: number | null;
+    home_energy: number | null;
+    supercharger_energy: number | null;
+    third_party_fast_energy: number | null;
+    destination_energy: number | null;
+    other_energy: number | null;
+    home_cost: number | null;
+    supercharger_cost: number | null;
+    third_party_fast_cost: number | null;
+    destination_cost: number | null;
+    other_cost: number | null;
+};
+
+type ChargingDailyRow = {
+    day: string;
+    battery_energy: number | null;
+    delivered_energy: number | null;
+    loss_energy: number | null;
+    cost: number | null;
+    sessions: number | null;
 };
 
 type LeaderboardTrip = TripRecord & {
@@ -250,7 +272,7 @@ function computeTripMetrics(trip: TripMetricSource, distanceMultiplier: number) 
     return { distance, energy, drivingTimeHours, efficiency };
 }
 
-function normalizeChargingType(rawType: string | null): ChargeTypeKey {
+function normalizeChargingType(rawType: string | null) {
     const typeKey = (rawType ?? 'other').toLowerCase();
 
     if (typeKey.includes('3rd_party_fast')) return '3rd_party_fast';
@@ -418,7 +440,7 @@ export async function GET(request: NextRequest) {
         const prevToDate = new Date(fromDate.getTime() - 1);
         const prevFromDate = new Date(prevToDate.getTime() - periodMs);
 
-        const [tripsResult, chargingResult, prevTripsResult] = await Promise.all([
+        const [tripsResult, chargeTimingResult, prevTripsResult, chargingSummaryResult, chargingDailyResult] = await Promise.all([
             includeDriving
                 ? supabase
                     .from('trips')
@@ -428,23 +450,15 @@ export async function GET(request: NextRequest) {
                     .lte('start_time', periodEndIso)
                     .order('start_time', { ascending: true })
                 : Promise.resolve({ data: [] as TripRecord[], error: null }),
-            includeCharging
+            includeDriving
                 ? supabase
                     .from('charging_sessions')
-                    .select('id, energy_added_kwh, energy_delivered_kwh, charger_type, cost_user_entered, cost_estimate, charger_price_per_kwh, currency, start_time, tesla_charge_event_id, is_complete')
+                    .select('start_time')
                     .eq('is_complete', true)
                     .gte('start_time', periodStartIso)
                     .lte('start_time', periodEndIso)
                     .order('start_time', { ascending: true })
-                : includeDriving
-                    ? supabase
-                        .from('charging_sessions')
-                        .select('start_time')
-                        .eq('is_complete', true)
-                        .gte('start_time', periodStartIso)
-                        .lte('start_time', periodEndIso)
-                        .order('start_time', { ascending: true })
-                    : Promise.resolve({ data: [] as ChargingSessionTimingRecord[], error: null }),
+                : Promise.resolve({ data: [] as ChargingSessionTimingRecord[], error: null }),
             includeDriving
                 ? supabase
                     .from('trips')
@@ -453,31 +467,65 @@ export async function GET(request: NextRequest) {
                     .gte('start_time', prevFromDate.toISOString())
                     .lte('start_time', prevToDate.toISOString())
                 : Promise.resolve({ data: [] as TripMetricSource[], error: null }),
+            includeCharging
+                ? supabase.rpc('get_charging_analytics_summary', {
+                    p_from: periodStartIso,
+                    p_to: periodEndIso,
+                })
+                : Promise.resolve({ data: [] as ChargingSummaryRow[], error: null }),
+            includeCharging
+                ? supabase.rpc('get_charging_analytics_daily', {
+                    p_from: periodStartIso,
+                    p_to: periodEndIso,
+                })
+                : Promise.resolve({ data: [] as ChargingDailyRow[], error: null }),
         ]);
 
         if (tripsResult.error) {
             return NextResponse.json({ error: tripsResult.error.message }, { status: 500 });
         }
 
-        if (chargingResult.error) {
-            console.error('Error fetching charging sessions for analytics:', chargingResult.error);
+        if (chargeTimingResult.error) {
+            console.error('Error fetching charging session timing for analytics:', chargeTimingResult.error);
         }
 
         if (prevTripsResult.error) {
             console.error('Error fetching previous-period trips for analytics trends:', prevTripsResult.error);
         }
 
+        if (chargingSummaryResult.error) {
+            console.error('Error fetching charging summary rollup for analytics:', chargingSummaryResult.error);
+        }
+
+        if (chargingDailyResult.error) {
+            console.error('Error fetching charging daily rollup for analytics:', chargingDailyResult.error);
+        }
+
         const typedTrips = (tripsResult.data || []) as TripRecord[];
         const prevTrips = (prevTripsResult.data || []) as TripMetricSource[];
-        const typedChargingSessions = includeCharging
-            ? ((chargingResult.data || []) as ChargingSessionRecord[])
-            : [];
-        const chargeTimingRecords = includeCharging
-            ? typedChargingSessions
-            : ((chargingResult.data || []) as ChargingSessionTimingRecord[]);
+        const chargeTimingRecords = (chargeTimingResult.data || []) as ChargingSessionTimingRecord[];
         const chargeStartTimes = chargeTimingRecords
             .map((sessionRecord) => new Date(sessionRecord.start_time).getTime())
             .filter((value) => Number.isFinite(value));
+        const chargingSummaryRow = ((chargingSummaryResult.data || [])[0] ?? null) as ChargingSummaryRow | null;
+        const chargingDailyRows = (chargingDailyResult.data || []) as ChargingDailyRow[];
+        let fallbackChargingSessions: ChargingSessionRecord[] = [];
+
+        if (includeCharging && (chargingSummaryResult.error || chargingDailyResult.error)) {
+            const { data, error } = await supabase
+                .from('charging_sessions')
+                .select('id, energy_added_kwh, energy_delivered_kwh, charger_type, cost_user_entered, cost_estimate, charger_price_per_kwh, currency, start_time, tesla_charge_event_id, is_complete')
+                .eq('is_complete', true)
+                .gte('start_time', periodStartIso)
+                .lte('start_time', periodEndIso)
+                .order('start_time', { ascending: true });
+
+            if (error) {
+                console.error('Error fetching charging sessions fallback for analytics:', error);
+            } else {
+                fallbackChargingSessions = (data || []) as ChargingSessionRecord[];
+            }
+        }
 
         let totalDistance = 0;
         let totalEnergy = 0;
@@ -563,23 +611,58 @@ export async function GET(request: NextRequest) {
             }
         }
 
-        let totalChargingBatteryEnergy = 0;
-        let totalChargingDeliveredEnergy = 0;
-        let totalChargingLossEnergy = 0;
-        let totalChargingLossCost = 0;
-        let totalChargingCost = 0;
-        const chargingByType: Record<ChargeTypeKey, number> = {
-            home: 0,
-            supercharger: 0,
-            destination: 0,
-            '3rd_party_fast': 0,
-            other: 0,
+        let totalChargingBatteryEnergy = includeCharging ? Number(chargingSummaryRow?.total_battery_energy || 0) : 0;
+        let totalChargingDeliveredEnergy = includeCharging ? Number(chargingSummaryRow?.total_delivered_energy || 0) : 0;
+        let totalChargingLossEnergy = includeCharging ? Number(chargingSummaryRow?.total_loss_energy || 0) : 0;
+        let totalChargingLossCost = includeCharging ? Number(chargingSummaryRow?.total_loss_cost || 0) : 0;
+        let totalChargingCost = includeCharging ? Number(chargingSummaryRow?.total_cost || 0) : 0;
+        const chargingByType = {
+            home: Number(chargingSummaryRow?.home_energy || 0),
+            supercharger: Number(chargingSummaryRow?.supercharger_energy || 0),
+            '3rd_party_fast': Number(chargingSummaryRow?.third_party_fast_energy || 0),
+            destination: Number(chargingSummaryRow?.destination_energy || 0),
+            other: Number(chargingSummaryRow?.other_energy || 0),
         };
-        const costByType: Record<string, number> = {};
+        const costByType = {
+            home: Number(chargingSummaryRow?.home_cost || 0),
+            supercharger: Number(chargingSummaryRow?.supercharger_cost || 0),
+            '3rd_party_fast': Number(chargingSummaryRow?.third_party_fast_cost || 0),
+            destination: Number(chargingSummaryRow?.destination_cost || 0),
+            other: Number(chargingSummaryRow?.other_cost || 0),
+        };
 
-        if (includeCharging) {
-            for (const sessionRecord of typedChargingSessions) {
-                const normalizedKey = normalizeChargingType(sessionRecord.charger_type);
+        if (includeCharging && fallbackChargingSessions.length === 0) {
+            for (const row of chargingDailyRows) {
+                const chargingBucket = chargingBucketData.get(getBucketKey(row.day, bucketMode));
+                if (!chargingBucket) {
+                    continue;
+                }
+
+                chargingBucket.batteryEnergy += Number(row.battery_energy || 0);
+                chargingBucket.deliveredEnergy += Number(row.delivered_energy || 0);
+                chargingBucket.lossEnergy += Number(row.loss_energy || 0);
+                chargingBucket.cost += Number(row.cost || 0);
+                chargingBucket.sessions += Number(row.sessions || 0);
+            }
+        } else if (includeCharging) {
+            totalChargingBatteryEnergy = 0;
+            totalChargingDeliveredEnergy = 0;
+            totalChargingLossEnergy = 0;
+            totalChargingLossCost = 0;
+            totalChargingCost = 0;
+            chargingByType.home = 0;
+            chargingByType.supercharger = 0;
+            chargingByType['3rd_party_fast'] = 0;
+            chargingByType.destination = 0;
+            chargingByType.other = 0;
+            costByType.home = 0;
+            costByType.supercharger = 0;
+            costByType['3rd_party_fast'] = 0;
+            costByType.destination = 0;
+            costByType.other = 0;
+
+            for (const sessionRecord of fallbackChargingSessions) {
+                const normalizedKey = normalizeChargingType(sessionRecord.charger_type) as keyof typeof chargingByType;
                 const cost = getChargingDisplayCost(sessionRecord) ?? 0;
                 const batteryEnergy = getChargingBatteryEnergyKwh(sessionRecord) ?? 0;
                 const deliveredEnergy = getChargingDeliveredEnergyKwh(sessionRecord) ?? batteryEnergy;
@@ -591,12 +674,8 @@ export async function GET(request: NextRequest) {
                 totalChargingLossEnergy += lossEnergy;
                 totalChargingLossCost += lossCost;
                 totalChargingCost += cost;
-
-                costByType[normalizedKey] = (costByType[normalizedKey] || 0) + cost;
-
-                if (batteryEnergy > 0) {
-                    chargingByType[normalizedKey] += batteryEnergy;
-                }
+                chargingByType[normalizedKey] += batteryEnergy;
+                costByType[normalizedKey] += cost;
 
                 const chargingBucket = chargingBucketData.get(getBucketKey(sessionRecord.start_time, bucketMode));
                 if (chargingBucket) {
@@ -638,95 +717,9 @@ export async function GET(request: NextRequest) {
                 drivingTime: 0,
             };
 
-        let temperatureImpact: Array<{ temp: number; efficiency: number }> = [];
-
-        if (includeDriving && validTrips.length > 0) {
-            const { data: snapshots, error: snapshotError } = await supabase
-                .from('vehicle_snapshots')
-                .select('timestamp, outside_temp')
-                .gte('timestamp', periodStartIso)
-                .lte('timestamp', periodEndIso)
-                .order('timestamp', { ascending: true });
-
-            if (snapshotError) {
-                console.error('Error fetching snapshots for analytics temperature impact:', snapshotError);
-            } else {
-                const typedSnapshots = (snapshots || []) as SnapshotRecord[];
-                const tempBuckets: Record<number, { totalEff: number; count: number }> = {};
-                let snapshotIndex = 0;
-
-                for (const trip of validTrips) {
-                    if (!trip.end_time) {
-                        continue;
-                    }
-
-                    const tripStartMs = new Date(trip.start_time).getTime();
-                    const tripEndMs = new Date(trip.end_time).getTime();
-
-                    if (!Number.isFinite(tripStartMs) || !Number.isFinite(tripEndMs) || tripEndMs < tripStartMs) {
-                        continue;
-                    }
-
-                    while (
-                        snapshotIndex < typedSnapshots.length &&
-                        new Date(typedSnapshots[snapshotIndex].timestamp).getTime() < tripStartMs
-                    ) {
-                        snapshotIndex += 1;
-                    }
-
-                    let cursor = snapshotIndex;
-                    let totalTemp = 0;
-                    let sampleCount = 0;
-
-                    while (cursor < typedSnapshots.length) {
-                        const snapshot = typedSnapshots[cursor];
-                        const snapshotTime = new Date(snapshot.timestamp).getTime();
-
-                        if (!Number.isFinite(snapshotTime) || snapshotTime > tripEndMs) {
-                            break;
-                        }
-
-                        if (snapshot.outside_temp != null) {
-                            totalTemp += snapshot.outside_temp;
-                            sampleCount += 1;
-                        }
-
-                        cursor += 1;
-                    }
-
-                    snapshotIndex = cursor;
-
-                    if (sampleCount === 0) {
-                        continue;
-                    }
-
-                    const bucket = Math.round((totalTemp / sampleCount) / 5) * 5;
-
-                    if (trip.calculatedEfficiency > 100 && trip.calculatedEfficiency < 600) {
-                        if (!tempBuckets[bucket]) {
-                            tempBuckets[bucket] = { totalEff: 0, count: 0 };
-                        }
-
-                        tempBuckets[bucket].totalEff += trip.calculatedEfficiency;
-                        tempBuckets[bucket].count += 1;
-                    }
-                }
-
-                temperatureImpact = Object.keys(tempBuckets)
-                    .map((temp) => {
-                        const bucket = parseInt(temp, 10);
-                        return {
-                            temp: bucket,
-                            efficiency: Math.round(tempBuckets[bucket].totalEff / tempBuckets[bucket].count),
-                        };
-                    })
-                    .sort((a, b) => a.temp - b.temp);
-            }
-
-            if (temperatureImpact.length === 0) {
-                temperatureImpact = buildFallbackTemperatureImpact(validTrips);
-            }
-        }
+        const temperatureImpact = includeDriving && validTrips.length > 0
+            ? buildFallbackTemperatureImpact(validTrips)
+            : [];
 
         const weeklyData = [...tripBucketData.values()].map((bucket) => ({
             day: bucket.day,
@@ -766,7 +759,13 @@ export async function GET(request: NextRequest) {
         };
 
         const costBySource = includeCharging
-            ? Object.entries(costByType)
+            ? Object.entries({
+                home: costByType.home,
+                supercharger: costByType.supercharger,
+                '3rd_party_fast': costByType['3rd_party_fast'],
+                destination: costByType.destination,
+                other: costByType.other,
+            })
                 .filter(([, cost]) => cost > 0)
                 .map(([key, cost]) => ({
                     name: sourceColorMap[key]?.name || key,
@@ -812,7 +811,7 @@ export async function GET(request: NextRequest) {
             };
 
         const chargeSessionCount = includeCharging
-            ? typedChargingSessions.length
+            ? (fallbackChargingSessions.length > 0 ? fallbackChargingSessions.length : Number(chargingSummaryRow?.total_sessions || 0))
             : chargeStartTimes.length;
 
         return NextResponse.json({

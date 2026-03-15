@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { PollingConfig, DEFAULT_POLLING_CONFIG } from '@/lib/utils/polling';
 import type { MapStyle } from '@/lib/maps/style';
+import type { AppSettingsSnapshot, HomeLocationSnapshot } from '@/lib/settings/appSettings';
 
 type Region = 'na' | 'eu' | 'cn';
 type Units = 'imperial' | 'metric';
@@ -37,6 +38,7 @@ interface SettingsStore {
     setDataSource: (source: DataSource) => void;
     setMapStyle: (style: MapStyle) => void;
     setHomeLocation: (location: HomeLocation) => void;
+    applySnapshot: (snapshot: AppSettingsSnapshot, homeLocation?: HomeLocationSnapshot) => void;
     loadFromDatabase: () => Promise<void>;
     saveToDatabase: () => Promise<void>;
     resetToDefaults: () => void;
@@ -79,6 +81,19 @@ export const useSettingsStore = create<SettingsStore>()(
             setMapStyle: (mapStyle) => set({ mapStyle }),
 
             setHomeLocation: (homeLocation) => set({ homeLocation }),
+
+            applySnapshot: (snapshot, homeLocation) =>
+                set({
+                    pollingConfig: snapshot.pollingConfig,
+                    region: snapshot.region,
+                    units: snapshot.units,
+                    currency: snapshot.currency || 'CHF',
+                    dateFormat: snapshot.dateFormat || 'DD/MM',
+                    notifications: snapshot.notifications,
+                    dataSource: snapshot.dataSource,
+                    mapStyle: snapshot.mapStyle || 'streets',
+                    ...(homeLocation ? { homeLocation } : {}),
+                }),
 
             loadFromDatabase: async () => {
                 try {

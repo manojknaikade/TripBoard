@@ -54,7 +54,30 @@ type ChargingSummaryRow = {
     is_complete: boolean | null;
 };
 
-async function loadChargingSummary(
+type NumericLike = number | string | null;
+
+type ChargingListSummaryRpcRow = {
+    total_sessions: NumericLike;
+    total_battery_energy: NumericLike;
+    total_delivered_energy: NumericLike;
+    max_charge_rate: NumericLike;
+    total_cost: NumericLike;
+};
+
+function parseNumericLike(value: NumericLike): number {
+    if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : 0;
+    }
+
+    if (typeof value === 'string') {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    return 0;
+}
+
+async function loadChargingSummaryFallback(
     supabase: ReturnType<typeof createAdminClient>,
     options: {
         from: string | null;
@@ -109,6 +132,52 @@ async function loadChargingSummary(
         totalDeliveredEnergy,
         maxChargeRate,
         totalCost,
+    };
+}
+
+async function loadChargingSummary(
+    supabase: ReturnType<typeof createAdminClient>,
+    options: {
+        from: string | null;
+        to: string | null;
+        vehicleId: string | null;
+        preferredCurrency: string | null;
+    }
+) {
+    const vehicleId = options.vehicleId && options.vehicleId.length > 0
+        ? options.vehicleId
+        : null;
+
+    const { data, error } = await supabase.rpc('get_charging_list_summary', {
+        p_from: options.from,
+        p_to: options.to,
+        p_vehicle_id: vehicleId,
+        p_preferred_currency: options.preferredCurrency,
+    });
+
+    if (error) {
+        console.warn('Charging list summary RPC unavailable, using in-route fallback:', error.message);
+        return loadChargingSummaryFallback(supabase, options);
+    }
+
+    const summaryRow = (data?.[0] ?? null) as ChargingListSummaryRpcRow | null;
+
+    if (!summaryRow) {
+        return {
+            totalSessions: 0,
+            totalBatteryEnergy: 0,
+            totalDeliveredEnergy: 0,
+            maxChargeRate: 0,
+            totalCost: 0,
+        };
+    }
+
+    return {
+        totalSessions: Math.round(parseNumericLike(summaryRow.total_sessions)),
+        totalBatteryEnergy: parseNumericLike(summaryRow.total_battery_energy),
+        totalDeliveredEnergy: parseNumericLike(summaryRow.total_delivered_energy),
+        maxChargeRate: parseNumericLike(summaryRow.max_charge_rate),
+        totalCost: parseNumericLike(summaryRow.total_cost),
     };
 }
 

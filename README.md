@@ -114,12 +114,11 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
    `TESLA_VEHICLE_COMMAND_PROXY_URL` is the Vehicle Command Proxy the app talks to for fleet telemetry config operations. `TESLA_TELEMETRY_HOSTNAME` and `TESLA_TELEMETRY_PORT` are the host/port Tesla vehicles should stream telemetry to. `CHARGING_SYNC_SECRET` protects the internal route that processes completed Supercharger sessions and writes Tesla billing data into `charging_sessions`.
 
 4. **Database Setup**
-   Use `supabase/schema.sql` as the bootstrap schema for a fresh Supabase project.
-   After that, apply the SQL files in `supabase/migrations/` in chronological order to bring the database to the current app state.
+   Use `supabase/schema.sql` as the current public-schema snapshot for a fresh Supabase project.
+   Use `supabase/migrations/` for incremental schema changes going forward. Do not apply the full snapshot and then replay the full migration history on top of it.
+   Whenever a migration is added or applied manually, refresh `supabase/schema.sql` from the live database so the checked-in snapshot stays accurate.
 
-   `database_schema.sql` is only a copied reference snapshot from Supabase for inspection. It is not the source of truth and should not be used for setup.
-
-   If a migration fails with `relation ... does not exist`, the database is usually missing an earlier dependency or the base `supabase/schema.sql` bootstrap has not been applied yet.
+   If a migration fails with `relation ... does not exist`, the database is usually missing an earlier dependency or the expected base schema has not been applied yet.
 
    **Key migrations:**
    - `supabase/migrations/20260312000000_create_tesla_sessions.sql` — Adds encrypted server-side Tesla session storage
@@ -135,6 +134,8 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
    - `supabase/migrations/20260313080000_add_trip_route_waypoints.sql` — Captures exact route waypoints for future trips and backfills historical trip routes from `telemetry_raw`
    - `supabase/migrations/20260315021000_add_tesla_charging_sync_queue.sql` — Adds the Tesla Supercharger enrichment queue and extends `tesla_sessions` with `user_id`
    - `supabase/migrations/20260315190000_add_maintenance_summary_function.sql` — Adds an optional SQL aggregate used as a performance optimization for maintenance summary endpoints
+   - `supabase/migrations/20260315220000_add_analytics_rollups_and_indexes.sql` — Adds charging analytics SQL rollups and partial time-range indexes used by the dashboard analytics routes
+   - `supabase/migrations/20260315233000_add_list_summary_functions.sql` — Adds SQL rollups for trip-list and charging-list summary cards so those headers do not require scanning filtered rows in Next.js route handlers
 
 5. **Run the Development Server**
 
@@ -200,8 +201,20 @@ The current production charging-billing enrichment runs as a separate `systemd` 
 
 - The app now uses a short-lived in-memory client fetch cache for selected dashboard pages and analytics views. It is intentionally a UX optimization, not a persistence layer.
 - List pages such as trips, charging, and maintenance hydrate from a recent cached response when available, then refresh in the background so the first screen feels immediate without requiring a hard reload.
+- Trips, charging, and maintenance service history now use windowed rendering so DOM cost stays bounded even after many pages have been loaded.
+- Trips and charging prefetch the next page in the background before the user reaches the end of the current page, so scrolling feels continuous instead of waiting at the bottom.
 - Maintenance uses a dedicated bootstrap endpoint (`/api/maintenance/bootstrap`) to load tyre sets, the first history page, summary cards, and current odometer in a single request.
-- Live vehicle status on the main dashboard is handled separately and is not covered by the generic short-lived page cache because freshness matters more there.
+- Dashboard and settings now prefetch their initial settings and Tesla vehicle summaries on the server, so those routes no longer depend on a client-only boot fetch before they can render useful content.
+- Analytics pages also prefetch their default timeframe data on the server, so opening analytics does not start from a blank client shell and a full-screen loader.
+- Trip and charging list summary cards prefer SQL rollups (`get_trip_list_summary()` and `get_charging_list_summary()`) and fall back to query-based aggregation if those functions are not deployed yet.
+- The settings location search now goes through the app’s cached geocode route instead of calling Nominatim directly from the browser.
+- Live vehicle fetches now use a shared short-TTL request layer, so concurrent dashboard/map consumers can reuse the same in-flight response instead of polling independently.
+
+## Repo Hygiene
+
+- Update `README.md` whenever product behavior, setup, migrations, or operational expectations change.
+- Refresh `supabase/schema.sql` after database migrations are added or applied so the repo snapshot matches the live public schema.
+- Do not commit `supabase/.temp/`; it is Supabase CLI working state only.
 
 ## Maintenance Tracking Notes
 

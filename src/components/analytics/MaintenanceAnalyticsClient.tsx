@@ -12,28 +12,9 @@ import {
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import AnalyticsChartsSkeleton from '@/components/analytics/AnalyticsChartsSkeleton';
-import { type MaintenanceServiceType, type TyreSeason } from '@/lib/maintenance';
-import { fetchCachedJson, readCachedJson } from '@/lib/client/fetchCache';
+import { fetchCachedJson, readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
 import { useSettingsStore } from '@/stores/settingsStore';
-
-type AnalyticsData = {
-    summary: {
-        totalRecords: number;
-        paidRecords: number;
-        totalSpend: number | null;
-        averagePaidCost: number | null;
-        spendCurrency: string | null;
-        mixedCurrencies: boolean;
-        seasonChanges: number;
-        rotations: number;
-        tyreWorkRecords: number;
-        activeTyreSets: number;
-    };
-    activityData: Array<{ period: string; records: number; spend: number }>;
-    serviceTypeBreakdown: Array<{ serviceType: MaintenanceServiceType; records: number }>;
-    tyreSetMileage: Array<{ name: string; season: TyreSeason; status: 'active' | 'retired'; mileageKm: number }>;
-    currencyTotals: Array<{ currency: string; total: number }>;
-};
+import type { MaintenanceAnalyticsData } from '@/lib/analytics/types';
 
 function formatCurrency(value: number, currency: string) {
     try {
@@ -54,18 +35,35 @@ const MaintenanceAnalyticsCharts = dynamic(() => import('@/components/analytics/
 });
 
 const MAINTENANCE_ANALYTICS_CACHE_TTL_MS = 45_000;
+const DEFAULT_MAINTENANCE_TIMEFRAME = 'year';
 
-export default function MaintenanceAnalyticsClient() {
-    const [timeframe, setTimeframe] = useState('year');
-    const [loading, setLoading] = useState(true);
-    const [data, setData] = useState<AnalyticsData | null>(null);
+function buildMaintenanceAnalyticsUrl(timeframe: string) {
+    return `/api/analytics/maintenance?timeframe=${timeframe}`;
+}
+
+export default function MaintenanceAnalyticsClient({ initialData = null }: { initialData?: MaintenanceAnalyticsData | null }) {
+    const [timeframe, setTimeframe] = useState(DEFAULT_MAINTENANCE_TIMEFRAME);
+    const [loading, setLoading] = useState(!initialData);
+    const [data, setData] = useState<MaintenanceAnalyticsData | null>(initialData);
     const units = useSettingsStore((state) => state.units);
     const preferredCurrency = useSettingsStore((state) => state.currency);
 
+    useEffect(() => {
+        if (!initialData) {
+            return;
+        }
+
+        writeCachedJson(
+            `analytics:maintenance:${buildMaintenanceAnalyticsUrl(DEFAULT_MAINTENANCE_TIMEFRAME)}`,
+            initialData,
+            MAINTENANCE_ANALYTICS_CACHE_TTL_MS
+        );
+    }, [initialData]);
+
     const fetchAnalytics = useCallback(async () => {
-        const url = `/api/analytics/maintenance?timeframe=${timeframe}`;
+        const url = buildMaintenanceAnalyticsUrl(timeframe);
         const cacheKey = `analytics:maintenance:${url}`;
-        const cached = readCachedJson<AnalyticsData>(cacheKey);
+        const cached = readCachedJson<MaintenanceAnalyticsData>(cacheKey);
         if (cached) {
             setData(cached);
             setLoading(false);
@@ -74,7 +72,7 @@ export default function MaintenanceAnalyticsClient() {
 
         setLoading(true);
         try {
-            const json = await fetchCachedJson<AnalyticsData & { success?: boolean }>(
+            const json = await fetchCachedJson<MaintenanceAnalyticsData & { success?: boolean }>(
                 cacheKey,
                 async () => {
                     const response = await fetch(url);

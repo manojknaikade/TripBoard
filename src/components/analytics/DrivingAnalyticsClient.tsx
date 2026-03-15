@@ -16,55 +16,9 @@ import {
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import AnalyticsChartsSkeleton from '@/components/analytics/AnalyticsChartsSkeleton';
-import { fetchCachedJson, readCachedJson } from '@/lib/client/fetchCache';
+import { fetchCachedJson, readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
 import { useSettingsStore } from '@/stores/settingsStore';
-
-interface AnalyticTrip {
-    id: string;
-    date: string;
-    distance: number;
-    efficiency: number;
-}
-
-interface WeeklyDatum {
-    day: string;
-    dateKey: string;
-    axisLabel: string;
-    tooltipLabel: string;
-    distance: number;
-    energy: number;
-    trips: number;
-}
-
-interface EfficiencyDatum {
-    time: string;
-    efficiency: number;
-}
-
-interface AnalyticsData {
-    summary: {
-        totalDistance: number;
-        totalEnergy: number;
-        avgEfficiency: number;
-        drivingTime: number;
-        tripCount: number;
-        vampireDrainKwh: number;
-        trends?: {
-            distance: number;
-            energy: number;
-            efficiency: number;
-            drivingTime: number;
-        };
-    };
-    weeklyData: WeeklyDatum[];
-    efficiencyData: EfficiencyDatum[];
-    leaderboard: {
-        longest: AnalyticTrip | null;
-        shortest: AnalyticTrip | null;
-        mostEfficient: AnalyticTrip | null;
-    };
-    temperatureImpact: Array<{ temp: number; efficiency: number }>;
-}
+import type { AnalyticTrip, DrivingAnalyticsData } from '@/lib/analytics/types';
 
 const DrivingAnalyticsCharts = dynamic(() => import('@/components/analytics/DrivingAnalyticsCharts'), {
     ssr: false,
@@ -72,25 +26,43 @@ const DrivingAnalyticsCharts = dynamic(() => import('@/components/analytics/Driv
 });
 
 const ANALYTICS_CACHE_TTL_MS = 45_000;
+const DEFAULT_DRIVING_TIMEFRAME = '7days';
 
-export default function DrivingAnalyticsClient() {
-    const [timeframe, setTimeframe] = useState('7days');
+function buildDrivingAnalyticsUrl(timeframe: string, customStart: string, customEnd: string) {
+    let url = `/api/analytics/summary?scope=driving&timeframe=${timeframe}`;
+    if (timeframe === 'custom' && customStart && customEnd) {
+        url += `&startDate=${customStart}&endDate=${customEnd}`;
+    }
+
+    return url;
+}
+
+export default function DrivingAnalyticsClient({ initialData = null }: { initialData?: DrivingAnalyticsData | null }) {
+    const [timeframe, setTimeframe] = useState(DEFAULT_DRIVING_TIMEFRAME);
     const [customStart, setCustomStart] = useState('');
     const [customEnd, setCustomEnd] = useState('');
     const [showCustomPicker, setShowCustomPicker] = useState(false);
-    const [loading, setLoading] = useState(true);
-    const [data, setData] = useState<AnalyticsData | null>(null);
+    const [loading, setLoading] = useState(!initialData);
+    const [data, setData] = useState<DrivingAnalyticsData | null>(initialData);
     const units = useSettingsStore((state) => state.units);
     const hasCompleteDateRange = timeframe !== 'custom' || (!!customStart && !!customEnd);
 
-    const fetchAnalytics = useCallback(async () => {
-        let url = `/api/analytics/summary?scope=driving&timeframe=${timeframe}`;
-        if (timeframe === 'custom' && customStart && customEnd) {
-            url += `&startDate=${customStart}&endDate=${customEnd}`;
+    useEffect(() => {
+        if (!initialData) {
+            return;
         }
 
+        writeCachedJson(
+            `analytics:driving:${buildDrivingAnalyticsUrl(DEFAULT_DRIVING_TIMEFRAME, '', '')}`,
+            initialData,
+            ANALYTICS_CACHE_TTL_MS
+        );
+    }, [initialData]);
+
+    const fetchAnalytics = useCallback(async () => {
+        const url = buildDrivingAnalyticsUrl(timeframe, customStart, customEnd);
         const cacheKey = `analytics:driving:${url}`;
-        const cached = readCachedJson<AnalyticsData>(cacheKey);
+        const cached = readCachedJson<DrivingAnalyticsData>(cacheKey);
         if (cached) {
             setData(cached);
             setLoading(false);
@@ -99,7 +71,7 @@ export default function DrivingAnalyticsClient() {
 
         setLoading(true);
         try {
-            const json = await fetchCachedJson<AnalyticsData & { success?: boolean }>(
+            const json = await fetchCachedJson<DrivingAnalyticsData & { success?: boolean }>(
                 cacheKey,
                 async () => {
                     const res = await fetch(url);

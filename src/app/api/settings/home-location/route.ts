@@ -1,4 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { getHomeLocationSnapshot } from '@/lib/settings/appSettings';
 import { getTeslaSession } from '@/lib/tesla/auth-server'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -10,26 +11,18 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
     }
 
-    const supabase = createAdminClient()
-
-    const { data, error } = await supabase
-        .from('app_settings')
-        .select('home_latitude, home_longitude, home_address')
-        .eq('id', 'default')
-        .single()
-
-    if (error && error.code !== 'PGRST116') {
-        return NextResponse.json({ error: error.message }, { status: 500 })
+    try {
+        const homeLocation = await getHomeLocationSnapshot();
+        return NextResponse.json({
+            success: true,
+            homeLocation,
+        });
+    } catch (error) {
+        return NextResponse.json(
+            { error: error instanceof Error ? error.message : 'Failed to load home location' },
+            { status: 500 }
+        );
     }
-
-    return NextResponse.json({
-        success: true,
-        homeLocation: {
-            latitude: data?.home_latitude || null,
-            longitude: data?.home_longitude || null,
-            address: data?.home_address || '',
-        }
-    })
 }
 
 export async function POST(request: NextRequest) {

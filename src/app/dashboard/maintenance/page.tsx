@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import Header from '@/components/Header';
+import VirtualizedList from '@/components/VirtualizedList';
 import { invalidateCachedJson, readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
 import { useSettingsStore } from '@/stores/settingsStore';
 import {
@@ -926,69 +927,77 @@ export default function MaintenancePage() {
                     ) : historyRecords.length === 0 ? (
                         <EmptyState message="No maintenance records yet." />
                     ) : (
-                        <div className="space-y-4">
-                            {historyRecords.map((record) => {
-                                const linkedTyreSet = record.tyre_set_id ? (tyreSetById.get(record.tyre_set_id) || null) : null;
+                        <div>
+                            <VirtualizedList
+                                key={`maintenance:${historyRecords[0]?.id || 'empty'}:${historyRecords[historyRecords.length - 1]?.id || 'empty'}:${historyRecords.length}`}
+                                items={historyRecords}
+                                getItemKey={(record) => record.id}
+                                estimateHeight={() => 184}
+                                overscanPx={1000}
+                                renderItem={(record) => {
+                                    const linkedTyreSet = record.tyre_set_id ? (tyreSetById.get(record.tyre_set_id) || null) : null;
 
-                                return (
-                                    <article
-                                        key={record.id}
-                                        className={`rounded-xl border border-slate-700/50 bg-slate-900/20 p-5 border-l-2 ${getRecordBorderClass(record)}`}
-                                    >
-                                        <div className="flex items-start justify-between gap-4">
-                                            <div className="min-w-0 flex-1">
-                                                <div className="mb-3 flex flex-wrap items-center gap-2">
-                                                    <Pill className="border-slate-600/80 bg-slate-800/80 text-slate-200">
-                                                        {serviceTypeLabels[record.service_type]}
-                                                    </Pill>
-                                                    {linkedTyreSet && (
-                                                        <Pill className="border-slate-600/80 bg-slate-800/80 text-slate-300">
-                                                            {linkedTyreSet.name}
-                                                        </Pill>
-                                                    )}
-                                                </div>
-
+                                    return (
+                                        <div className="pb-4">
+                                            <article
+                                                className={`rounded-xl border border-slate-700/50 bg-slate-900/20 p-5 border-l-2 ${getRecordBorderClass(record)}`}
+                                            >
                                                 <div className="flex items-start justify-between gap-4">
-                                                    <div className="min-w-0">
-                                                        <h3 className="text-lg font-semibold leading-6 text-white">{record.title}</h3>
-                                                        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-400">
-                                                            {record.season && (
-                                                                <span>{seasonLabels[record.season]} set</span>
-                                                            )}
-                                                            {record.rotation_status !== 'not_applicable' && (
-                                                                <span className={record.rotation_status === 'unknown' ? 'text-amber-300' : 'text-slate-400'}>
-                                                                    Rotation {rotationLabels[record.rotation_status]}
-                                                                </span>
+                                                    <div className="min-w-0 flex-1">
+                                                        <div className="mb-3 flex flex-wrap items-center gap-2">
+                                                            <Pill className="border-slate-600/80 bg-slate-800/80 text-slate-200">
+                                                                {serviceTypeLabels[record.service_type]}
+                                                            </Pill>
+                                                            {linkedTyreSet && (
+                                                                <Pill className="border-slate-600/80 bg-slate-800/80 text-slate-300">
+                                                                    {linkedTyreSet.name}
+                                                                </Pill>
                                                             )}
                                                         </div>
-                                                    </div>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => handleEditRecord(record)}
-                                                        className="shrink-0 rounded-lg border border-slate-700/50 bg-slate-900/30 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-slate-600 hover:text-white"
-                                                    >
-                                                        Edit
-                                                    </button>
-                                                </div>
 
-                                                <div className="mt-4 flex flex-col gap-2 border-t border-slate-700/50 pt-4 text-sm md:flex-row md:items-center md:justify-between">
-                                                    <div className="text-slate-300">
-                                                        {formatDate(record.start_date)}
-                                                        {record.end_date ? ` to ${formatDate(record.end_date)}` : ' onward'}
-                                                    </div>
-                                                    <div className="text-left tabular-nums text-slate-400 md:text-right">
-                                                        {buildRecordMeta(record, units, preferredCurrency).join(' • ') || 'No odometer or cost logged'}
+                                                        <div className="flex items-start justify-between gap-4">
+                                                            <div className="min-w-0">
+                                                                <h3 className="text-lg font-semibold leading-6 text-white">{record.title}</h3>
+                                                                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-400">
+                                                                    {record.season && (
+                                                                        <span>{seasonLabels[record.season]} set</span>
+                                                                    )}
+                                                                    {record.rotation_status !== 'not_applicable' && (
+                                                                        <span className={record.rotation_status === 'unknown' ? 'text-amber-300' : 'text-slate-400'}>
+                                                                            Rotation {rotationLabels[record.rotation_status]}
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleEditRecord(record)}
+                                                                className="shrink-0 rounded-lg border border-slate-700/50 bg-slate-900/30 px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:border-slate-600 hover:text-white"
+                                                            >
+                                                                Edit
+                                                            </button>
+                                                        </div>
+
+                                                        <div className="mt-4 flex flex-col gap-2 border-t border-slate-700/50 pt-4 text-sm md:flex-row md:items-center md:justify-between">
+                                                            <div className="text-slate-300">
+                                                                {formatDate(record.start_date)}
+                                                                {record.end_date ? ` to ${formatDate(record.end_date)}` : ' onward'}
+                                                            </div>
+                                                            <div className="text-left tabular-nums text-slate-400 md:text-right">
+                                                                {buildRecordMeta(record, units, preferredCurrency).join(' • ') || 'No odometer or cost logged'}
+                                                            </div>
+                                                        </div>
+
+                                                        {record.notes && (
+                                                            <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-300">{record.notes}</p>
+                                                        )}
                                                     </div>
                                                 </div>
-
-                                                {record.notes && (
-                                                    <p className="mt-3 max-w-4xl text-sm leading-6 text-slate-300">{record.notes}</p>
-                                                )}
-                                            </div>
+                                            </article>
                                         </div>
-                                    </article>
-                                );
-                            })}
+                                    );
+                                }}
+                            />
                             {historyHasMore && (
                                 <div ref={historyLoadMoreRef} className="flex items-center justify-center py-4 text-sm text-slate-500">
                                     {historyLoadingMore ? (
