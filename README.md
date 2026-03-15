@@ -32,6 +32,7 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
   - **Vampire Drain:** Estimated energy loss while parked (trip-interstitial method)
   - Charging Sources breakdown (pie chart)
   - **Cost by Charging Source:** Horizontal bar chart showing costs per charger type
+  - **Charging Loss Analytics:** Separate battery energy, charger-delivered energy, measured charging loss, and estimated wasted charging cost
   - **Maintenance analytics tab:** Service volume, spend, average service cost, tyre work, and tracked tyre-set mileage
 
 - **Maintenance & Tyre Tracking**
@@ -103,13 +104,14 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
    TESLA_VEHICLE_COMMAND_PROXY_URL=https://your-vehicle-proxy.example.com:4443
    TESLA_TELEMETRY_HOSTNAME=your-telemetry-host.example.com
    TESLA_TELEMETRY_PORT=443
+   CHARGING_SYNC_SECRET=your_charging_sync_secret
    
    # Encryption (used for Tesla token/session storage)
    # Generate with: openssl rand -base64 32
    TOKEN_ENCRYPTION_KEY=your_random_32_byte_string
    ```
 
-   `TESLA_VEHICLE_COMMAND_PROXY_URL` is the Vehicle Command Proxy the app talks to for fleet telemetry config operations. `TESLA_TELEMETRY_HOSTNAME` and `TESLA_TELEMETRY_PORT` are the host/port Tesla vehicles should stream telemetry to.
+   `TESLA_VEHICLE_COMMAND_PROXY_URL` is the Vehicle Command Proxy the app talks to for fleet telemetry config operations. `TESLA_TELEMETRY_HOSTNAME` and `TESLA_TELEMETRY_PORT` are the host/port Tesla vehicles should stream telemetry to. `CHARGING_SYNC_SECRET` protects the internal route that processes completed Supercharger sessions and writes Tesla billing data into `charging_sessions`.
 
 4. **Database Setup**
    Use `supabase/schema.sql` as the bootstrap schema for a fresh Supabase project.
@@ -163,6 +165,7 @@ src/
 └── types/                # TypeScript type definitions
 scripts/
 ├── telemetry-server.js   # Legacy/local Node telemetry prototype
+├── process-charging-sync.js # Standalone worker that enriches completed Supercharger sessions with Tesla billing data
 supabase/
 ├── schema.sql            # Canonical bootstrap schema for fresh projects
 └── migrations/           # Incremental database changes
@@ -178,12 +181,15 @@ TripBoard uses a **database-level trigger** (`process_telemetry`) on the `teleme
 - Track outside temperature (min/max/avg) during active trips
 - Detect and record charging sessions with charger type classification
 - Reconcile stale open charging sessions with `reconcile_stale_charging_sessions()`
+- Queue completed Supercharger sessions for one-time Tesla billing enrichment
 
 The Go telemetry server on the VPS ingests raw Tesla Fleet Telemetry and inserts into `telemetry_raw`. All trip/charging logic runs as PL/pgSQL triggers in Supabase.
+Completed Supercharger sessions are queued in Supabase and can be processed either by calling `GET /api/internal/charging/tesla-sync` from a server-side cron with `Authorization: Bearer $CHARGING_SYNC_SECRET` (or `CRON_SECRET`), or by running `scripts/process-charging-sync.js` as a standalone worker on the VPS.
 Historical trip routes can be backfilled from `telemetry_raw` into `trip_waypoints` by applying `supabase/migrations/20260313080000_add_trip_route_waypoints.sql`.
 The legacy `scripts/vps-telemetry-server.js` charging detector is no longer part of the intended production path.
 After applying the charging-detection migration in Supabase, stop any still-running legacy Node detector on the VPS to avoid duplicate `charging_sessions` writes.
 The production `tesla-ingester.service` now loads its Supabase credentials from `/home/ubuntu/.env` via `EnvironmentFile=` instead of hardcoding secrets in the unit file. The Go binary expects `SUPABASE_KEY`, and that value should be the Supabase service role key.
+The current production charging-billing enrichment runs as a separate `systemd` timer on the VPS using `scripts/process-charging-sync.js`, so completed Supercharger sessions are typically enriched within 30 seconds of being closed in Supabase.
 
 ## Maintenance Tracking Notes
 

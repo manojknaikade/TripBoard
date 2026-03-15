@@ -1,7 +1,13 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { NextRequest, NextResponse } from 'next/server'
 import { getTeslaSession } from '@/lib/tesla/auth-server'
-import { getEffectiveChargingEnergyKwh } from '@/lib/charging/energy';
+import {
+    getChargingBatteryEnergyKwh,
+    getChargingDeliveredEnergyKwh,
+    getChargingDisplayCost,
+    getChargingLossCost,
+    getChargingLossKwh,
+} from '@/lib/charging/energy';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,12 +27,17 @@ type TripRecord = {
 };
 
 type ChargingSessionRecord = {
+    id: string;
     start_time: string;
     energy_added_kwh: number | null;
     energy_delivered_kwh: number | null;
     charger_type: string | null;
     cost_user_entered: number | null;
     cost_estimate: number | null;
+    charger_price_per_kwh: number | null;
+    currency: string | null;
+    tesla_charge_event_id: string | null;
+    is_complete: boolean | null;
 };
 
 type SnapshotRecord = {
@@ -323,7 +334,7 @@ export async function GET(request: NextRequest) {
         // Fetch charging sessions for the period
         const { data: chargingSessions, error: chargingError } = await supabase
             .from('charging_sessions')
-            .select('id, energy_added_kwh, energy_delivered_kwh, charger_type, cost_user_entered, cost_estimate, currency, start_time')
+            .select('id, energy_added_kwh, energy_delivered_kwh, charger_type, cost_user_entered, cost_estimate, charger_price_per_kwh, currency, start_time, tesla_charge_event_id, is_complete')
             .eq('is_complete', true)
             .gte('start_time', fromDate.toISOString())
             .lte('start_time', toDate.toISOString())
@@ -335,7 +346,10 @@ export async function GET(request: NextRequest) {
         // Calculate charging mix from real data
         const chargingByType: Record<string, number> = { home: 0, supercharger: 0, destination: 0, '3rd_party_fast': 0, other: 0 }
         const costByType: Record<string, number> = {};
-        let totalChargingEnergy = 0
+        let totalChargingBatteryEnergy = 0
+        let totalChargingDeliveredEnergy = 0
+        let totalChargingLossEnergy = 0
+        let totalChargingLossCost = 0
 
         const typedChargingSessions = (chargingSessions || []) as ChargingSessionRecord[];
         const typedTrips = (trips || []) as TripRecord[];
@@ -355,15 +369,23 @@ export async function GET(request: NextRequest) {
                                 'other';
 
             // Accumulate cost by type (for ALL sessions, even without energy)
-            const sessionCost = session.cost_user_entered ?? session.cost_estimate ?? 0;
+            const sessionCost = getChargingDisplayCost(session) ?? 0;
             if (!costByType[normalisedKey]) costByType[normalisedKey] = 0;
             costByType[normalisedKey] += sessionCost;
 
-            const energy = getEffectiveChargingEnergyKwh(session) || 0;
-            if (energy <= 0) continue;
+            const batteryEnergy = getChargingBatteryEnergyKwh(session) ?? 0;
+            const deliveredEnergy = getChargingDeliveredEnergyKwh(session) ?? batteryEnergy;
+            const lossEnergy = getChargingLossKwh(session) ?? 0;
+            const lossCost = getChargingLossCost(session) ?? 0;
 
-            totalChargingEnergy += energy;
-            chargingByType[normalisedKey] = (chargingByType[normalisedKey] || 0) + energy;
+            totalChargingBatteryEnergy += batteryEnergy;
+            totalChargingDeliveredEnergy += deliveredEnergy;
+            totalChargingLossEnergy += lossEnergy;
+            totalChargingLossCost += lossCost;
+
+            if (batteryEnergy <= 0) continue;
+
+            chargingByType[normalisedKey] = (chargingByType[normalisedKey] || 0) + batteryEnergy;
         }
 
         // --- NEW: Calculate Total Cost & Daily Charging Data ---
@@ -374,7 +396,9 @@ export async function GET(request: NextRequest) {
                 dateKey: bucket.key,
                 axisLabel: bucket.axisLabel,
                 tooltipLabel: bucket.tooltipLabel,
-                energy: 0,
+                batteryEnergy: 0,
+                deliveredEnergy: 0,
+                lossEnergy: 0,
                 cost: 0,
                 sessions: 0,
             }])
@@ -382,13 +406,19 @@ export async function GET(request: NextRequest) {
 
         for (const session of typedChargingSessions) {
             // Aggregate Total Cost (simple sum here, ignoring currency conversion complexity for MVP)
-            const cost = session.cost_user_entered ?? session.cost_estimate ?? 0;
+            const cost = getChargingDisplayCost(session) ?? 0;
             totalChargingCost += cost;
 
             const bucketKey = getBucketKey(session.start_time, bucketMode);
             const bucket = chargingBucketData.get(bucketKey);
             if (bucket) {
-                bucket.energy += (getEffectiveChargingEnergyKwh(session) || 0);
+                const batteryEnergy = getChargingBatteryEnergyKwh(session) ?? 0;
+                const deliveredEnergy = getChargingDeliveredEnergyKwh(session) ?? batteryEnergy;
+                const lossEnergy = getChargingLossKwh(session) ?? 0;
+
+                bucket.batteryEnergy += batteryEnergy;
+                bucket.deliveredEnergy += deliveredEnergy;
+                bucket.lossEnergy += lossEnergy;
                 bucket.cost += cost;
                 bucket.sessions += 1;
             }
@@ -399,22 +429,27 @@ export async function GET(request: NextRequest) {
             dateKey: bucket.dateKey,
             axisLabel: bucket.axisLabel,
             tooltipLabel: bucket.tooltipLabel,
-            energy: Math.round(bucket.energy * 10) / 10,
+            batteryEnergy: Math.round(bucket.batteryEnergy * 10) / 10,
+            deliveredEnergy: Math.round(bucket.deliveredEnergy * 10) / 10,
+            lossEnergy: Math.round(bucket.lossEnergy * 10) / 10,
             cost: Math.round(bucket.cost * 100) / 100,
             sessions: bucket.sessions,
         }));
 
         // Calculate average cost per kwh
-        const avgCostPerKwh = totalChargingEnergy > 0 ? totalChargingCost / totalChargingEnergy : 0;
+        const avgCostPerKwh = totalChargingDeliveredEnergy > 0 ? totalChargingCost / totalChargingDeliveredEnergy : 0;
+        const avgChargingLossPct = totalChargingDeliveredEnergy > 0
+            ? (totalChargingLossEnergy / totalChargingDeliveredEnergy) * 100
+            : 0;
 
 
         // Calculate percentages
-        const chargingMix = totalChargingEnergy > 0 ? [
-            { name: 'Home', value: Math.round((chargingByType.home / totalChargingEnergy) * 100), color: '#22c55e' },
-            { name: 'Supercharger', value: Math.round((chargingByType.supercharger / totalChargingEnergy) * 100), color: '#ef4444' },
-            { name: '3rd Party DC', value: Math.round((chargingByType['3rd_party_fast'] / totalChargingEnergy) * 100), color: '#f97316' }, // Orange slice
-            { name: 'Destination', value: Math.round((chargingByType.destination / totalChargingEnergy) * 100), color: '#3b82f6' },
-            { name: 'Other', value: Math.round((chargingByType.other / totalChargingEnergy) * 100), color: '#6b7280' },
+        const chargingMix = totalChargingBatteryEnergy > 0 ? [
+            { name: 'Home', value: Math.round((chargingByType.home / totalChargingBatteryEnergy) * 100), color: '#22c55e' },
+            { name: 'Supercharger', value: Math.round((chargingByType.supercharger / totalChargingBatteryEnergy) * 100), color: '#ef4444' },
+            { name: '3rd Party DC', value: Math.round((chargingByType['3rd_party_fast'] / totalChargingBatteryEnergy) * 100), color: '#f97316' }, // Orange slice
+            { name: 'Destination', value: Math.round((chargingByType.destination / totalChargingBatteryEnergy) * 100), color: '#3b82f6' },
+            { name: 'Other', value: Math.round((chargingByType.other / totalChargingBatteryEnergy) * 100), color: '#6b7280' },
         ].filter(item => item.value > 0) : [
             // Default if no charging data for this timeframe
             { name: 'No Data', value: 100, color: '#334155' },
@@ -638,7 +673,12 @@ export async function GET(request: NextRequest) {
                 drivingTime: Math.round(totalDrivingTime * 10) / 10,
                 tripCount: trips?.length || 0,
                 chargingSessions: chargingSessions?.length || 0,
-                totalChargingEnergy: Math.round(totalChargingEnergy * 10) / 10,
+                totalChargingEnergy: Math.round(totalChargingBatteryEnergy * 10) / 10,
+                totalChargingBatteryEnergy: Math.round(totalChargingBatteryEnergy * 10) / 10,
+                totalChargingDeliveredEnergy: Math.round(totalChargingDeliveredEnergy * 10) / 10,
+                totalChargingLossEnergy: Math.round(totalChargingLossEnergy * 10) / 10,
+                totalChargingLossCost: Math.round(totalChargingLossCost * 100) / 100,
+                avgChargingLossPct: Math.round(avgChargingLossPct * 10) / 10,
                 totalChargingCost: Math.round(totalChargingCost * 100) / 100,
                 avgCostPerKwh: Math.round(avgCostPerKwh * 100) / 100,
                 vampireDrainKwh: Math.round(vampireDrainKwh * 10) / 10,

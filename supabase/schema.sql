@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS vehicles (
 CREATE TABLE IF NOT EXISTS tesla_sessions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   session_token_hash TEXT NOT NULL UNIQUE,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
   access_token_encrypted TEXT NOT NULL,
   refresh_token_encrypted TEXT,
   token_expires_at TIMESTAMPTZ,
@@ -155,6 +156,20 @@ CREATE TABLE IF NOT EXISTS charging_sessions (
   tesla_charge_event_id TEXT,
   is_complete BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS charging_session_tesla_sync_jobs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  charging_session_id UUID NOT NULL UNIQUE REFERENCES charging_sessions(id) ON DELETE CASCADE,
+  vehicle_id UUID NOT NULL REFERENCES vehicles(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'unavailable', 'failed')),
+  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  queued_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  processing_started_at TIMESTAMPTZ,
+  processed_at TIMESTAMPTZ,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Vehicle snapshots (historical state data)
@@ -294,11 +309,13 @@ CREATE TABLE IF NOT EXISTS maintenance_records (
 
 -- Create indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_vehicles_user_id ON vehicles(user_id);
+CREATE INDEX IF NOT EXISTS idx_tesla_sessions_user_id_last_used_at ON tesla_sessions(user_id, last_used_at DESC) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_trips_vehicle_id ON trips(vehicle_id);
 CREATE INDEX IF NOT EXISTS idx_trips_start_time ON trips(start_time DESC);
 CREATE INDEX IF NOT EXISTS idx_trip_waypoints_trip_id ON trip_waypoints(trip_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_trip_waypoints_trip_id_timestamp ON trip_waypoints(trip_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_charging_sessions_vehicle_id ON charging_sessions(vehicle_id);
+CREATE INDEX IF NOT EXISTS idx_charging_session_tesla_sync_jobs_status_queued_at ON charging_session_tesla_sync_jobs(status, queued_at);
 CREATE INDEX IF NOT EXISTS idx_vehicle_snapshots_vehicle_id_timestamp ON vehicle_snapshots(vehicle_id, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(vehicle_id, is_read, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_type ON notifications(type, created_at DESC);
@@ -317,6 +334,7 @@ ALTER TABLE polling_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trips ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trip_waypoints ENABLE ROW LEVEL SECURITY;
 ALTER TABLE charging_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE charging_session_tesla_sync_jobs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE vehicle_snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE telemetry_raw ENABLE ROW LEVEL SECURITY;
 ALTER TABLE vehicle_status ENABLE ROW LEVEL SECURITY;
@@ -374,6 +392,10 @@ CREATE POLICY "Users can view own charging sessions" ON charging_sessions FOR SE
   USING (EXISTS (SELECT 1 FROM vehicles WHERE vehicles.id = charging_sessions.vehicle_id AND vehicles.user_id = auth.uid()));
 CREATE POLICY "Users can manage own charging sessions" ON charging_sessions FOR ALL
   USING (EXISTS (SELECT 1 FROM vehicles WHERE vehicles.id = charging_sessions.vehicle_id AND vehicles.user_id = auth.uid()));
+
+CREATE POLICY "Service role can manage charging sync jobs" ON charging_session_tesla_sync_jobs FOR ALL TO service_role
+  USING (true)
+  WITH CHECK (true);
 
 -- Vehicle snapshots
 CREATE POLICY "Users can view own snapshots" ON vehicle_snapshots FOR SELECT
@@ -456,6 +478,64 @@ CREATE TRIGGER update_user_settings_updated_at BEFORE UPDATE ON user_settings FO
 CREATE TRIGGER update_polling_settings_updated_at BEFORE UPDATE ON polling_settings FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_tyre_sets_updated_at BEFORE UPDATE ON tyre_sets FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_maintenance_records_updated_at BEFORE UPDATE ON maintenance_records FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_charging_session_tesla_sync_jobs_updated_at BEFORE UPDATE ON charging_session_tesla_sync_jobs FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE OR REPLACE FUNCTION public.enqueue_supercharger_tesla_sync_job()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.is_complete = true
+     AND COALESCE(NEW.charger_type, '') ILIKE '%supercharger%'
+     AND NEW.tesla_charge_event_id IS NULL THEN
+    INSERT INTO public.charging_session_tesla_sync_jobs (
+      charging_session_id,
+      vehicle_id
+    )
+    VALUES (
+      NEW.id,
+      NEW.vehicle_id
+    )
+    ON CONFLICT (charging_session_id) DO NOTHING;
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SET search_path = public;
+
+DROP TRIGGER IF EXISTS enqueue_supercharger_tesla_sync_job ON public.charging_sessions;
+CREATE TRIGGER enqueue_supercharger_tesla_sync_job
+  AFTER INSERT OR UPDATE OF is_complete, charger_type, tesla_charge_event_id ON public.charging_sessions
+  FOR EACH ROW EXECUTE FUNCTION public.enqueue_supercharger_tesla_sync_job();
+
+CREATE OR REPLACE FUNCTION public.claim_pending_tesla_charging_sync_jobs(p_limit integer DEFAULT 10)
+RETURNS SETOF public.charging_session_tesla_sync_jobs AS $$
+BEGIN
+  RETURN QUERY
+  WITH candidates AS (
+    SELECT job.id
+    FROM public.charging_session_tesla_sync_jobs job
+    WHERE job.status = 'pending'
+       OR (
+         job.status = 'processing'
+         AND job.processing_started_at <= NOW() - INTERVAL '15 minutes'
+       )
+    ORDER BY job.queued_at ASC
+    LIMIT GREATEST(COALESCE(p_limit, 10), 1)
+    FOR UPDATE SKIP LOCKED
+  ),
+  claimed AS (
+    UPDATE public.charging_session_tesla_sync_jobs job
+    SET
+      status = 'processing',
+      attempt_count = job.attempt_count + 1,
+      processing_started_at = NOW()
+    FROM candidates
+    WHERE job.id = candidates.id
+    RETURNING job.*
+  )
+  SELECT *
+  FROM claimed;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 INSERT INTO app_settings (id) VALUES ('default') ON CONFLICT (id) DO NOTHING;
 

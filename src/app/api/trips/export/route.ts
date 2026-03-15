@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
-import { getEffectiveChargingEnergyKwh } from '@/lib/charging/energy';
+import { getChargingDisplayCost, getEffectiveChargingEnergyKwh } from '@/lib/charging/energy';
 
 const MINIMUM_DISTANCE_MILES = 0.3;
 
@@ -79,6 +79,7 @@ type ChargeExportRow = {
     cost_estimate: number | string | null;
     cost_user_entered: number | string | null;
     currency: string | null;
+    tesla_charge_event_id: string | null;
     is_complete: boolean | null;
 };
 
@@ -194,9 +195,13 @@ function transformCharge(charge: ChargeExportRow) {
         end_soc_pct: toNumber(charge.end_battery_pct),
         charger_type: charge.charger_type || null,
         charge_rate_kw: round(toNumber(charge.charge_rate_kw)),
-        cost:
-            round(toNumber(charge.cost_user_entered)) ??
-            round(toNumber(charge.cost_estimate)),
+        cost: round(getChargingDisplayCost({
+            charger_type: charge.charger_type,
+            cost_user_entered: toNumber(charge.cost_user_entered),
+            cost_estimate: toNumber(charge.cost_estimate),
+            tesla_charge_event_id: charge.tesla_charge_event_id,
+            is_complete: charge.is_complete,
+        })),
         currency: charge.currency || null,
         min_outside_temp: null,
         max_outside_temp: null,

@@ -15,7 +15,19 @@ import {
 import Header from '@/components/Header';
 import { useSettingsStore } from '@/stores/settingsStore';
 import dynamic from 'next/dynamic';
-import { getEffectiveChargingEnergyKwh, hasDeliveredEnergyGap } from '@/lib/charging/energy';
+import {
+    canUseManualChargingCost,
+    getChargingBatteryEnergyKwh,
+    getChargingCostSource,
+    getChargingDeliveredEnergyKwh,
+    getChargingDisplayCost,
+    getChargingUnitCost,
+} from '@/lib/charging/energy';
+import {
+    getTeslaChargingSyncMessage,
+    getTeslaChargingSyncStatus,
+    isSuperchargerChargingSession,
+} from '@/lib/charging/teslaSync';
 
 const TripMiniMap = dynamic(() => import('@/components/TripMiniMap'), {
     ssr: false,
@@ -31,6 +43,7 @@ interface ChargingSession {
     end_battery_pct: number | null;
     energy_added_kwh: number | null;
     energy_delivered_kwh: number | null;
+    charger_price_per_kwh: number | null;
     charge_rate_kw: number | null;
     latitude: number | null;
     longitude: number | null;
@@ -39,6 +52,7 @@ interface ChargingSession {
     cost_estimate: number | null;
     cost_user_entered: number | null;
     currency: string | null;
+    tesla_charge_event_id: string | null;
     is_complete: boolean;
 }
 
@@ -328,14 +342,15 @@ export default function ChargingPage() {
     }, {} as Record<string, ChargingSession[]>);
 
     const totalSessions = filteredSessions.length;
-    const totalEnergy = filteredSessions.reduce((sum, s) => sum + (getEffectiveChargingEnergyKwh(s) || 0), 0);
+    const totalBatteryEnergy = filteredSessions.reduce((sum, s) => sum + (getChargingBatteryEnergyKwh(s) || 0), 0);
+    const totalDeliveredEnergy = filteredSessions.reduce((sum, s) => sum + (getChargingDeliveredEnergyKwh(s) || 0), 0);
     const maxChargeRate = Math.max(...filteredSessions.map(s => s.charge_rate_kw || 0), 0);
 
     // Cost calculation (simplified summation assuming mostly 1 currency)
     const baseCurrencySessions = filteredSessions.filter(
-        (s) => (s.cost_user_entered ?? s.cost_estimate) != null && (s.currency === preferredCurrency || !s.currency)
+        (s) => getChargingDisplayCost(s) != null && (s.currency === preferredCurrency || !s.currency)
     );
-    const totalCost = baseCurrencySessions.reduce((sum, s) => sum + (s.cost_user_entered ?? s.cost_estimate ?? 0), 0);
+    const totalCost = baseCurrencySessions.reduce((sum, s) => sum + (getChargingDisplayCost(s) ?? 0), 0);
 
     return (
         <div className="min-h-screen">
@@ -417,7 +432,7 @@ export default function ChargingPage() {
                     />
                 </div>
 
-                <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="mb-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
                     <StatCard
                         icon={<Zap className="h-5 w-5" />}
                         label="Total Sessions"
@@ -426,9 +441,15 @@ export default function ChargingPage() {
                     />
                     <StatCard
                         icon={<Battery className="h-5 w-5" />}
-                        label="Energy"
-                        value={`${totalEnergy.toFixed(1)} kWh`}
+                        label="Energy to Battery"
+                        value={`${totalBatteryEnergy.toFixed(1)} kWh`}
                         color="green"
+                    />
+                    <StatCard
+                        icon={<Zap className="h-5 w-5" />}
+                        label="Tesla Delivered"
+                        value={totalDeliveredEnergy > 0 ? `${totalDeliveredEnergy.toFixed(1)} kWh` : '--'}
+                        color="purple"
                     />
                     <StatCard
                         icon={<Zap className="h-5 w-5" />}
@@ -478,7 +499,7 @@ export default function ChargingPage() {
                                             preferredCurrency={preferredCurrency}
                                             onAddCost={() => {
                                                 setEditingSession(session);
-                                                setCostInput((session.cost_user_entered ?? session.cost_estimate)?.toString() || '');
+                                                setCostInput((session.cost_user_entered ?? getChargingDisplayCost(session))?.toString() || '');
                                                 setCurrencyInput(session.currency || preferredCurrency);
                                             }}
                                         />
@@ -504,12 +525,23 @@ function SessionCard({
     preferredCurrency: string;
     onAddCost: () => void;
 }) {
-    const isSupercharger = session.charger_type?.toLowerCase().includes('supercharger');
+    const isSupercharger = isSuperchargerChargingSession(session);
     const isDC = session.charger_type?.toLowerCase().includes('3rd_party_fast') || isSupercharger;
-    const hasLocation = session.latitude && session.longitude;
-    const effectiveEnergy = getEffectiveChargingEnergyKwh(session);
-    const showDeliveredGap = hasDeliveredEnergyGap(session);
-    const displayCost = session.cost_user_entered ?? session.cost_estimate;
+    const hasLocation = session.latitude != null && session.longitude != null;
+    const batteryEnergy = getChargingBatteryEnergyKwh(session);
+    const deliveredEnergy = getChargingDeliveredEnergyKwh(session);
+    const displayCost = getChargingDisplayCost(session);
+    const unitCost = getChargingUnitCost(session);
+    const costSource = getChargingCostSource(session);
+    const canUseManualCost = canUseManualChargingCost(session);
+    const teslaSyncStatus = getTeslaChargingSyncStatus(session);
+    const teslaSyncMessage = getTeslaChargingSyncMessage(session);
+    const costSubtext =
+        costSource === 'manual' && isSupercharger
+            ? `Manual cost; ${teslaSyncMessage?.toLowerCase() || 'Tesla unavailable'}`
+            : unitCost != null
+                ? `${unitCost.toFixed(2)} / kWh${costSource === 'tesla' ? ' from Tesla' : ''}`
+                : null;
 
     return (
         <Link
@@ -558,11 +590,22 @@ function SessionCard({
                                     <span className="text-slate-600 mx-0.5">•</span>
                                     {formatDuration(session.start_time, session.end_time)}
                                 </span>
-                                {effectiveEnergy != null && (
+                                {batteryEnergy != null && (
                                     <span className="flex items-center gap-1">
                                         <Battery className="h-3 w-3" />
-                                        +{effectiveEnergy.toFixed(1)} kWh
-                                        {showDeliveredGap ? ' delivered' : ''}
+                                        Battery: +{batteryEnergy.toFixed(1)} kWh
+                                    </span>
+                                )}
+                                {(deliveredEnergy != null || isSupercharger) && (
+                                    <span className="flex items-center gap-1">
+                                        <Zap className="h-3 w-3" />
+                                        {isSupercharger ? 'Delivered:' : 'Delivered:'}{' '}
+                                        {deliveredEnergy != null
+                                            ? `${deliveredEnergy.toFixed(1)} kWh`
+                                            : teslaSyncStatus === 'pending'
+                                                ? 'pending'
+                                                : 'unavailable'
+                                        }
                                     </span>
                                 )}
                                 {session.charge_rate_kw && (
@@ -576,7 +619,16 @@ function SessionCard({
 
                         {/* Cost Display / Button */}
                         <div className="text-right ml-4">
-                            {displayCost != null ? (
+                            {displayCost != null && !canUseManualCost ? (
+                                <div className="flex flex-col items-end text-sm">
+                                    <span className="font-bold text-lg text-white">
+                                        {session.currency || preferredCurrency} {displayCost.toFixed(2)}
+                                    </span>
+                                    <span className="text-xs text-slate-500">
+                                        {costSource === 'tesla' ? 'Tesla billing' : ''}
+                                    </span>
+                                </div>
+                            ) : displayCost != null ? (
                                 <button
                                     onClick={(e) => { e.preventDefault(); onAddCost(); }}
                                     className="group flex flex-col items-end text-sm transition-colors hover:opacity-80"
@@ -584,13 +636,13 @@ function SessionCard({
                                     <span className="font-bold text-lg text-white group-hover:text-red-400 transition-colors">
                                         {session.currency || preferredCurrency} {displayCost.toFixed(2)}
                                     </span>
-                                    {effectiveEnergy != null && displayCost > 0 && (
+                                    {costSubtext != null && (
                                         <span className="text-xs text-slate-500">
-                                            {((displayCost / effectiveEnergy)).toFixed(2)} / kWh
+                                            {costSubtext}
                                         </span>
                                     )}
                                 </button>
-                            ) : (
+                            ) : canUseManualCost ? (
                                 <button
                                     onClick={(e) => {
                                         e.preventDefault();
@@ -601,6 +653,10 @@ function SessionCard({
                                     <Banknote className="h-4 w-4" />
                                     Add Cost
                                 </button>
+                            ) : (
+                                <div className="text-sm text-slate-500">
+                                    {teslaSyncStatus === 'pending' ? 'Waiting for Tesla billing' : 'Tesla billing unavailable'}
+                                </div>
                             )}
                         </div>
                     </div>
@@ -617,7 +673,7 @@ function SessionCard({
                                 className="absolute left-0 top-0 h-full bg-slate-500"
                                 style={{ width: `${session.start_battery_pct}%` }}
                             />
-                            {session.end_battery_pct && (
+                            {session.end_battery_pct != null && (
                                 <div
                                     className="absolute top-0 h-full bg-green-500"
                                     style={{
@@ -629,7 +685,7 @@ function SessionCard({
                         </div>
                         <div className="text-sm font-mono text-slate-400 whitespace-nowrap">
                             {session.start_battery_pct.toFixed(2)}%
-                            {session.end_battery_pct ? ` → ${session.end_battery_pct.toFixed(2)}%` : ''}
+                            {session.end_battery_pct != null ? ` → ${session.end_battery_pct.toFixed(2)}%` : ''}
                         </div>
                     </div>
                 </div>

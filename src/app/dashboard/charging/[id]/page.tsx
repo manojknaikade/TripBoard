@@ -9,6 +9,7 @@ import {
     Clock,
     MapPin,
     Battery,
+    Zap,
     Banknote,
     Activity,
     Calendar,
@@ -17,7 +18,19 @@ import {
 } from 'lucide-react';
 import Header from '@/components/Header';
 import dynamic from 'next/dynamic';
-import { getEffectiveChargingEnergyKwh, hasDeliveredEnergyGap } from '@/lib/charging/energy';
+import {
+    canUseManualChargingCost,
+    getChargingBatteryEnergyKwh,
+    getChargingCostSource,
+    getChargingDeliveredEnergyKwh,
+    getChargingDisplayCost,
+} from '@/lib/charging/energy';
+import {
+    getStoredTeslaChargeEventId,
+    getTeslaChargingSyncMessage,
+    getTeslaChargingSyncStatus,
+    isSuperchargerChargingSession,
+} from '@/lib/charging/teslaSync';
 
 const TripDetailMap = dynamic(() => import('@/components/TripDetailMap'), {
     loading: () => <div className="h-96 w-full animate-pulse rounded-xl bg-slate-800" />,
@@ -33,6 +46,7 @@ interface ChargingSession {
     end_battery_pct: number | null;
     energy_added_kwh: number | null;
     energy_delivered_kwh: number | null;
+    charger_price_per_kwh: number | null;
     charge_rate_kw: number | null;
     latitude: number | null;
     longitude: number | null;
@@ -41,6 +55,7 @@ interface ChargingSession {
     cost_estimate: number | null;
     cost_user_entered: number | null;
     currency: string | null;
+    tesla_charge_event_id: string | null;
     is_complete: boolean;
 }
 
@@ -105,7 +120,7 @@ export default function ChargingDetailPage() {
     }, [fetchSessionDetails]);
 
     const fetchAddressFromCoords = useCallback(async () => {
-        if (!session || (!session.latitude && !session.longitude)) return;
+        if (!session || session.latitude == null || session.longitude == null) return;
 
         if (session.location_name) {
             setAddress(session.location_name);
@@ -116,10 +131,10 @@ export default function ChargingDetailPage() {
                 if (data.success) {
                     setAddress(data.address);
                 } else {
-                    setAddress(`${session.latitude!.toFixed(4)}, ${session.longitude!.toFixed(4)}`);
+                    setAddress(`${session.latitude.toFixed(4)}, ${session.longitude.toFixed(4)}`);
                 }
             } catch {
-                setAddress(`${session.latitude!.toFixed(4)}, ${session.longitude!.toFixed(4)}`);
+                setAddress(`${session.latitude.toFixed(4)}, ${session.longitude.toFixed(4)}`);
             }
         }
     }, [session]);
@@ -186,12 +201,17 @@ export default function ChargingDetailPage() {
         );
     }
 
-    const hasCoords = session.latitude && session.longitude;
-    const isSupercharger = session.charger_type?.toLowerCase().includes('supercharger');
+    const hasCoords = session.latitude != null && session.longitude != null;
+    const isSupercharger = isSuperchargerChargingSession(session);
     const isDC = session.charger_type?.toLowerCase().includes('3rd_party_fast') || isSupercharger;
-    const effectiveEnergy = getEffectiveChargingEnergyKwh(session);
-    const showDeliveredGap = hasDeliveredEnergyGap(session);
-    const displayCost = session.cost_user_entered ?? session.cost_estimate;
+    const batteryEnergy = getChargingBatteryEnergyKwh(session);
+    const deliveredEnergy = getChargingDeliveredEnergyKwh(session);
+    const displayCost = getChargingDisplayCost(session);
+    const costSource = getChargingCostSource(session);
+    const canUseManualCost = canUseManualChargingCost(session);
+    const teslaSyncStatus = getTeslaChargingSyncStatus(session);
+    const teslaSyncMessage = getTeslaChargingSyncMessage(session);
+    const teslaEventId = getStoredTeslaChargeEventId(session.tesla_charge_event_id);
 
     return (
         <div className="min-h-screen">
@@ -284,17 +304,19 @@ export default function ChargingDetailPage() {
                         </p>
                     </div>
 
-                    <button
-                        onClick={() => {
-                            setCostInput((session.cost_user_entered ?? session.cost_estimate)?.toString() || '');
-                            setCurrencyInput(session.currency || preferredCurrency);
-                            setIsEditingCost(true);
-                        }}
-                        className="flex items-center gap-2 rounded-lg bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 border border-slate-700"
-                    >
-                        <Banknote className="h-4 w-4" />
-                        {session.cost_user_entered ? 'Edit Cost' : 'Add Cost'}
-                    </button>
+                    {canUseManualCost && (
+                        <button
+                            onClick={() => {
+                                setCostInput((session.cost_user_entered ?? displayCost)?.toString() || '');
+                                setCurrencyInput(session.currency || preferredCurrency);
+                                setIsEditingCost(true);
+                            }}
+                            className="flex items-center gap-2 rounded-lg bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 border border-slate-700"
+                        >
+                            <Banknote className="h-4 w-4" />
+                            {session.cost_user_entered != null ? 'Edit Manual Cost' : 'Add Manual Cost'}
+                        </button>
+                    )}
                 </div>
 
                 {/* Map Section */}
@@ -336,14 +358,28 @@ export default function ChargingDetailPage() {
                     {/* Energy & Speed */}
                     <StatBox
                         icon={<Battery className="h-5 w-5" />}
-                        label={session.energy_delivered_kwh != null ? 'Energy Delivered' : 'Energy Added'}
-                        value={effectiveEnergy != null ? `+${effectiveEnergy.toFixed(2)} kWh` : 'N/A'}
+                        label="Energy to Battery"
+                        value={batteryEnergy != null ? `+${batteryEnergy.toFixed(2)} kWh` : 'N/A'}
                         color="green"
-                        subtext={showDeliveredGap && session.energy_added_kwh != null
-                            ? `Battery received ${session.energy_added_kwh.toFixed(2)} kWh`
-                            : undefined
-                        }
                     />
+                    {isSupercharger && (
+                        <StatBox
+                            icon={<Zap className="h-5 w-5" />}
+                            label="Energy Delivered"
+                            value={deliveredEnergy != null
+                                ? `${deliveredEnergy.toFixed(2)} kWh`
+                                : teslaSyncStatus === 'pending'
+                                    ? 'Waiting for Tesla'
+                                    : 'Tesla unavailable'
+                            }
+                            color="yellow"
+                            subtext={
+                                deliveredEnergy != null
+                                    ? 'Tesla charging history'
+                                    : teslaSyncMessage || 'No matched Tesla data yet'
+                            }
+                        />
+                    )}
                     <StatBox
                         icon={<Activity className="h-5 w-5" />}
                         label="Max Charge Rate"
@@ -355,15 +391,51 @@ export default function ChargingDetailPage() {
                     <StatBox
                         icon={<Banknote className="h-5 w-5" />}
                         label="Total Cost"
-                        value={displayCost != null
-                            ? `${session.currency || preferredCurrency} ${displayCost.toFixed(2)}`
-                            : 'Not entered'}
+                        value={
+                            displayCost != null
+                                ? `${session.currency || preferredCurrency} ${displayCost.toFixed(2)}`
+                                : isSupercharger
+                                    ? teslaSyncStatus === 'pending'
+                                        ? 'Tesla cost pending'
+                                        : 'Tesla cost unavailable'
+                                    : 'Not entered'
+                        }
                         color={displayCost != null ? "green" : "slate"}
-                        subtext={displayCost != null && effectiveEnergy
-                            ? `${(displayCost / effectiveEnergy).toFixed(2)} / kWh`
-                            : undefined
+                        subtext={
+                            displayCost != null
+                                ? costSource === 'manual'
+                                    ? isSupercharger
+                                        ? 'Manual cost because Tesla billing was unavailable'
+                                        : 'Manual entry'
+                                    : costSource === 'tesla'
+                                        ? 'Tesla charging history'
+                                        : undefined
+                                : isSupercharger
+                                    ? (teslaSyncMessage || 'Tesla billing unavailable')
+                                    : undefined
                         }
                     />
+                    {isSupercharger && (
+                        <StatBox
+                            icon={<Banknote className="h-5 w-5" />}
+                            label="Tesla Rate"
+                            value={session.charger_price_per_kwh != null
+                                ? `${session.charger_price_per_kwh.toFixed(2)} / kWh`
+                                : teslaSyncStatus === 'pending'
+                                    ? 'Waiting for Tesla'
+                                    : 'Tesla unavailable'
+                            }
+                            color={session.charger_price_per_kwh != null ? "yellow" : "slate"}
+                            subtext={session.charger_price_per_kwh != null
+                                ? (
+                                    teslaEventId
+                                        ? `Tesla event ${teslaEventId}`
+                                        : 'Reported by Tesla'
+                                )
+                                : teslaSyncMessage || 'No matched Tesla billing record yet'
+                            }
+                        />
+                    )}
 
                     {/* Battery State */}
                     {session.start_battery_pct != null && (
@@ -465,7 +537,7 @@ function LocationCard({
                 <div className="flex-1">
                     <h3 className="font-semibold text-sm">{title}</h3>
                     <p className="mt-1 text-slate-300 font-mono text-sm tracking-tight break-all">
-                        {lat && lon ? `${lat.toFixed(5)}, ${lon.toFixed(5)}` : 'Unknown'}
+                        {lat != null && lon != null ? `${lat.toFixed(5)}, ${lon.toFixed(5)}` : 'Unknown'}
                     </p>
                 </div>
             </div>

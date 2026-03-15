@@ -30,12 +30,14 @@ Supabase owns the application-side telemetry processing:
 - `public.process_telemetry()` detects trip start and trip end
 - `public.process_telemetry()` detects charging-session start and charging-session completion
 - `public.reconcile_stale_charging_sessions(interval)` closes stale open charging sessions when explicit end events are missing
+- `public.enqueue_supercharger_tesla_sync_job()` queues completed Supercharger sessions for one-time Tesla billing enrichment
 
 Relevant migrations:
 
 - [supabase/migrations/20260311000000_trip_temperature_trigger.sql](/Users/manojnaikade/Documents/TripBoard/supabase/migrations/20260311000000_trip_temperature_trigger.sql)
 - [supabase/migrations/20260313000000_fix_notifications.sql](/Users/manojnaikade/Documents/TripBoard/supabase/migrations/20260313000000_fix_notifications.sql)
 - [supabase/migrations/20260313010000_move_charging_detection_to_db.sql](/Users/manojnaikade/Documents/TripBoard/supabase/migrations/20260313010000_move_charging_detection_to_db.sql)
+- [supabase/migrations/20260315021000_add_tesla_charging_sync_queue.sql](/Users/manojnaikade/Documents/TripBoard/supabase/migrations/20260315021000_add_tesla_charging_sync_queue.sql)
 
 ### App-Side Telemetry Configuration
 
@@ -64,6 +66,7 @@ Set these in local `.env.local` and in production on Vercel:
 TESLA_VEHICLE_COMMAND_PROXY_URL=https://your-vehicle-proxy.example.com:4443
 TESLA_TELEMETRY_HOSTNAME=your-telemetry-host.example.com
 TESLA_TELEMETRY_PORT=443
+CHARGING_SYNC_SECRET=your_charging_sync_secret
 ```
 
 Meaning:
@@ -71,6 +74,7 @@ Meaning:
 - `TESLA_VEHICLE_COMMAND_PROXY_URL`: base URL of the Vehicle Command Proxy used by the app
 - `TESLA_TELEMETRY_HOSTNAME`: hostname written into Tesla fleet telemetry configuration
 - `TESLA_TELEMETRY_PORT`: port written into Tesla fleet telemetry configuration
+- `CHARGING_SYNC_SECRET`: bearer token for the internal Tesla charging-sync processor route
 
 These variables are required. The telemetry-config route no longer falls back to hardcoded production values.
 
@@ -100,8 +104,10 @@ Required telemetry-related tables and functions:
 - `public.vehicle_status`
 - `public.trips`
 - `public.charging_sessions`
+- `public.charging_session_tesla_sync_jobs`
 - `public.process_telemetry()`
 - `public.reconcile_stale_charging_sessions(interval)`
+- `public.claim_pending_tesla_charging_sync_jobs(integer)`
 
 ## Go Ingester Deployment
 
@@ -221,6 +227,19 @@ select public.reconcile_stale_charging_sessions(interval '15 minutes');
 
 If `pg_cron` is enabled, schedule that function every 10 to 15 minutes.
 
+### Tesla Billing Enrichment
+
+Completed Supercharger sessions are queued in `public.charging_session_tesla_sync_jobs`.
+Process that queue from a backend cron, not from the frontend:
+
+```bash
+curl -fsS \
+  -H "Authorization: Bearer $CHARGING_SYNC_SECRET" \
+  "https://your-app.example.com/api/internal/charging/tesla-sync?limit=10"
+```
+
+That route fetches Tesla charging history once for each queued session and writes delivered kWh, Tesla cost, Tesla rate, and the sync marker back into `public.charging_sessions`.
+
 ## Production Cutover Notes
 
 The legacy Node charging detector is no longer part of the intended production path.
@@ -236,8 +255,10 @@ After deployment, verify:
 3. `process_telemetry()` is updating `vehicle_status`
 4. Trips are being created in `public.trips`
 5. Charging sessions are being created in `public.charging_sessions`
-6. The telemetry-config API works from the app
-7. The Vehicle Command Proxy is reachable from the app
+6. Completed Supercharger sessions are being inserted into `public.charging_session_tesla_sync_jobs`
+7. `GET /api/internal/charging/tesla-sync` is processing queued jobs successfully
+8. The telemetry-config API works from the app
+9. The Vehicle Command Proxy is reachable from the app
 
 Useful checks:
 

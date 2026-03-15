@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
-import { buildTeslaDeliveredEnergyUpdate } from '@/lib/charging/teslaHistory';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,50 +47,9 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    const items = sessions || [];
-    const syncCandidate = items.find((item) =>
-        item.is_complete === true &&
-        typeof item.charger_type === 'string' &&
-        item.charger_type.toLowerCase().includes('supercharger') &&
-        item.energy_delivered_kwh == null
-    );
-
-    if (syncCandidate) {
-        try {
-            const update = await buildTeslaDeliveredEnergyUpdate({
-                accessToken: teslaSession.accessToken,
-                region: teslaSession.region,
-                session: syncCandidate,
-            });
-
-            if (update) {
-                const { data: updatedSession } = await supabase
-                    .from('charging_sessions')
-                    .update({
-                        energy_delivered_kwh: update.energyDeliveredKwh,
-                        tesla_charge_event_id: update.teslaChargeEventId,
-                        charger_price_per_kwh: update.chargerPricePerKwh,
-                        cost_estimate: syncCandidate.cost_estimate ?? update.costUserEntered,
-                    })
-                    .eq('id', syncCandidate.id)
-                    .select('*')
-                    .maybeSingle();
-
-                if (updatedSession) {
-                    const index = items.findIndex((item) => item.id === updatedSession.id);
-                    if (index >= 0) {
-                        items[index] = updatedSession;
-                    }
-                }
-            }
-        } catch (syncError) {
-            console.warn('Charging list Tesla sync failed:', syncError);
-        }
-    }
-
     return NextResponse.json({
         success: true,
-        sessions: items,
+        sessions: sessions || [],
         total: count,
         limit,
         offset,
