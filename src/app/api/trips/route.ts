@@ -44,6 +44,159 @@ type TripForVinResolution = {
     end_time: string | null;
 };
 
+type TripListRow = {
+    id: string;
+    vin: string | null;
+    vehicle_id: string | null;
+    start_time: string;
+    end_time: string | null;
+    start_latitude: number | null;
+    start_longitude: number | null;
+    start_address: string | null;
+    end_latitude: number | null;
+    end_longitude: number | null;
+    end_address: string | null;
+    distance_miles: number | null;
+    energy_used_kwh: number | null;
+    start_battery_pct: number | null;
+    end_battery_pct: number | null;
+    start_odometer: number | null;
+    end_odometer: number | null;
+    max_speed_mph: number | null;
+    avg_speed_mph: number | null;
+    min_outside_temp: number | null;
+    max_outside_temp: number | null;
+    avg_outside_temp: number | null;
+    is_complete: boolean | null;
+};
+
+type TripSummaryRow = Pick<
+    TripListRow,
+    'distance_miles'
+    | 'start_odometer'
+    | 'end_odometer'
+    | 'energy_used_kwh'
+    | 'start_battery_pct'
+    | 'end_battery_pct'
+>;
+
+const MAX_THUMBNAIL_POINTS = 24;
+const MAX_TELEMETRY_THUMBNAIL_FALLBACK_TRIPS = 8;
+const TRIP_LIST_SELECT = [
+    'id',
+    'vin',
+    'vehicle_id',
+    'start_time',
+    'end_time',
+    'start_latitude',
+    'start_longitude',
+    'start_address',
+    'end_latitude',
+    'end_longitude',
+    'end_address',
+    'distance_miles',
+    'energy_used_kwh',
+    'start_battery_pct',
+    'end_battery_pct',
+    'start_odometer',
+    'end_odometer',
+    'max_speed_mph',
+    'avg_speed_mph',
+    'min_outside_temp',
+    'max_outside_temp',
+    'avg_outside_temp',
+    'is_complete',
+].join(', ');
+const TRIP_SUMMARY_SELECT = [
+    'distance_miles',
+    'start_odometer',
+    'end_odometer',
+    'energy_used_kwh',
+    'start_battery_pct',
+    'end_battery_pct',
+].join(', ');
+
+function getTripDistance(trip: TripSummaryRow): number {
+    if (trip.distance_miles != null) {
+        return Number(trip.distance_miles) || 0;
+    }
+
+    if (trip.start_odometer != null && trip.end_odometer != null) {
+        return Number(trip.end_odometer) - Number(trip.start_odometer);
+    }
+
+    return 0;
+}
+
+function getTripEnergy(trip: TripSummaryRow): number {
+    if (trip.energy_used_kwh != null) {
+        return Number(trip.energy_used_kwh) || 0;
+    }
+
+    if (trip.start_battery_pct != null && trip.end_battery_pct != null) {
+        const batteryDelta = Number(trip.start_battery_pct) - Number(trip.end_battery_pct);
+
+        if (batteryDelta > 0) {
+            return (batteryDelta / 100) * 75;
+        }
+    }
+
+    return 0;
+}
+
+async function loadTripSummary(
+    supabase: Awaited<ReturnType<typeof getSupabase>>,
+    options: {
+        from: string | null;
+        to: string | null;
+        vehicleId: string | null;
+    }
+) {
+    let query = supabase
+        .from('trips')
+        .select(TRIP_SUMMARY_SELECT);
+
+    if (options.from) {
+        query = query.gte('start_time', options.from);
+    }
+    if (options.to) {
+        query = query.lte('start_time', options.to);
+    }
+    if (options.vehicleId) {
+        query = query.eq('vehicle_id', options.vehicleId);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+        throw error;
+    }
+
+    const rows = ((data || []) as unknown) as TripSummaryRow[];
+    let totalTrips = 0;
+    let totalDistance = 0;
+    let totalEnergy = 0;
+
+    for (const row of rows) {
+        const distance = getTripDistance(row);
+
+        if (distance < 0.3) {
+            continue;
+        }
+
+        totalTrips += 1;
+        totalDistance += distance;
+        totalEnergy += getTripEnergy(row);
+    }
+
+    return {
+        totalTrips,
+        totalDistance,
+        totalEnergy,
+        avgEfficiency: totalDistance > 0 ? (totalEnergy * 1000) / totalDistance : 0,
+    };
+}
+
 async function resolveTripsWithVin(
     supabase: Awaited<ReturnType<typeof getSupabase>>,
     trips: TripForVinResolution[]
@@ -96,25 +249,33 @@ async function resolveTripsWithVin(
     });
 }
 
-async function loadThumbnailRoutePoints(
+async function loadStoredThumbnailRoutePoints(
     supabase: Awaited<ReturnType<typeof getSupabase>>,
-    tripId: string,
-    vin: string | null,
-    startTime: string,
-    endTime: string | null
+    tripIds: string[]
 ) {
-    const { data: waypointRows, error: waypointError } = await supabase
-        .from('trip_waypoints')
-        .select('trip_id, timestamp, latitude, longitude')
-        .eq('trip_id', tripId)
-        .order('timestamp', { ascending: true });
+    const routePointMap = new Map<string, TripRoutePoint[]>();
 
-    if (waypointError) {
-        throw waypointError;
+    if (tripIds.length === 0) {
+        return routePointMap;
     }
 
-    if (waypointRows && waypointRows.length > 0) {
-        const points = (waypointRows as TripWaypointRow[]).map((row) => ({
+    const { data: waypointRows, error } = await supabase
+        .from('trip_waypoints')
+        .select('trip_id, timestamp, latitude, longitude')
+        .in('trip_id', tripIds)
+        .order('trip_id', { ascending: true })
+        .order('timestamp', { ascending: true });
+
+    if (error) {
+        throw error;
+    }
+
+    const rows = (waypointRows || []) as TripWaypointRow[];
+    const groupedRows = new Map<string, TripRoutePoint[]>();
+
+    for (const row of rows) {
+        const points = groupedRows.get(row.trip_id) || [];
+        points.push({
             timestamp: row.timestamp,
             latitude: row.latitude,
             longitude: row.longitude,
@@ -122,11 +283,27 @@ async function loadThumbnailRoutePoints(
             battery_level: null,
             odometer: null,
             heading: null,
-        }));
-
-        return sampleRoutePoints(dedupeRoutePoints(points), 24);
+        });
+        groupedRows.set(row.trip_id, points);
     }
 
+    for (const [tripId, points] of groupedRows) {
+        routePointMap.set(
+            tripId,
+            sampleRoutePoints(dedupeRoutePoints(points), MAX_THUMBNAIL_POINTS)
+        );
+    }
+
+    return routePointMap;
+}
+
+async function loadThumbnailRoutePointsFromTelemetry(
+    supabase: Awaited<ReturnType<typeof getSupabase>>,
+    tripId: string,
+    vin: string | null,
+    startTime: string,
+    endTime: string | null
+) {
     if (!vin) {
         return [];
     }
@@ -154,7 +331,7 @@ async function loadThumbnailRoutePoints(
         .map((row) => extractRoutePointFromTelemetry(row.timestamp, row.payload))
         .filter((point): point is TripRoutePoint => point !== null);
 
-    return sampleRoutePoints(dedupeRoutePoints(parsedPoints), 24);
+    return sampleRoutePoints(dedupeRoutePoints(parsedPoints), MAX_THUMBNAIL_POINTS);
 }
 
 // GET - List trips for the authenticated user
@@ -166,8 +343,9 @@ export async function GET(request: NextRequest) {
     }
 
     const { searchParams } = new URL(request.url);
-    const limit = parseInt(searchParams.get('limit') || '20');
-    const offset = parseInt(searchParams.get('offset') || '0');
+    const limit = Math.min(Math.max(parseInt(searchParams.get('limit') || '20'), 1), 100);
+    const offset = Math.max(parseInt(searchParams.get('offset') || '0'), 0);
+    const includeSummary = searchParams.get('includeSummary') === '1';
     const vehicleId = searchParams.get('vehicleId');
     const from = searchParams.get('from');
     const to = searchParams.get('to');
@@ -177,7 +355,7 @@ export async function GET(request: NextRequest) {
     // Query trips - using the original schema structure
     let query = supabase
         .from('trips')
-        .select('*')
+        .select(TRIP_LIST_SELECT)
         .order('start_time', { ascending: false });
 
     if (from) {
@@ -190,22 +368,30 @@ export async function GET(request: NextRequest) {
         query = query.eq('vehicle_id', vehicleId);
     }
 
-    // Only apply pagination if no date range is provided
-    if (!from && !to) {
-        query = query.range(offset, offset + limit - 1);
-    }
+    query = query.range(offset, offset + limit);
 
-    const { data: trips, error, count } = await query;
+    const [listResult, summary] = await Promise.all([
+        query,
+        includeSummary
+            ? loadTripSummary(supabase, { from, to, vehicleId })
+            : Promise.resolve(null),
+    ]);
+
+    const { data: trips, error } = listResult;
 
     if (error) {
         console.error('Trips fetch error:', error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
+    const pagedTrips = ((trips || []) as unknown) as TripListRow[];
+    const hasMore = pagedTrips.length > limit;
+    const visibleTrips = pagedTrips.slice(0, limit);
+
     // Filter out very short trips (parking maneuvers) - minimum 0.3 miles / 0.5 km
     const MINIMUM_DISTANCE_MILES = 0.3;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const filteredTrips = (trips || []).filter((trip: any) => {
+    const filteredTrips = visibleTrips.filter((trip: any) => {
         const distance = trip.distance_miles ? parseFloat(trip.distance_miles.toString()) : 0;
         // Also calculate from odometer if available
         const odometerDistance = (trip.start_odometer && trip.end_odometer)
@@ -216,7 +402,7 @@ export async function GET(request: NextRequest) {
     });
 
     // Transform to match frontend expectations
-    const routePointMap = new Map<string, TripRoutePoint[]>();
+    let routePointMap = new Map<string, TripRoutePoint[]>();
     let tripsWithResolvedVin: TripWithVin[] = [];
 
     try {
@@ -236,23 +422,39 @@ export async function GET(request: NextRequest) {
 
     const vinByTripId = new Map(tripsWithResolvedVin.map((trip) => [trip.id, trip.vin]));
 
-    await Promise.all(filteredTrips.map(async (trip) => {
-        try {
-            const points = await loadThumbnailRoutePoints(
-                supabase,
-                trip.id,
-                vinByTripId.get(trip.id) || null,
-                trip.start_time,
-                trip.end_time
-            );
+    try {
+        routePointMap = await loadStoredThumbnailRoutePoints(
+            supabase,
+            filteredTrips.map((trip) => trip.id)
+        );
+    } catch (routeError) {
+        console.error('Trip thumbnail waypoint batch fetch error:', routeError);
+    }
 
-            if (points.length > 0) {
-                routePointMap.set(trip.id, points);
+    const missingStoredRoutes = tripsWithResolvedVin.filter((trip) => !routePointMap.has(trip.id));
+
+    // Telemetry fallback is the expensive path. Keep it for small result sets so
+    // detail-rich recent views still work, but avoid turning large history ranges
+    // into one telemetry query per trip.
+    if (missingStoredRoutes.length > 0 && filteredTrips.length <= MAX_TELEMETRY_THUMBNAIL_FALLBACK_TRIPS) {
+        await Promise.all(missingStoredRoutes.map(async (trip) => {
+            try {
+                const points = await loadThumbnailRoutePointsFromTelemetry(
+                    supabase,
+                    trip.id,
+                    vinByTripId.get(trip.id) || null,
+                    trip.start_time,
+                    trip.end_time
+                );
+
+                if (points.length > 0) {
+                    routePointMap.set(trip.id, points);
+                }
+            } catch (routeError) {
+                console.error(`Trip thumbnail route fallback fetch error for ${trip.id}:`, routeError);
             }
-        } catch (routeError) {
-            console.error(`Trip thumbnail route fetch error for ${trip.id}:`, routeError);
-        }
-    }));
+        }));
+    }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const formattedTrips = filteredTrips.map((trip: any) => {
@@ -308,9 +510,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
         success: true,
         trips: formattedTrips,
-        total: count,
         limit,
         offset,
+        hasMore,
+        nextOffset: hasMore ? offset + limit : null,
+        summary,
     });
 }
 

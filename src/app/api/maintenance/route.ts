@@ -14,6 +14,17 @@ import {
 
 export const dynamic = 'force-dynamic';
 
+type MaintenanceSummaryRow = {
+    total_records: number;
+    tyre_records: number;
+    other_records: number;
+    latest_logged_odometer_km: number | null;
+};
+
+type MaintenanceSummaryFallbackRow = {
+    odometer_km: number | null;
+};
+
 const VALID_SERVICE_TYPES = new Set<MaintenanceServiceType>(
     SERVICE_TYPE_OPTIONS.map((option) => option.value)
 );
@@ -35,21 +46,108 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
+    const searchParams = request.nextUrl.searchParams;
+    const limitParam = Number(searchParams.get('limit') || '');
+    const offsetParam = Number(searchParams.get('offset') || '');
+    const includeSummary = searchParams.get('includeSummary') === '1';
+    const linkedOnly = searchParams.get('linked_only') === '1';
+    const limit = Number.isFinite(limitParam) && limitParam > 0
+        ? Math.min(Math.trunc(limitParam), 100)
+        : null;
+    const offset = Number.isFinite(offsetParam) && offsetParam >= 0
+        ? Math.trunc(offsetParam)
+        : 0;
+
     const supabase = createAdminClient();
-    const { data, error } = await supabase
+    let query = supabase
         .from('maintenance_records')
         .select('*')
         .order('start_date', { ascending: false })
         .order('created_at', { ascending: false });
+
+    if (linkedOnly) {
+        query = query.in('service_type', ['tyre_season', 'tyre_rotation']);
+    }
+
+    if (limit != null) {
+        query = query.range(offset, offset + limit - 1);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
         console.error('Maintenance fetch error:', error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
+    let summary: {
+        totalRecords: number;
+        tyreRecords: number;
+        otherRecords: number;
+        latestLoggedOdometerKm: number | null;
+    } | null = null;
+
+    if (includeSummary) {
+        const { data: summaryRows, error: summaryError } = await supabase
+            .rpc('get_maintenance_summary', {
+                p_from_date: null,
+                p_to_date: null,
+            });
+
+        if (summaryError) {
+            console.warn('Maintenance summary RPC unavailable, using query fallback:', summaryError.message);
+
+            const [{ count: totalRecords, error: totalError }, { count: tyreRecords, error: tyreError }, { data: latestOdometerRows, error: latestOdometerError }] = await Promise.all([
+                supabase
+                    .from('maintenance_records')
+                    .select('id', { count: 'exact', head: true }),
+                supabase
+                    .from('maintenance_records')
+                    .select('id', { count: 'exact', head: true })
+                    .in('service_type', ['tyre_season', 'tyre_rotation']),
+                supabase
+                    .from('maintenance_records')
+                    .select('odometer_km')
+                    .not('odometer_km', 'is', null)
+                    .order('odometer_km', { ascending: false })
+                    .limit(1),
+            ]);
+
+            if (totalError || tyreError || latestOdometerError) {
+                const fallbackError = totalError || tyreError || latestOdometerError;
+                console.error('Maintenance summary fallback fetch error:', fallbackError);
+                return NextResponse.json({ error: fallbackError?.message || 'Failed to load maintenance summary' }, { status: 500 });
+            }
+
+            const totalCount = totalRecords || 0;
+            const tyreCount = tyreRecords || 0;
+
+            summary = {
+                totalRecords: totalCount,
+                tyreRecords: tyreCount,
+                otherRecords: Math.max(0, totalCount - tyreCount),
+                latestLoggedOdometerKm: (latestOdometerRows?.[0] as MaintenanceSummaryFallbackRow | undefined)?.odometer_km ?? null,
+            };
+        } else {
+            const summaryRow = (summaryRows?.[0] ?? null) as MaintenanceSummaryRow | null;
+            const totalCount = summaryRow?.total_records || 0;
+            const tyreCount = summaryRow?.tyre_records || 0;
+
+            summary = {
+                totalRecords: totalCount,
+                tyreRecords: tyreCount,
+                otherRecords: summaryRow?.other_records ?? Math.max(0, totalCount - tyreCount),
+                latestLoggedOdometerKm: summaryRow?.latest_logged_odometer_km ?? null,
+            };
+        }
+    }
+
     return NextResponse.json({
         success: true,
         records: data || [],
+        hasMore: limit != null ? (data?.length || 0) === limit : false,
+        nextOffset: limit != null ? offset + (data?.length || 0) : null,
+        summary,
     });
 }
 

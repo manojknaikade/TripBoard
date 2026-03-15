@@ -13,13 +13,28 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const unreadOnly = searchParams.get('unread_only') === 'true';
+    const countOnly = searchParams.get('count_only') === 'true';
     const limit = parseInt(searchParams.get('limit') || '50');
 
     const supabase = createAdminClient();
 
+    const unreadCountPromise = supabase
+        .from('notifications')
+        .select('id', { count: 'exact', head: true })
+        .eq('is_read', false);
+
+    if (countOnly) {
+        const { count } = await unreadCountPromise;
+        return NextResponse.json({
+            success: true,
+            notifications: [],
+            unread_count: count || 0,
+        });
+    }
+
     let query = supabase
         .from('notifications')
-        .select('*')
+        .select('id, type, title, message, data, is_read, created_at')
         .order('created_at', { ascending: false })
         .limit(limit);
 
@@ -27,18 +42,18 @@ export async function GET(request: NextRequest) {
         query = query.eq('is_read', false);
     }
 
-    const { data: notifications, error } = await query;
+    const [
+        { data: notifications, error },
+        { count },
+    ] = await Promise.all([
+        query,
+        unreadCountPromise,
+    ]);
 
     if (error) {
         console.error('Notifications fetch error:', error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
-
-    // Also get unread count
-    const { count } = await supabase
-        .from('notifications')
-        .select('*', { count: 'exact', head: true })
-        .eq('is_read', false);
 
     return NextResponse.json({
         success: true,

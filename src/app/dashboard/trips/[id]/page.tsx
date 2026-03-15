@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useSettingsStore } from '@/stores/settingsStore';
@@ -17,7 +17,9 @@ import {
 } from 'lucide-react';
 import Header from '@/components/Header';
 import dynamic from 'next/dynamic';
+import ViewportGate from '@/components/ViewportGate';
 import type { TripRoutePoint } from '@/lib/trips/routePoints';
+import { readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
 
 const TripDetailMap = dynamic(() => import('@/components/TripDetailMap'), {
     loading: () => <div className="h-96 w-full animate-pulse rounded-xl bg-slate-800" />,
@@ -48,6 +50,16 @@ interface Trip {
     avg_outside_temp: number | null;
     status: string;
 }
+
+type TripDetailResponse = {
+    success?: boolean;
+    trip?: Trip | null;
+    route_points?: TripRoutePoint[];
+    error?: string;
+};
+
+const TRIP_DETAIL_CACHE_TTL_MS = 45_000;
+const TRIP_ROUTE_CACHE_TTL_MS = 45_000;
 
 // Utility functions
 function milesToKm(miles: number): number {
@@ -120,15 +132,48 @@ export default function TripDetailPage() {
     const [startAddress, setStartAddress] = useState<string>('');
     const [endAddress, setEndAddress] = useState<string>('');
     const [routePoints, setRoutePoints] = useState<TripRoutePoint[]>([]);
+    const [loadingRoutePoints, setLoadingRoutePoints] = useState(false);
     const [loadingAddresses, setLoadingAddresses] = useState(false);
-    const { units } = useSettingsStore();
+    const geocodeCacheRef = useRef<Map<string, string>>(new Map());
+    const routePointsRequestedRef = useRef(false);
+    const routePointsAbortRef = useRef<AbortController | null>(null);
+    const units = useSettingsStore((state) => state.units);
 
-    const fetchTripDetails = useCallback(async () => {
+    useEffect(() => {
+        routePointsRequestedRef.current = false;
+        routePointsAbortRef.current?.abort();
+        routePointsAbortRef.current = null;
+        setRoutePoints([]);
+        setLoadingRoutePoints(false);
+
+        return () => {
+            routePointsAbortRef.current?.abort();
+            routePointsAbortRef.current = null;
+        };
+    }, [tripId]);
+
+    const fetchTripDetails = useCallback(async (signal?: AbortSignal) => {
+        const cacheKey = `trip:detail:${tripId}`;
+        const cached = readCachedJson<TripDetailResponse>(cacheKey);
+
         try {
-            setLoading(true);
             setError(null);
-            const res = await fetch(`/api/trips/${tripId}`);
+            if (cached?.success && cached.trip) {
+                setTrip(cached.trip);
+                setRoutePoints(Array.isArray(cached.route_points) ? cached.route_points : []);
+                setLoading(false);
+            } else {
+                setLoading(true);
+            }
+            const res = await fetch(`/api/trips/${tripId}`, {
+                cache: 'no-store',
+                signal,
+            });
             const data = await res.json();
+
+            if (signal?.aborted) {
+                return;
+            }
 
             if (!res.ok) {
                 setTrip(null);
@@ -138,6 +183,7 @@ export default function TripDetailPage() {
             }
 
             if (data.success && data.trip) {
+                writeCachedJson(cacheKey, data, TRIP_DETAIL_CACHE_TTL_MS);
                 setTrip(data.trip);
                 setRoutePoints(Array.isArray(data.route_points) ? data.route_points : []);
             } else {
@@ -146,64 +192,156 @@ export default function TripDetailPage() {
                 setError('Trip not found');
             }
         } catch (err) {
+            if (err instanceof DOMException && err.name === 'AbortError') {
+                return;
+            }
             console.error('Failed to fetch trip:', err);
-            setRoutePoints([]);
-            setError('Failed to load trip details');
+            if (!(cached?.success && cached.trip)) {
+                setRoutePoints([]);
+                setError('Failed to load trip details');
+            }
         } finally {
-            setLoading(false);
+            if (!signal?.aborted) {
+                if (!(cached?.success && cached.trip)) {
+                    setLoading(false);
+                }
+            }
         }
     }, [tripId]);
 
     // Fetch addresses for start and end coordinates
     useEffect(() => {
-        fetchTripDetails();
+        const controller = new AbortController();
+        void fetchTripDetails(controller.signal);
+
+        return () => controller.abort();
     }, [fetchTripDetails]);
 
-    const fetchAddresses = useCallback(async () => {
+    const fetchRoutePoints = useCallback(async () => {
+        if (routePointsRequestedRef.current || loadingRoutePoints) {
+            return;
+        }
+
+        const cacheKey = `trip:route:${tripId}`;
+        const cached = readCachedJson<TripRoutePoint[]>(cacheKey);
+
+        routePointsRequestedRef.current = true;
+        routePointsAbortRef.current?.abort();
+        const controller = new AbortController();
+        routePointsAbortRef.current = controller;
+
+        if (cached) {
+            setRoutePoints(cached);
+            setLoadingRoutePoints(false);
+        } else {
+            setLoadingRoutePoints(true);
+        }
+
+        try {
+            const res = await fetch(`/api/trips/${tripId}?includeRoute=1`, {
+                cache: 'no-store',
+                signal: controller.signal,
+            });
+            const data = await res.json();
+
+            if (controller.signal.aborted) {
+                return;
+            }
+
+            if (!res.ok) {
+                return;
+            }
+
+            const nextRoutePoints = Array.isArray(data.route_points) ? data.route_points : [];
+            writeCachedJson(cacheKey, nextRoutePoints, TRIP_ROUTE_CACHE_TTL_MS);
+            setRoutePoints(nextRoutePoints);
+        } catch (err) {
+            if (err instanceof DOMException && err.name === 'AbortError') {
+                return;
+            }
+            console.error('Failed to fetch trip route points:', err);
+        } finally {
+            if (routePointsAbortRef.current === controller) {
+                routePointsAbortRef.current = null;
+            }
+
+            if (!controller.signal.aborted) {
+                if (!cached) {
+                    setLoadingRoutePoints(false);
+                }
+            }
+        }
+    }, [loadingRoutePoints, tripId]);
+
+    const resolveAddress = useCallback(async (latitude: number, longitude: number, signal?: AbortSignal) => {
+        const cacheKey = `${latitude},${longitude}`;
+        const cachedAddress = geocodeCacheRef.current.get(cacheKey);
+        const fallbackAddress = `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+
+        if (cachedAddress) {
+            return cachedAddress;
+        }
+
+        try {
+            const res = await fetch(`/api/geocode?lat=${latitude}&lng=${longitude}`, {
+                signal,
+            });
+            const data = await res.json();
+            const resolvedAddress = data?.success && data?.address
+                ? data.address
+                : data?.fallback || fallbackAddress;
+
+            geocodeCacheRef.current.set(cacheKey, resolvedAddress);
+            return resolvedAddress;
+        } catch (error) {
+            if (error instanceof DOMException && error.name === 'AbortError') {
+                throw error;
+            }
+            return fallbackAddress;
+        }
+    }, []);
+
+    const fetchAddresses = useCallback(async (signal?: AbortSignal) => {
         if (!trip) return;
 
         setLoadingAddresses(true);
+        setStartAddress(trip.start_address || '');
+        setEndAddress(trip.end_address || '');
 
-        // Use trip addresses if available, otherwise geocode
-        if (trip.start_address) {
-            setStartAddress(trip.start_address);
-        } else if (trip.start_latitude && trip.start_longitude) {
-            try {
-                const res = await fetch(`/api/geocode?lat=${trip.start_latitude}&lng=${trip.start_longitude}`);
-                const data = await res.json();
-                if (data.success) {
-                    setStartAddress(data.address);
-                } else {
-                    setStartAddress(`${trip.start_latitude.toFixed(4)}, ${trip.start_longitude.toFixed(4)}`);
-                }
-            } catch {
-                setStartAddress(`${trip.start_latitude.toFixed(4)}, ${trip.start_longitude.toFixed(4)}`);
+        const startPromise = trip.start_address || trip.start_latitude == null || trip.start_longitude == null
+            ? Promise.resolve(trip.start_address || '')
+            : resolveAddress(trip.start_latitude, trip.start_longitude, signal);
+        const endPromise = trip.end_address || trip.end_latitude == null || trip.end_longitude == null
+            ? Promise.resolve(trip.end_address || '')
+            : resolveAddress(trip.end_latitude, trip.end_longitude, signal);
+
+        try {
+            const [resolvedStartAddress, resolvedEndAddress] = await Promise.all([startPromise, endPromise]);
+
+            if (signal?.aborted) {
+                return;
+            }
+
+            setStartAddress(resolvedStartAddress);
+            setEndAddress(resolvedEndAddress);
+        } catch (error) {
+            if (error instanceof DOMException && error.name === 'AbortError') {
+                return;
+            }
+        } finally {
+            if (!signal?.aborted) {
+                setLoadingAddresses(false);
             }
         }
-
-        if (trip.end_address) {
-            setEndAddress(trip.end_address);
-        } else if (trip.end_latitude && trip.end_longitude) {
-            try {
-                const res = await fetch(`/api/geocode?lat=${trip.end_latitude}&lng=${trip.end_longitude}`);
-                const data = await res.json();
-                if (data.success) {
-                    setEndAddress(data.address);
-                } else {
-                    setEndAddress(`${trip.end_latitude.toFixed(4)}, ${trip.end_longitude.toFixed(4)}`);
-                }
-            } catch {
-                setEndAddress(`${trip.end_latitude.toFixed(4)}, ${trip.end_longitude.toFixed(4)}`);
-            }
-        }
-
-        setLoadingAddresses(false);
-    }, [trip]);
+    }, [resolveAddress, trip]);
 
     // Fetch addresses when trip loads
     useEffect(() => {
         if (trip) {
-            fetchAddresses();
+            const controller = new AbortController();
+            void fetchAddresses(controller.signal);
+
+            return () => controller.abort();
         }
     }, [trip, fetchAddresses]);
 
@@ -234,7 +372,7 @@ export default function TripDetailPage() {
         );
     }
 
-    const hasCoords = trip.start_latitude && trip.start_longitude;
+    const hasCoords = trip.start_latitude != null && trip.start_longitude != null;
     const isInProgress = trip.status === 'in_progress';
 
     return (
@@ -264,13 +402,25 @@ export default function TripDetailPage() {
                 {/* Map Section */}
                 {hasCoords && (
                     <div className="mb-8">
-                        <TripDetailMap
-                            startLat={trip.start_latitude!}
-                            startLng={trip.start_longitude!}
-                            endLat={trip.end_latitude}
-                            endLng={trip.end_longitude}
-                            routePoints={routePoints}
-                        />
+                        <ViewportGate
+                            className="h-96 w-full"
+                            onVisible={() => {
+                                void fetchRoutePoints();
+                            }}
+                            placeholder={<div className="h-96 w-full animate-pulse rounded-xl bg-slate-800" />}
+                        >
+                            {loadingRoutePoints ? (
+                                <div className="h-96 w-full animate-pulse rounded-xl bg-slate-800" />
+                            ) : (
+                                <TripDetailMap
+                                    startLat={trip.start_latitude!}
+                                    startLng={trip.start_longitude!}
+                                    endLat={trip.end_latitude}
+                                    endLng={trip.end_longitude}
+                                    routePoints={routePoints}
+                                />
+                            )}
+                        </ViewportGate>
                     </div>
                 )}
 

@@ -4,8 +4,11 @@ import { getTeslaSession } from '@/lib/tesla/auth-server';
 import {
     dedupeRoutePoints,
     extractRoutePointFromTelemetry,
+    sampleRoutePoints,
     type TripRoutePoint,
 } from '@/lib/trips/routePoints';
+
+const THUMBNAIL_ROUTE_POINTS_MAX = 24;
 
 type TripRow = {
     id: string;
@@ -179,12 +182,15 @@ export async function GET(
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
+    const { searchParams } = new URL(request.url);
+    const isThumbnailRequest = searchParams.get('thumbnail') === '1';
+    const includeRoute = isThumbnailRequest || searchParams.get('includeRoute') === '1';
     const { id } = await context.params;
     const supabase = createAdminClient();
 
     const { data: trip, error } = await supabase
         .from('trips')
-        .select('*')
+        .select('id, vin, vehicle_id, start_time, end_time, start_latitude, start_longitude, start_address, end_latitude, end_longitude, end_address, distance_miles, energy_used_kwh, start_battery_pct, end_battery_pct, start_odometer, end_odometer, max_speed_mph, avg_speed_mph, min_outside_temp, max_outside_temp, avg_outside_temp, is_complete')
         .eq('id', id)
         .maybeSingle<TripRow>();
 
@@ -197,13 +203,23 @@ export async function GET(
         return NextResponse.json({ error: 'Trip not found' }, { status: 404 });
     }
 
+    if (!includeRoute) {
+        return NextResponse.json({
+            success: true,
+            trip: formatTrip(trip),
+        });
+    }
+
     try {
         const routePoints = await loadRoutePoints(supabase, trip);
+        const responseRoutePoints = isThumbnailRequest
+            ? sampleRoutePoints(routePoints, THUMBNAIL_ROUTE_POINTS_MAX)
+            : routePoints;
 
         return NextResponse.json({
             success: true,
             trip: formatTrip(trip),
-            route_points: routePoints,
+            route_points: responseRoutePoints,
         });
     } catch (routeError) {
         console.error('Trip route fetch error:', routeError);

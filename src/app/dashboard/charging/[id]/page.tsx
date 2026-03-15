@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useSettingsStore } from '@/stores/settingsStore';
@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import Header from '@/components/Header';
 import dynamic from 'next/dynamic';
+import ViewportGate from '@/components/ViewportGate';
 import {
     canUseManualChargingCost,
     getChargingBatteryEnergyKwh,
@@ -31,6 +32,7 @@ import {
     getTeslaChargingSyncStatus,
     isSuperchargerChargingSession,
 } from '@/lib/charging/teslaSync';
+import { invalidateCachedJsonMatching, readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
 
 const TripDetailMap = dynamic(() => import('@/components/TripDetailMap'), {
     loading: () => <div className="h-96 w-full animate-pulse rounded-xl bg-slate-800" />,
@@ -58,6 +60,14 @@ interface ChargingSession {
     tesla_charge_event_id: string | null;
     is_complete: boolean;
 }
+
+type ChargingDetailResponse = {
+    success?: boolean;
+    session?: ChargingSession | null;
+    error?: string;
+};
+
+const CHARGING_DETAIL_CACHE_TTL_MS = 45_000;
 
 function formatDuration(start: string, end: string | null): string {
     if (!end) return 'In Progress';
@@ -88,60 +98,113 @@ export default function ChargingDetailPage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [address, setAddress] = useState<string>('');
+    const geocodeCacheRef = useRef<Map<string, string>>(new Map());
 
     // Cost Editor State
-    const { currency: preferredCurrency } = useSettingsStore();
+    const preferredCurrency = useSettingsStore((state) => state.currency);
     const [isEditingCost, setIsEditingCost] = useState(false);
     const [costInput, setCostInput] = useState('');
     const [currencyInput, setCurrencyInput] = useState(preferredCurrency);
     const [savingCost, setSavingCost] = useState(false);
 
-    const fetchSessionDetails = useCallback(async () => {
+    const fetchSessionDetails = useCallback(async (signal?: AbortSignal) => {
+        const cacheKey = `charging:detail:${sessionId}`;
+        const cached = readCachedJson<ChargingDetailResponse>(cacheKey);
+
         try {
-            setLoading(true);
-            const res = await fetch(`/api/charging/${sessionId}`);
+            setError(null);
+            if (cached?.success && cached.session) {
+                setSession(cached.session);
+                setLoading(false);
+            } else {
+                setLoading(true);
+            }
+            const res = await fetch(`/api/charging/${sessionId}`, {
+                cache: 'no-store',
+                signal,
+            });
             const data = await res.json();
 
+            if (signal?.aborted) {
+                return;
+            }
+
             if (data.success && data.session) {
+                writeCachedJson(cacheKey, data, CHARGING_DETAIL_CACHE_TTL_MS);
                 setSession(data.session);
             } else {
-                setError('Charging session not found');
+                if (!(cached?.success && cached.session)) {
+                    setError('Charging session not found');
+                }
             }
         } catch (err) {
+            if (err instanceof DOMException && err.name === 'AbortError') {
+                return;
+            }
             console.error('Failed to fetch session:', err);
-            setError('Failed to load charging details');
+            if (!(cached?.success && cached.session)) {
+                setError('Failed to load charging details');
+            }
         } finally {
-            setLoading(false);
+            if (!signal?.aborted) {
+                if (!(cached?.success && cached.session)) {
+                    setLoading(false);
+                }
+            }
         }
     }, [sessionId]);
 
     useEffect(() => {
-        fetchSessionDetails();
+        const controller = new AbortController();
+        void fetchSessionDetails(controller.signal);
+
+        return () => controller.abort();
     }, [fetchSessionDetails]);
 
-    const fetchAddressFromCoords = useCallback(async () => {
+    const fetchAddressFromCoords = useCallback(async (signal?: AbortSignal) => {
         if (!session || session.latitude == null || session.longitude == null) return;
 
         if (session.location_name) {
             setAddress(session.location_name);
-        } else {
-            try {
-                const res = await fetch(`/api/geocode?lat=${session.latitude}&lng=${session.longitude}`);
-                const data = await res.json();
-                if (data.success) {
-                    setAddress(data.address);
-                } else {
-                    setAddress(`${session.latitude.toFixed(4)}, ${session.longitude.toFixed(4)}`);
-                }
-            } catch {
-                setAddress(`${session.latitude.toFixed(4)}, ${session.longitude.toFixed(4)}`);
+            return;
+        }
+
+        const cacheKey = `${session.latitude},${session.longitude}`;
+        const cachedAddress = geocodeCacheRef.current.get(cacheKey);
+        const fallbackAddress = `${session.latitude.toFixed(4)}, ${session.longitude.toFixed(4)}`;
+
+        if (cachedAddress) {
+            setAddress(cachedAddress);
+            return;
+        }
+
+        try {
+            const res = await fetch(`/api/geocode?lat=${session.latitude}&lng=${session.longitude}`, {
+                signal,
+            });
+            const data = await res.json();
+            const resolvedAddress = data?.success && data?.address
+                ? data.address
+                : data?.fallback || fallbackAddress;
+
+            geocodeCacheRef.current.set(cacheKey, resolvedAddress);
+            if (!signal?.aborted) {
+                setAddress(resolvedAddress);
             }
+        } catch (error) {
+            if (error instanceof DOMException && error.name === 'AbortError') {
+                return;
+            }
+            setAddress(fallbackAddress);
         }
     }, [session]);
 
     useEffect(() => {
         if (session) {
-            fetchAddressFromCoords();
+            const controller = new AbortController();
+            void fetchAddressFromCoords(controller.signal);
+
+            return () => controller.abort();
         }
     }, [session, fetchAddressFromCoords]);
 
@@ -160,11 +223,14 @@ export default function ChargingDetailPage() {
             const data = await response.json();
 
             if (data.success && data.session) {
-                setSession({
+                const updatedSession = {
                     ...session,
                     cost_user_entered: data.session.cost_user_entered,
                     currency: data.session.currency
-                });
+                };
+                setSession(updatedSession);
+                writeCachedJson(`charging:detail:${session.id}`, { success: true, session: updatedSession }, CHARGING_DETAIL_CACHE_TTL_MS);
+                invalidateCachedJsonMatching('charging:list:');
                 setIsEditingCost(false);
             }
         } catch (err) {
@@ -322,12 +388,17 @@ export default function ChargingDetailPage() {
                 {/* Map Section */}
                 {hasCoords && (
                     <div className="mb-8 overflow-hidden rounded-xl border border-slate-700/50 relative">
-                        <TripDetailMap
-                            startLat={session.latitude!}
-                            startLng={session.longitude!}
-                            endLat={session.latitude!}
-                            endLng={session.longitude!}
-                        />
+                        <ViewportGate
+                            className="h-96 w-full"
+                            placeholder={<div className="h-96 w-full animate-pulse rounded-xl bg-slate-800" />}
+                        >
+                            <TripDetailMap
+                                startLat={session.latitude!}
+                                startLng={session.longitude!}
+                                endLat={session.latitude!}
+                                endLng={session.longitude!}
+                            />
+                        </ViewportGate>
                     </div>
                 )}
 

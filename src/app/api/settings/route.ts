@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
 
     const { data: settings, error } = await supabase
         .from('app_settings')
-        .select('*')
+        .select('polling_driving, polling_charging, polling_parked, polling_sleeping, region, units, currency, date_format, notifications_enabled, data_source, map_style')
         .eq('id', 'default')
         .single();
 

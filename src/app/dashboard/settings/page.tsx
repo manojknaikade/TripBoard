@@ -14,6 +14,8 @@ import {
 } from 'lucide-react';
 import { useSettingsStore } from '@/stores/settingsStore';
 import Header from '@/components/Header';
+import ViewportGate from '@/components/ViewportGate';
+import { fetchCachedJson, invalidateCachedJson, readCachedJson } from '@/lib/client/fetchCache';
 
 
 import dynamic from 'next/dynamic';
@@ -22,6 +24,8 @@ const LocationPicker = dynamic(() => import('@/components/settings/LocationPicke
     loading: () => <div className="h-[400px] w-full animate-pulse rounded-xl bg-slate-800" />,
     ssr: false
 });
+
+const SETTINGS_CACHE_TTL_MS = 60_000;
 
 interface VehicleSummary {
     id: number;
@@ -36,31 +40,32 @@ export default function SettingsPage() {
     const [exporting, setExporting] = useState<'csv' | 'json' | null>(null);
     const [savingHome, setSavingHome] = useState(false);
     const [vehicles, setVehicles] = useState<VehicleSummary[]>([]);
+    const [loadingVehicles, setLoadingVehicles] = useState(false);
+    const [vehicleFetchAttempted, setVehicleFetchAttempted] = useState(false);
     const [selectedVehicleId, setSelectedVehicleId] = useState<string>('');
     const [pushingConfig, setPushingConfig] = useState(false);
     const [configStatus, setConfigStatus] = useState<{ success: boolean; message: string } | null>(null);
 
-    const {
-        pollingConfig,
-        region,
-        units,
-        currency,
-        notifications,
-        dataSource,
-        mapStyle,
-        homeLocation,
-        setPollingConfig,
-        setRegion,
-        setUnits,
-        setCurrency,
-        setDateFormat,
-        setNotifications,
-        setDataSource,
-        setMapStyle,
-        setHomeLocation,
-        loadFromDatabase,
-        saveToDatabase,
-    } = useSettingsStore();
+    const pollingConfig = useSettingsStore((state) => state.pollingConfig);
+    const region = useSettingsStore((state) => state.region);
+    const units = useSettingsStore((state) => state.units);
+    const currency = useSettingsStore((state) => state.currency);
+    const dateFormat = useSettingsStore((state) => state.dateFormat);
+    const notifications = useSettingsStore((state) => state.notifications);
+    const dataSource = useSettingsStore((state) => state.dataSource);
+    const mapStyle = useSettingsStore((state) => state.mapStyle);
+    const homeLocation = useSettingsStore((state) => state.homeLocation);
+    const setPollingConfig = useSettingsStore((state) => state.setPollingConfig);
+    const setRegion = useSettingsStore((state) => state.setRegion);
+    const setUnits = useSettingsStore((state) => state.setUnits);
+    const setCurrency = useSettingsStore((state) => state.setCurrency);
+    const setDateFormat = useSettingsStore((state) => state.setDateFormat);
+    const setNotifications = useSettingsStore((state) => state.setNotifications);
+    const setDataSource = useSettingsStore((state) => state.setDataSource);
+    const setMapStyle = useSettingsStore((state) => state.setMapStyle);
+    const setHomeLocation = useSettingsStore((state) => state.setHomeLocation);
+    const loadFromDatabase = useSettingsStore((state) => state.loadFromDatabase);
+    const saveToDatabase = useSettingsStore((state) => state.saveToDatabase);
 
     // Handle hydration and load all settings from database
     useEffect(() => {
@@ -69,20 +74,24 @@ export default function SettingsPage() {
         // Load general settings
         loadFromDatabase();
 
-        // Load vehicles
-        fetch('/api/tesla/test')
-            .then(res => res.json())
-            .then(data => {
-                if (data.success && data.vehicles.length > 0) {
-                    setVehicles(data.vehicles);
-                    setSelectedVehicleId(data.vehicles[0].id.toString());
-                }
-            })
-            .catch(err => console.error('Failed to fetch vehicles:', err));
-
         // Load home location
-        fetch('/api/settings/home-location')
-            .then(res => res.json())
+        const cachedHomeLocation = readCachedJson<{
+            success: boolean;
+            homeLocation: { latitude: number | null; longitude: number | null; address: string };
+        }>('settings:home-location');
+
+        if (cachedHomeLocation?.success && cachedHomeLocation.homeLocation.latitude) {
+            setHomeLocation(cachedHomeLocation.homeLocation);
+        }
+
+        fetchCachedJson(
+            'settings:home-location',
+            async () => {
+                const res = await fetch('/api/settings/home-location');
+                return res.json();
+            },
+            SETTINGS_CACHE_TTL_MS
+        )
             .then(data => {
                 if (data.success && data.homeLocation.latitude) {
                     setHomeLocation(data.homeLocation);
@@ -90,6 +99,71 @@ export default function SettingsPage() {
             })
             .catch(err => console.error('Failed to fetch home location:', err));
     }, [setHomeLocation, loadFromDatabase]);
+
+    useEffect(() => {
+        if (dataSource !== 'telemetry') {
+            setVehicles([]);
+            setSelectedVehicleId('');
+            setVehicleFetchAttempted(false);
+            return;
+        }
+    }, [dataSource]);
+
+    useEffect(() => {
+        setVehicles([]);
+        setSelectedVehicleId('');
+        setVehicleFetchAttempted(false);
+    }, [region]);
+
+    useEffect(() => {
+        if (vehicles.length > 0 || loadingVehicles || vehicleFetchAttempted) {
+            return;
+        }
+
+        let cancelled = false;
+
+        setVehicleFetchAttempted(true);
+        setLoadingVehicles(true);
+
+        const cacheKey = `settings:vehicles:${region}`;
+        const cachedVehicles = readCachedJson<{ success: boolean; vehicles: VehicleSummary[] }>(cacheKey);
+
+        if (cachedVehicles?.success && cachedVehicles.vehicles.length > 0) {
+            setVehicles(cachedVehicles.vehicles);
+            setSelectedVehicleId((currentId) => currentId || cachedVehicles.vehicles[0].id.toString());
+            setLoadingVehicles(false);
+            return;
+        }
+
+        fetchCachedJson(
+            cacheKey,
+            async () => {
+                const res = await fetch(`/api/tesla/vehicles?summary=1&region=${region}`, {
+                    cache: 'no-store',
+                });
+                return res.json();
+            },
+            SETTINGS_CACHE_TTL_MS
+        )
+            .then((data) => {
+                if (cancelled || !data.success || data.vehicles.length === 0) {
+                    return;
+                }
+
+                setVehicles(data.vehicles);
+                setSelectedVehicleId((currentId) => currentId || data.vehicles[0].id.toString());
+            })
+            .catch((err) => console.error('Failed to fetch vehicles:', err))
+            .finally(() => {
+                if (!cancelled) {
+                    setLoadingVehicles(false);
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [dataSource, loadingVehicles, region, vehicleFetchAttempted, vehicles.length]);
 
     const showSaved = () => {
         setSaved(true);
@@ -108,6 +182,7 @@ export default function SettingsPage() {
             });
 
             if (res.ok) {
+                invalidateCachedJson('settings:home-location');
                 showSaved();
             }
         } catch (err) {
@@ -280,34 +355,42 @@ export default function SettingsPage() {
                             📡 Telemetry mode requires a running telemetry server on your VM.
                         </p>
 
-                        {dataSource === 'telemetry' && vehicles.length > 0 && (
+                        {dataSource === 'telemetry' && (
                             <div className="mt-6 border-t border-slate-700/50 pt-6">
                                 <h3 className="mb-2 text-sm font-medium text-slate-300">Push Configuration</h3>
                                 <p className="mb-4 text-xs text-slate-500">
                                     Send latest field definitions (DetailedChargeState, TPMS, Doors) to your car.
                                 </p>
-                                <div className="flex flex-col gap-3 sm:flex-row">
-                                    <select
-                                        value={selectedVehicleId}
-                                        onChange={(e) => setSelectedVehicleId(e.target.value)}
-                                        className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-red-500"
-                                    >
-                                        {vehicles.map(v => (
-                                            <option key={v.id} value={v.id}>{v.display_name} ({v.vin.slice(-6)})</option>
-                                        ))}
-                                    </select>
-                                    <button
-                                        onClick={handlePushConfig}
-                                        disabled={pushingConfig}
-                                        className="rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-50"
-                                    >
-                                        {pushingConfig ? 'Pushing...' : 'Update Car Config'}
-                                    </button>
-                                </div>
-                                {configStatus && (
-                                    <p className={`mt-3 text-xs ${configStatus.success ? 'text-green-400' : 'text-red-400'}`}>
-                                        {configStatus.success ? '✓' : '✗'} {configStatus.message}
-                                    </p>
+                                {loadingVehicles ? (
+                                    <p className="text-xs text-slate-500">Loading Tesla vehicles...</p>
+                                ) : vehicles.length > 0 ? (
+                                    <>
+                                        <div className="flex flex-col gap-3 sm:flex-row">
+                                            <select
+                                                value={selectedVehicleId}
+                                                onChange={(e) => setSelectedVehicleId(e.target.value)}
+                                                className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-red-500"
+                                            >
+                                                {vehicles.map(v => (
+                                                    <option key={v.id} value={v.id}>{v.display_name} ({v.vin.slice(-6)})</option>
+                                                ))}
+                                            </select>
+                                            <button
+                                                onClick={handlePushConfig}
+                                                disabled={pushingConfig}
+                                                className="rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-50"
+                                            >
+                                                {pushingConfig ? 'Pushing...' : 'Update Car Config'}
+                                            </button>
+                                        </div>
+                                        {configStatus && (
+                                            <p className={`mt-3 text-xs ${configStatus.success ? 'text-green-400' : 'text-red-400'}`}>
+                                                {configStatus.success ? '✓' : '✗'} {configStatus.message}
+                                            </p>
+                                        )}
+                                    </>
+                                ) : (
+                                    <p className="text-xs text-slate-500">No Tesla vehicles available for telemetry configuration.</p>
                                 )}
                             </div>
                         )}
@@ -319,14 +402,19 @@ export default function SettingsPage() {
                         title="Home Location"
                         description="Set your home coordinates for charging analytics"
                     >
-                        <LocationPicker
-                            latitude={homeLocation.latitude}
-                            longitude={homeLocation.longitude}
-                            address={homeLocation.address}
-                            onLocationChange={(lat: number, lon: number, address: string) => {
-                                setHomeLocation({ latitude: lat, longitude: lon, address });
-                            }}
-                        />
+                        <ViewportGate
+                            className="min-h-[400px]"
+                            placeholder={<div className="h-[400px] w-full animate-pulse rounded-xl bg-slate-800" />}
+                        >
+                            <LocationPicker
+                                latitude={homeLocation.latitude}
+                                longitude={homeLocation.longitude}
+                                address={homeLocation.address}
+                                onLocationChange={(lat: number, lon: number, address: string) => {
+                                    setHomeLocation({ latitude: lat, longitude: lon, address });
+                                }}
+                            />
+                        </ViewportGate>
                         <div className="mt-4 flex justify-end">
                             <button
                                 onClick={saveHomeLocation}
@@ -440,7 +528,7 @@ export default function SettingsPage() {
                                         setDateFormat(d.id as 'DD/MM' | 'MM/DD');
                                         showSaved();
                                     }}
-                                    className={`rounded-lg px-4 py-2 text-sm transition-colors ${useSettingsStore.getState().dateFormat === d.id
+                                    className={`rounded-lg px-4 py-2 text-sm transition-colors ${dateFormat === d.id
                                             ? 'bg-red-500/10 text-red-400 ring-1 ring-red-500/30'
                                             : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'
                                         }`}

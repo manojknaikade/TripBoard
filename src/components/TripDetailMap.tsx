@@ -40,7 +40,7 @@ export default function TripDetailMap({
     endLng,
     routePoints = [],
 }: TripDetailMapProps) {
-    const { mapStyle } = useSettingsStore();
+    const mapStyle = useSettingsStore((state) => state.mapStyle);
     const tileConfig = getMapTileConfig(mapStyle);
     const mapRef = useRef<L.Map | null>(null);
     const tileLayerRef = useRef<L.TileLayer | null>(null);

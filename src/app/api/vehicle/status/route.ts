@@ -9,11 +9,17 @@ export async function GET(request: NextRequest) {
     }
 
     const supabase = createAdminClient()
+    const requestedFields = request.nextUrl.searchParams.get('fields')
+    const selectClause = requestedFields === 'odometer'
+        ? 'odometer'
+        : requestedFields === 'map'
+            ? 'lat, lon, speed, battery_level'
+            : '*'
 
     const { data, error } = await supabase
         .from('vehicle_status')
-        .select('*')
-        .single()
+        .select(selectClause)
+        .maybeSingle()
 
     if (error) {
         return NextResponse.json({ error: error.message }, { status: 500 })

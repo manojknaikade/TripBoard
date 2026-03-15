@@ -1,10 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { usePathname } from 'next/navigation';
 import { handleSignOut } from '@/lib/utils/auth';
-import NotificationBell from '@/components/NotificationBell';
 import {
     Zap,
     Gauge,
@@ -17,9 +17,24 @@ import {
     X,
 } from 'lucide-react';
 
+const NotificationBell = dynamic(() => import('@/components/NotificationBell'), {
+    ssr: false,
+});
+
 export default function Header() {
     const pathname = usePathname();
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+    const [isDesktop, setIsDesktop] = useState(false);
+
+    useEffect(() => {
+        const mediaQuery = window.matchMedia('(min-width: 768px)');
+        const syncDesktopState = () => setIsDesktop(mediaQuery.matches);
+
+        syncDesktopState();
+        mediaQuery.addEventListener('change', syncDesktopState);
+
+        return () => mediaQuery.removeEventListener('change', syncDesktopState);
+    }, []);
 
     const toggleMobileMenu = () => {
         setIsMobileMenuOpen(!isMobileMenuOpen);
@@ -60,7 +75,7 @@ export default function Header() {
 
                 {/* Desktop Notification Bell + Sign Out */}
                 <div className="hidden md:flex shrink-0 items-center gap-2">
-                    <NotificationBell />
+                    {isDesktop ? <NotificationBell /> : null}
                     <button
                         onClick={handleSignOut}
                         className="flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"

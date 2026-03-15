@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import {
   Battery,
@@ -22,6 +22,7 @@ import {
 import { useSettingsStore } from '@/stores/settingsStore';
 import Header from '@/components/Header';
 import dynamic from 'next/dynamic';
+import { fetchCachedJson, readCachedJson } from '@/lib/client/fetchCache';
 
 // Dynamic import for map component (client-side only)
 const VehicleMap = dynamic(() => import('@/components/VehicleMap'), {
@@ -80,6 +81,8 @@ interface CachedData {
   timestamp: number;
 }
 
+type VehicleCacheStore = Record<string, CachedData>;
+
 interface Vehicle {
   id: number;
   display_name: string;
@@ -87,7 +90,40 @@ interface Vehicle {
   state: string;
 }
 
-const CACHE_KEY = 'tripboard_vehicle_cache';
+const CACHE_KEY = 'tripboard_vehicle_cache_v2';
+const MAP_VIEWPORT_ROOT_MARGIN = '240px';
+const VEHICLE_LIST_CACHE_TTL_MS = 60_000;
+
+function buildVehicleCacheKey(vehicleId: number, dataSource: string, region: string) {
+  return `${dataSource}:${region}:${vehicleId}`;
+}
+
+function parseVehicleCache(raw: string | null): VehicleCacheStore {
+  if (!raw) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, CachedData] => {
+        const value = entry[1];
+        return (
+          !!value &&
+          typeof value === 'object' &&
+          'vehicle' in value &&
+          'timestamp' in value
+        );
+      })
+    );
+  } catch {
+    return {};
+  }
+}
 
 function formatTimeAgo(timestamp: number): string {
   const seconds = Math.floor((Date.now() - timestamp) / 1000);
@@ -109,7 +145,7 @@ export default function DashboardPage() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | null>(null);
   const [vehicleData, setVehicleData] = useState<VehicleData | null>(null);
-  const [cachedData, setCachedData] = useState<CachedData | null>(null);
+  const [vehicleCache, setVehicleCache] = useState<VehicleCacheStore>({});
   const [loading, setLoading] = useState(true);
   const [dataLoading, setDataLoading] = useState(false);
   const [waking, setWaking] = useState(false);
@@ -117,24 +153,60 @@ export default function DashboardPage() {
   const [isAsleep, setIsAsleep] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
   const [streetAddress, setStreetAddress] = useState<string | null>(null);
+  const [isLocationCardNearViewport, setIsLocationCardNearViewport] = useState(false);
+  const locationCardRef = useRef<HTMLDivElement | null>(null);
+  const geocodeCacheRef = useRef<Map<string, string>>(new Map());
+  const vehicleFetchIdRef = useRef(0);
+  const vehicleFetchControllerRef = useRef<AbortController | null>(null);
 
-  const { units, region, dataSource } = useSettingsStore();
+  const units = useSettingsStore((state) => state.units);
+  const region = useSettingsStore((state) => state.region);
+  const dataSource = useSettingsStore((state) => state.dataSource);
 
   // Load cached data on mount
   useEffect(() => {
-    const cached = localStorage.getItem(CACHE_KEY);
-    if (cached) {
-      try {
-        setCachedData(JSON.parse(cached));
-      } catch { /* ignore */ }
-    }
+    setVehicleCache(parseVehicleCache(localStorage.getItem(CACHE_KEY)));
+  }, []);
+
+  useEffect(() => {
+    return () => vehicleFetchControllerRef.current?.abort();
+  }, []);
+
+  const persistVehicleCache = useCallback((cacheKey: string, cacheEntry: CachedData) => {
+    setVehicleCache((currentCache) => {
+      const nextCache = {
+        ...currentCache,
+        [cacheKey]: cacheEntry,
+      };
+      localStorage.setItem(CACHE_KEY, JSON.stringify(nextCache));
+      return nextCache;
+    });
   }, []);
 
   // Fetch vehicles list on mount
   const fetchVehicles = useCallback(async () => {
+    const requestUrl = `/api/tesla/vehicles?summary=1&region=${region}`;
+    const requestCacheKey = `dashboard:vehicles:${region}`;
+    const cached = readCachedJson<{ success: boolean; vehicles: Vehicle[]; error?: string }>(requestCacheKey);
+
+    if (cached?.success && cached.vehicles.length > 0) {
+      setVehicles(cached.vehicles);
+      setSelectedVehicle(cached.vehicles[0]);
+      setLoading(false);
+      return;
+    }
+
     try {
-      const response = await fetch('/api/tesla/test');
-      const data = await response.json();
+      const data = await fetchCachedJson<{ success: boolean; vehicles: Vehicle[]; error?: string }>(
+        requestCacheKey,
+        async () => {
+          const response = await fetch(requestUrl, {
+            cache: 'no-store',
+          });
+          return response.json();
+        },
+        VEHICLE_LIST_CACHE_TTL_MS
+      );
 
       if (data.success && data.vehicles.length > 0) {
         setVehicles(data.vehicles);
@@ -147,16 +219,23 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [region]);
 
   useEffect(() => {
-    fetchVehicles();
+    void fetchVehicles();
   }, [fetchVehicles]);
 
   // Fetch vehicle data when selected vehicle changes
   const fetchVehicleData = useCallback(async (vehicleId: number) => {
+    vehicleFetchControllerRef.current?.abort();
+    const controller = new AbortController();
+    vehicleFetchControllerRef.current = controller;
+    const requestId = ++vehicleFetchIdRef.current;
+    const cacheKey = buildVehicleCacheKey(vehicleId, dataSource, region);
+
     setDataLoading(true);
     setIsAsleep(false);
+    setError(null);
 
     try {
       // Use telemetry endpoint if dataSource is 'telemetry'
@@ -164,8 +243,15 @@ export default function DashboardPage() {
         ? '/api/tesla/telemetry-status'
         : `/api/tesla/vehicle-data?id=${vehicleId}&region=${region}`;
 
-      const response = await fetch(endpoint);
+      const response = await fetch(endpoint, {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
       const data = await response.json();
+
+      if (controller.signal.aborted || requestId !== vehicleFetchIdRef.current) {
+        return;
+      }
 
       if (data.success) {
         if (data.state === 'asleep') {
@@ -175,15 +261,13 @@ export default function DashboardPage() {
         } else {
           setVehicleData(data.vehicle);
           // Use timestamp from API response (properly formatted in telemetry endpoint)
-          setLastUpdated(data.timestamp || Date.now());
+          const timestamp = data.timestamp || Date.now();
+          setLastUpdated(timestamp);
           setIsAsleep(false);
-          // Cache the data
-          const cacheEntry: CachedData = {
+          persistVehicleCache(cacheKey, {
             vehicle: data.vehicle,
-            timestamp: data.timestamp || Date.now(),
-          };
-          setCachedData(cacheEntry);
-          localStorage.setItem(CACHE_KEY, JSON.stringify(cacheEntry));
+            timestamp,
+          });
         }
       } else if (data.status === 'waiting_for_telemetry') {
         // No telemetry data yet
@@ -191,21 +275,35 @@ export default function DashboardPage() {
       } else {
         setError(data.error);
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        return;
+      }
       setError('Failed to fetch vehicle data');
     } finally {
-      setDataLoading(false);
+      if (requestId === vehicleFetchIdRef.current) {
+        setDataLoading(false);
+      }
     }
-  }, [region, dataSource]);
+  }, [dataSource, persistVehicleCache, region]);
 
   useEffect(() => {
     if (selectedVehicle) {
-      fetchVehicleData(selectedVehicle.id);
+      setVehicleData(null);
+      setLastUpdated(null);
+      setWaking(false);
+      setIsLocationCardNearViewport(false);
+      void fetchVehicleData(selectedVehicle.id);
     }
   }, [selectedVehicle, fetchVehicleData]);
 
   const handleWakeAndRefresh = async () => {
     if (!selectedVehicle) return;
+
+    vehicleFetchControllerRef.current?.abort();
+    const wakeRequestId = ++vehicleFetchIdRef.current;
+    const wakeVehicleId = selectedVehicle.id;
+    const wakeCacheKey = buildVehicleCacheKey(wakeVehicleId, dataSource, region);
 
     setWaking(true);
     setError(null);
@@ -214,7 +312,7 @@ export default function DashboardPage() {
       const wakeResponse = await fetch(`/api/tesla/wake?region=${region}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ vehicleId: selectedVehicle.id }),
+        body: JSON.stringify({ vehicleId: wakeVehicleId }),
       });
       const wakeData = await wakeResponse.json();
 
@@ -229,21 +327,25 @@ export default function DashboardPage() {
 
       const pollForData = async () => {
         attempts++;
-        const response = await fetch(`/api/tesla/vehicle-data?id=${selectedVehicle.id}&region=${region}`);
+        const response = await fetch(`/api/tesla/vehicle-data?id=${wakeVehicleId}&region=${region}`, {
+          cache: 'no-store',
+        });
         const data = await response.json();
 
+        if (wakeRequestId !== vehicleFetchIdRef.current) {
+          return;
+        }
+
         if (data.success && data.state !== 'asleep') {
+          const timestamp = data.timestamp || Date.now();
           setVehicleData(data.vehicle);
-          setLastUpdated(data.timestamp || Date.now());
+          setLastUpdated(timestamp);
           setIsAsleep(false);
           setWaking(false);
-          // Cache the data
-          const cacheEntry: CachedData = {
+          persistVehicleCache(wakeCacheKey, {
             vehicle: data.vehicle,
-            timestamp: data.timestamp || Date.now(),
-          };
-          setCachedData(cacheEntry);
-          localStorage.setItem(CACHE_KEY, JSON.stringify(cacheEntry));
+            timestamp,
+          });
         } else if (attempts < maxAttempts) {
           setTimeout(pollForData, 2000);
         } else {
@@ -261,7 +363,7 @@ export default function DashboardPage() {
 
   const handleRefresh = () => {
     if (selectedVehicle) {
-      fetchVehicleData(selectedVehicle.id);
+      void fetchVehicleData(selectedVehicle.id);
     }
   };
 
@@ -280,33 +382,89 @@ export default function DashboardPage() {
     return `${Math.round(celsius)}°C`;
   };
 
+  const cachedData = selectedVehicle
+    ? vehicleCache[buildVehicleCacheKey(selectedVehicle.id, dataSource, region)] ?? null
+    : null;
+
   // Data to display (current or cached)
-  const displayData = vehicleData || (isAsleep && cachedData?.vehicle) || null;
+  const displayData = vehicleData || cachedData?.vehicle || null;
   const displayTimestamp = vehicleData ? lastUpdated : cachedData?.timestamp;
+  const isShowingCachedSnapshot = !vehicleData && !!cachedData;
+  const cachedSnapshotAgeLabel = cachedData ? formatTimeAgo(cachedData.timestamp) : null;
+
+  useEffect(() => {
+    if (
+      isLocationCardNearViewport ||
+      !locationCardRef.current ||
+      !displayData?.latitude ||
+      !displayData?.longitude
+    ) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            setIsLocationCardNearViewport(true);
+            observer.disconnect();
+            break;
+          }
+        }
+      },
+      { rootMargin: MAP_VIEWPORT_ROOT_MARGIN }
+    );
+
+    observer.observe(locationCardRef.current);
+
+    return () => observer.disconnect();
+  }, [displayData?.latitude, displayData?.longitude, isLocationCardNearViewport]);
 
   // Reverse geocode via the shared API route so address formatting stays
   // consistent across dashboard, trips, and charging views.
   useEffect(() => {
-    if (!displayData?.latitude || !displayData?.longitude) {
+    if (
+      !isLocationCardNearViewport ||
+      !displayData?.latitude ||
+      !displayData?.longitude
+    ) {
       setStreetAddress(null);
       return;
     }
     const lat = displayData.latitude;
     const lon = displayData.longitude;
+    const cacheKey = `${lat},${lon}`;
+    const cachedAddress = geocodeCacheRef.current.get(cacheKey);
 
-    fetch(`/api/geocode?lat=${lat}&lng=${lon}`)
+    if (cachedAddress) {
+      setStreetAddress(cachedAddress);
+      return;
+    }
+
+    const controller = new AbortController();
+
+    fetch(`/api/geocode?lat=${lat}&lng=${lon}`, { signal: controller.signal })
       .then(res => res.json())
       .then(data => {
-        if (data?.success && data?.address) {
-          setStreetAddress(data.address);
-        } else if (data?.fallback) {
-          setStreetAddress(data.fallback);
-        } else {
-          setStreetAddress(null);
+        const nextAddress = data?.success && data?.address
+          ? data.address
+          : data?.fallback || null;
+
+        if (nextAddress) {
+          geocodeCacheRef.current.set(cacheKey, nextAddress);
         }
+
+        setStreetAddress(nextAddress);
       })
-      .catch(() => setStreetAddress(null));
-  }, [displayData?.latitude, displayData?.longitude]);
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return;
+        }
+        setStreetAddress(null);
+      });
+
+    return () => controller.abort();
+  }, [displayData?.latitude, displayData?.longitude, isLocationCardNearViewport]);
 
   if (loading) {
     return (
@@ -427,10 +585,14 @@ export default function DashboardPage() {
         {displayData && !waking && (
           <>
             {/* Cached Data Banner */}
-            {isAsleep && cachedData && (
+            {isShowingCachedSnapshot && (
               <div className="mb-4 flex items-center gap-2 rounded-lg bg-slate-700/50 px-4 py-2 text-sm text-slate-400">
                 <Moon className="h-4 w-4" />
-                <span>Vehicle is sleeping. Showing last known data from {formatTimeAgo(cachedData.timestamp)}</span>
+                <span>
+                  {isAsleep
+                    ? `Vehicle is sleeping. Showing last known data from ${cachedSnapshotAgeLabel}`
+                    : `Refreshing live data. Showing cached snapshot from ${cachedSnapshotAgeLabel}`}
+                </span>
               </div>
             )}
 
@@ -529,7 +691,10 @@ export default function DashboardPage() {
 
             {/* Location Map - Right after stats */}
             {displayData.latitude && displayData.longitude && (
-              <div className="mt-6 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+              <div
+                ref={locationCardRef}
+                className="mt-6 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6"
+              >
                 <div className="mb-4 flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <MapPin className="h-5 w-5 text-red-400" />
@@ -539,14 +704,18 @@ export default function DashboardPage() {
                     )}
                   </div>
                 </div>
-                {streetAddress && (
+                {isLocationCardNearViewport && streetAddress && (
                   <p className="mb-4 text-slate-300">{streetAddress}</p>
                 )}
-                <VehicleMap
-                  latitude={displayData.latitude}
-                  longitude={displayData.longitude}
-                  vehicleName={displayData.display_name}
-                />
+                {isLocationCardNearViewport ? (
+                  <VehicleMap
+                    latitude={displayData.latitude}
+                    longitude={displayData.longitude}
+                    vehicleName={displayData.display_name}
+                  />
+                ) : (
+                  <div className="h-64 w-full animate-pulse rounded-xl bg-slate-700/30" />
+                )}
               </div>
             )}
 

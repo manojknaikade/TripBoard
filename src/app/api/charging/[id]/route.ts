@@ -26,7 +26,7 @@ export async function GET(
 
         const { data: chargingSession, error } = await supabase
             .from('charging_sessions')
-            .select('*')
+            .select('id, vehicle_id, start_time, end_time, start_battery_pct, end_battery_pct, energy_added_kwh, energy_delivered_kwh, charger_price_per_kwh, charge_rate_kw, latitude, longitude, location_name, charger_type, cost_estimate, cost_user_entered, currency, tesla_charge_event_id, is_complete')
             .eq('id', id)
             .maybeSingle();
 

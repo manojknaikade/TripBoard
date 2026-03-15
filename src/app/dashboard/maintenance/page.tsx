@@ -1,11 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    AlertCircle,
     BookOpen,
-    ChevronDown,
-    CheckCircle2,
     Gauge,
     Loader2,
     Package,
@@ -13,14 +10,14 @@ import {
     Snowflake,
     Sun,
     Wrench,
-    X,
 } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import Header from '@/components/Header';
+import { invalidateCachedJson, readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
 import { useSettingsStore } from '@/stores/settingsStore';
 import {
     ROTATION_STATUS_OPTIONS,
     SERVICE_TYPE_OPTIONS,
-    TESLA_MAINTENANCE_GUIDE,
     TYRE_SEASON_OPTIONS,
     isTyreLinkedRecord,
     isTyreSeasonRecord,
@@ -30,43 +27,41 @@ import {
     type TyreSeason,
     type TyreSet,
 } from '@/lib/maintenance';
+import type { DistanceUnits, MaintenanceFormState, TyreSetSummary } from '@/lib/maintenanceUi';
 
-type DistanceUnits = 'imperial' | 'metric';
-
-type MaintenanceFormState = {
-    id: string | null;
-    serviceType: MaintenanceServiceType;
-    tyreSetId: string;
-    createTyreSet: boolean;
-    newTyreSetName: string;
-    newTyreSetNotes: string;
-    title: string;
-    startDate: string;
-    endDate: string;
-    startOdometerKm: string;
-    endOdometerKm: string;
-    costAmount: string;
-    costCurrency: string;
-    season: TyreSeason;
-    rotationStatus: RotationStatus;
-    notes: string;
+type TyreSetDerivedStatus = TyreSetSummary['derivedStatus'];
+type MaintenanceSummary = {
+    totalRecords: number;
+    tyreRecords: number;
+    otherRecords: number;
+    latestLoggedOdometerKm: number | null;
 };
 
-type TyreSetDerivedStatus = 'mounted' | 'stored' | 'retired';
-
-type TyreSetSummary = TyreSet & {
-    derivedStatus: TyreSetDerivedStatus;
-    totalMileageKm: number;
-    currentMountedMileageKm: number | null;
-    latestRecord: MaintenanceRecord | null;
-    firstMountedOdometerKm: number | null;
+type MaintenanceBootstrapResponse = {
+    success: boolean;
+    linkedRecords: MaintenanceRecord[];
+    historyRecords: MaintenanceRecord[];
+    tyreSets: TyreSet[];
+    summary: MaintenanceSummary | null;
+    currentVehicleOdometerKm: number | null;
+    hasMoreHistory: boolean;
+    nextHistoryOffset: number;
 };
 
 const KM_NUMBER_FORMATTER = new Intl.NumberFormat('en-CH');
 const MILES_TO_KM = 1.60934;
 const KM_TO_MI = 0.621371;
-const SUBTLE_PANEL_CLASS = 'rounded-xl border border-slate-700/50 bg-slate-900/25';
-const FIELD_CLASS = 'w-full rounded-xl border border-slate-700/50 bg-slate-900/40 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-slate-500 focus:border-red-500';
+const HISTORY_PAGE_SIZE = 20;
+const MAINTENANCE_BOOTSTRAP_CACHE_KEY = `maintenance:bootstrap:${HISTORY_PAGE_SIZE}`;
+const MAINTENANCE_BOOTSTRAP_CACHE_TTL_MS = 45_000;
+
+const MaintenanceRecordModal = dynamic(() => import('@/components/maintenance/MaintenanceRecordModal'), {
+    ssr: false,
+});
+
+const MaintenanceGuideModal = dynamic(() => import('@/components/maintenance/MaintenanceGuideModal'), {
+    ssr: false,
+});
 
 function getTodayDate() {
     return new Date().toISOString().slice(0, 10);
@@ -217,14 +212,6 @@ function formatCompactDate(value: string | null) {
         month: 'short',
         year: '2-digit',
     });
-}
-
-function toKilometersFromMiles(value: number | null) {
-    if (value == null) {
-        return null;
-    }
-
-    return Math.round(value * MILES_TO_KM);
 }
 
 function getTyreSetMarkerClass(_status: TyreSetDerivedStatus, season: TyreSeason) {
@@ -398,12 +385,42 @@ function deriveTyreSetSummaries(
     });
 }
 
+function applyBootstrapData(
+    bootstrapData: MaintenanceBootstrapResponse,
+    setters: {
+        setRecords: React.Dispatch<React.SetStateAction<MaintenanceRecord[]>>;
+        setHistoryRecords: React.Dispatch<React.SetStateAction<MaintenanceRecord[]>>;
+        setTyreSets: React.Dispatch<React.SetStateAction<TyreSet[]>>;
+        setMaintenanceSummary: React.Dispatch<React.SetStateAction<MaintenanceSummary | null>>;
+        setCurrentVehicleOdometer: React.Dispatch<React.SetStateAction<number | null>>;
+        setHistoryHasMore: React.Dispatch<React.SetStateAction<boolean>>;
+        setHistoryOffset: React.Dispatch<React.SetStateAction<number>>;
+    }
+) {
+    const fetchedRecords = sortRecordsDesc(bootstrapData.linkedRecords || []);
+    const fetchedHistoryRecords = sortRecordsDesc(bootstrapData.historyRecords || []);
+
+    setters.setRecords(fetchedRecords);
+    setters.setHistoryRecords(fetchedHistoryRecords);
+    setters.setTyreSets(bootstrapData.tyreSets || []);
+    setters.setMaintenanceSummary(bootstrapData.summary || null);
+    setters.setCurrentVehicleOdometer(bootstrapData.currentVehicleOdometerKm ?? null);
+    setters.setHistoryHasMore(Boolean(bootstrapData.hasMoreHistory));
+    setters.setHistoryOffset(bootstrapData.nextHistoryOffset || fetchedHistoryRecords.length);
+}
+
 export default function MaintenancePage() {
-    const { currency: preferredCurrency, units } = useSettingsStore();
+    const preferredCurrency = useSettingsStore((state) => state.currency);
+    const units = useSettingsStore((state) => state.units);
     const [records, setRecords] = useState<MaintenanceRecord[]>([]);
+    const [historyRecords, setHistoryRecords] = useState<MaintenanceRecord[]>([]);
     const [tyreSets, setTyreSets] = useState<TyreSet[]>([]);
+    const [maintenanceSummary, setMaintenanceSummary] = useState<MaintenanceSummary | null>(null);
     const [currentVehicleOdometer, setCurrentVehicleOdometer] = useState<number | null>(null);
     const [loading, setLoading] = useState(true);
+    const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
+    const [historyHasMore, setHistoryHasMore] = useState(false);
+    const [historyOffset, setHistoryOffset] = useState(0);
     const [deletingTyreSetId, setDeletingTyreSetId] = useState<string | null>(null);
     const [pageError, setPageError] = useState<string | null>(null);
     const [recordSaving, setRecordSaving] = useState(false);
@@ -412,108 +429,162 @@ export default function MaintenancePage() {
     const [recordModalOpen, setRecordModalOpen] = useState(false);
     const [guideModalOpen, setGuideModalOpen] = useState(false);
     const [maintenanceForm, setMaintenanceForm] = useState<MaintenanceFormState>(() => createDefaultMaintenanceForm());
+    const historyLoadMoreRef = useRef<HTMLDivElement | null>(null);
     const distanceUnitLabel = units === 'metric' ? 'km' : 'mi';
 
     useEffect(() => {
         setMaintenanceForm((current) => current.costCurrency ? current : { ...current, costCurrency: preferredCurrency || 'CHF' });
     }, [preferredCurrency]);
 
-    const latestLoggedOdometer = useMemo(
-        () => records.reduce<number | null>((highest, record) => {
-            if (record.odometer_km == null) {
-                return highest;
-            }
+    const latestLoggedOdometer = maintenanceSummary?.latestLoggedOdometerKm ?? null;
 
-            if (highest == null || record.odometer_km > highest) {
-                return record.odometer_km;
-            }
-
-            return highest;
-        }, null),
-        [records]
-    );
-
-    const loadPageData = useCallback(async () => {
-        setLoading(true);
+    const loadPageData = useCallback(async (signal?: AbortSignal, options?: { showLoading?: boolean }) => {
+        let hydratedFromCache = false;
+        const shouldShowLoading = options?.showLoading !== false;
         setPageError(null);
 
         try {
-            const [recordsResponse, tyreSetsResponse, vehicleStatusResponse] = await Promise.all([
-                fetch('/api/maintenance'),
-                fetch('/api/maintenance/tyre-sets'),
-                fetch('/api/vehicle/status').catch(() => null),
-            ]);
+            const cachedBootstrap = shouldShowLoading
+                ? readCachedJson<MaintenanceBootstrapResponse>(MAINTENANCE_BOOTSTRAP_CACHE_KEY)
+                : null;
 
-            const recordsData = await recordsResponse.json();
-            const tyreSetsData = await tyreSetsResponse.json();
-
-            if (!recordsResponse.ok || !recordsData.success) {
-                throw new Error(recordsData.error || 'Failed to load maintenance records');
-            }
-
-            if (!tyreSetsResponse.ok || !tyreSetsData.success) {
-                throw new Error(tyreSetsData.error || 'Failed to load tyre sets');
-            }
-
-            const fetchedRecords = sortRecordsDesc(recordsData.records || []);
-            const fetchedLatestLoggedOdometer = fetchedRecords.reduce<number | null>((highest, record) => {
-                if (record.odometer_km == null) {
-                    return highest;
+            if (cachedBootstrap?.success) {
+                applyBootstrapData(cachedBootstrap, {
+                    setRecords,
+                    setHistoryRecords,
+                    setTyreSets,
+                    setMaintenanceSummary,
+                    setCurrentVehicleOdometer,
+                    setHistoryHasMore,
+                    setHistoryOffset,
+                });
+                hydratedFromCache = true;
+                if (shouldShowLoading) {
+                    setLoading(false);
                 }
-
-                if (highest == null || record.odometer_km > highest) {
-                    return record.odometer_km;
-                }
-
-                return highest;
-            }, null);
-
-            setRecords(fetchedRecords);
-            setTyreSets((tyreSetsData.tyreSets || []) as TyreSet[]);
-
-            if (vehicleStatusResponse?.ok) {
-                const vehicleStatusData = await vehicleStatusResponse.json();
-                const rawOdometer = vehicleStatusData.odometer;
-                const parsedOdometer = typeof rawOdometer === 'number'
-                    ? rawOdometer
-                    : typeof rawOdometer === 'string'
-                        ? Number(rawOdometer)
-                        : null;
-                const convertedOdometer = parsedOdometer != null && Number.isFinite(parsedOdometer)
-                    ? toKilometersFromMiles(parsedOdometer)
-                    : null;
-                const odometer = convertedOdometer != null && fetchedLatestLoggedOdometer != null
-                    ? Math.max(convertedOdometer, fetchedLatestLoggedOdometer)
-                    : convertedOdometer;
-                setCurrentVehicleOdometer(odometer);
-            } else {
-                setCurrentVehicleOdometer(null);
+            } else if (shouldShowLoading) {
+                setLoading(true);
             }
+
+            const response = await fetch(`/api/maintenance/bootstrap?limit=${HISTORY_PAGE_SIZE}`, {
+                cache: 'no-store',
+                signal,
+            });
+            const data = await response.json();
+
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || 'Failed to load maintenance data');
+            }
+
+            if (signal?.aborted) {
+                return;
+            }
+
+            writeCachedJson(MAINTENANCE_BOOTSTRAP_CACHE_KEY, data, MAINTENANCE_BOOTSTRAP_CACHE_TTL_MS);
+            applyBootstrapData(data as MaintenanceBootstrapResponse, {
+                setRecords,
+                setHistoryRecords,
+                setTyreSets,
+                setMaintenanceSummary,
+                setCurrentVehicleOdometer,
+                setHistoryHasMore,
+                setHistoryOffset,
+            });
         } catch (error) {
-            setPageError(error instanceof Error ? error.message : 'Failed to load maintenance data');
+            if (error instanceof DOMException && error.name === 'AbortError') {
+                return;
+            }
+            if (!hydratedFromCache) {
+                setPageError(error instanceof Error ? error.message : 'Failed to load maintenance data');
+            }
         } finally {
-            setLoading(false);
+            if (!signal?.aborted && shouldShowLoading && !hydratedFromCache) {
+                setLoading(false);
+            }
         }
     }, []);
 
+    const loadMoreHistory = useCallback(async () => {
+        if (historyLoadingMore || !historyHasMore) {
+            return;
+        }
+
+        setHistoryLoadingMore(true);
+
+        try {
+            const response = await fetch(`/api/maintenance?limit=${HISTORY_PAGE_SIZE}&offset=${historyOffset}`);
+            const data = await response.json();
+
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || 'Failed to load more maintenance history');
+            }
+
+            const nextRecords = sortRecordsDesc(data.records || []);
+
+            setHistoryRecords((current) => {
+                const seenIds = new Set(current.map((record) => record.id));
+                const mergedRecords = [...current];
+
+                for (const record of nextRecords) {
+                    if (!seenIds.has(record.id)) {
+                        mergedRecords.push(record);
+                    }
+                }
+
+                return mergedRecords;
+            });
+            const nextOffset = data.nextOffset || historyOffset + nextRecords.length;
+            setHistoryHasMore(
+                maintenanceSummary
+                    ? nextOffset < maintenanceSummary.totalRecords
+                    : Boolean(data.hasMore)
+            );
+            setHistoryOffset(nextOffset);
+        } catch (error) {
+            setPageError(error instanceof Error ? error.message : 'Failed to load more maintenance history');
+        } finally {
+            setHistoryLoadingMore(false);
+        }
+    }, [historyHasMore, historyLoadingMore, historyOffset, maintenanceSummary]);
+
     useEffect(() => {
         setMaintenanceForm((current) => current.startDate ? current : { ...current, startDate: getTodayDate() });
-        loadPageData();
+        const controller = new AbortController();
+        void loadPageData(controller.signal);
+
+        return () => controller.abort();
     }, [loadPageData]);
 
-    const tyreRecords = useMemo(
-        () => records.filter((record) => isTyreLinkedRecord(record.service_type)),
-        [records]
-    );
+    useEffect(() => {
+        if (!historyHasMore || historyLoadingMore || loading || !historyLoadMoreRef.current) {
+            return;
+        }
 
-    const otherRecords = useMemo(
-        () => records.filter((record) => !isTyreLinkedRecord(record.service_type)),
-        [records]
-    );
+        const observer = new IntersectionObserver(
+            (entries) => {
+                for (const entry of entries) {
+                    if (entry.isIntersecting) {
+                        void loadMoreHistory();
+                        break;
+                    }
+                }
+            },
+            { rootMargin: '240px' }
+        );
+
+        observer.observe(historyLoadMoreRef.current);
+
+        return () => observer.disconnect();
+    }, [historyHasMore, historyLoadingMore, loadMoreHistory, loading]);
 
     const tyreSetSummaries = useMemo(
         () => deriveTyreSetSummaries(tyreSets, records, currentVehicleOdometer, latestLoggedOdometer),
         [tyreSets, records, currentVehicleOdometer, latestLoggedOdometer]
+    );
+
+    const tyreSetById = useMemo(
+        () => new Map(tyreSets.map((tyreSet) => [tyreSet.id, tyreSet])),
+        [tyreSets]
     );
 
     const mountedTyreSet = useMemo(
@@ -592,6 +663,7 @@ export default function MaintenancePage() {
                 const newTyreSet = tyreSetData.tyreSet as TyreSet;
                 setTyreSets((current) => [newTyreSet, ...current]);
                 tyreSetId = newTyreSet.id;
+                invalidateCachedJson(MAINTENANCE_BOOTSTRAP_CACHE_KEY);
             }
 
             const isEditing = Boolean(maintenanceForm.id);
@@ -612,15 +684,10 @@ export default function MaintenancePage() {
                 return;
             }
 
-            setRecords((current) => {
-                const next = isEditing
-                    ? current.map((record) => record.id === data.record.id ? data.record : record)
-                    : [data.record, ...current];
-
-                return sortRecordsDesc(next);
-            });
             setMaintenanceForm((current) => createDefaultMaintenanceForm(current.startDate || getTodayDate()));
             setRecordSuccess(isEditing ? 'Maintenance record updated.' : 'Maintenance record saved.');
+            invalidateCachedJson(MAINTENANCE_BOOTSTRAP_CACHE_KEY);
+            void loadPageData(undefined, { showLoading: false });
         } catch {
             setRecordError('Failed to save maintenance record');
         } finally {
@@ -667,19 +734,15 @@ export default function MaintenancePage() {
                 return;
             }
 
-            setTyreSets((current) => current.filter((item) => item.id !== tyreSet.id));
-            setRecords((current) => current.map((record) => (
-                record.tyre_set_id === tyreSet.id
-                    ? { ...record, tyre_set_id: null }
-                    : record
-            )));
-
             if (maintenanceForm.tyreSetId === tyreSet.id) {
                 setMaintenanceForm((current) => ({
                     ...current,
                     tyreSetId: '',
                 }));
             }
+
+            invalidateCachedJson(MAINTENANCE_BOOTSTRAP_CACHE_KEY);
+            void loadPageData(undefined, { showLoading: false });
         } catch {
             setPageError('Failed to delete tyre set');
         } finally {
@@ -688,7 +751,6 @@ export default function MaintenancePage() {
     };
 
     const showTyreFields = isTyreSeasonRecord(maintenanceForm.serviceType);
-    const showRotationStatus = maintenanceForm.serviceType === 'tyre_rotation' || showTyreFields;
     const showTyreSetPicker = isTyreLinkedRecord(maintenanceForm.serviceType);
 
     return (
@@ -855,18 +917,18 @@ export default function MaintenancePage() {
                     <SectionHeader
                         title="Service history"
                         description="Full-width maintenance cards with the record details, dates, odometer values, and cost aligned for scanning."
-                        meta={`${records.length} records`}
+                        meta={`${maintenanceSummary?.totalRecords ?? historyRecords.length} records`}
                         fullWidthDescription
                     />
 
                     {loading ? (
                         <LoadingState />
-                    ) : records.length === 0 ? (
+                    ) : historyRecords.length === 0 ? (
                         <EmptyState message="No maintenance records yet." />
                     ) : (
                         <div className="space-y-4">
-                            {records.map((record) => {
-                                const linkedTyreSet = tyreSets.find((tyreSet) => tyreSet.id === record.tyre_set_id) || null;
+                            {historyRecords.map((record) => {
+                                const linkedTyreSet = record.tyre_set_id ? (tyreSetById.get(record.tyre_set_id) || null) : null;
 
                                 return (
                                     <article
@@ -927,297 +989,50 @@ export default function MaintenancePage() {
                                     </article>
                                 );
                             })}
+                            {historyHasMore && (
+                                <div ref={historyLoadMoreRef} className="flex items-center justify-center py-4 text-sm text-slate-500">
+                                    {historyLoadingMore ? (
+                                        <span className="inline-flex items-center gap-2">
+                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                            Loading more records...
+                                        </span>
+                                    ) : (
+                                        'Scroll for more history'
+                                    )}
+                                </div>
+                            )}
                         </div>
                     )}
                 </section>
             </main>
 
-            <ModalShell
-                open={recordModalOpen}
-                title={maintenanceForm.id ? 'Edit maintenance record' : 'Maintenance record'}
-                description="Create or update a service entry. For tyre work, you can link an existing set or create a new one inline."
-                onClose={() => setRecordModalOpen(false)}
-                maxWidthClass="max-w-3xl"
-            >
-                <form className="space-y-4" onSubmit={handleSaveMaintenanceRecord}>
-                    <FormField label="Service type">
-                        <SelectField
-                            value={maintenanceForm.serviceType}
-                            onChange={(event) => setMaintenanceForm((current) => ({
-                                ...current,
-                                serviceType: event.target.value as MaintenanceServiceType,
-                                tyreSetId: isTyreLinkedRecord(event.target.value as MaintenanceServiceType)
-                                    ? (current.tyreSetId || mountedTyreSet?.id || '')
-                                    : '',
-                            }))}
-                        >
-                            {SERVICE_TYPE_OPTIONS.map((option) => (
-                                <option key={option.value} value={option.value}>
-                                    {option.label}
-                                </option>
-                            ))}
-                        </SelectField>
-                    </FormField>
+            {(recordModalOpen || recordSaving || recordError || recordSuccess) && (
+                <MaintenanceRecordModal
+                    open={recordModalOpen}
+                    onClose={() => setRecordModalOpen(false)}
+                    onSubmit={handleSaveMaintenanceRecord}
+                    maintenanceForm={maintenanceForm}
+                    setMaintenanceForm={setMaintenanceForm}
+                    mountedTyreSetId={mountedTyreSet?.id || ''}
+                    tyreSets={tyreSets}
+                    units={units}
+                    preferredCurrency={preferredCurrency}
+                    recordSaving={recordSaving}
+                    recordError={recordError}
+                    recordSuccess={recordSuccess}
+                    onCancelEdit={handleCancelEdit}
+                />
+            )}
 
-                    {showTyreSetPicker && !maintenanceForm.createTyreSet && (
-                        <FormField label="Tyre set">
-                            <SelectField
-                                value={maintenanceForm.tyreSetId}
-                                onChange={(event) => {
-                                    const tyreSet = tyreSets.find((item) => item.id === event.target.value) || null;
-
-                                    setMaintenanceForm((current) => ({
-                                        ...current,
-                                        tyreSetId: event.target.value,
-                                        season: tyreSet?.season || current.season,
-                                    }));
-                                }}
-                            >
-                                <option value="">Select tyre set</option>
-                                {tyreSets.map((tyreSet) => (
-                                    <option key={tyreSet.id} value={tyreSet.id}>
-                                        {tyreSet.name} ({seasonLabels[tyreSet.season]})
-                                    </option>
-                                ))}
-                            </SelectField>
-                        </FormField>
-                    )}
-
-                    {showTyreSetPicker && (
-                        <label className={`${SUBTLE_PANEL_CLASS} flex items-center gap-3 px-4 py-3 text-sm text-slate-300`}>
-                            <input
-                                type="checkbox"
-                                checked={maintenanceForm.createTyreSet}
-                                onChange={(event) => setMaintenanceForm((current) => ({
-                                    ...current,
-                                    createTyreSet: event.target.checked,
-                                    tyreSetId: event.target.checked ? '' : current.tyreSetId,
-                                }))}
-                                className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-red-500 focus:ring-red-500"
-                            />
-                            <span>Create a new tyre set with this record</span>
-                        </label>
-                    )}
-
-                    {showTyreSetPicker && maintenanceForm.createTyreSet && (
-                        <div className="grid gap-4">
-                            <FormField label="New tyre set name">
-                                <input
-                                    type="text"
-                                    value={maintenanceForm.newTyreSetName}
-                                    onChange={(event) => setMaintenanceForm((current) => ({ ...current, newTyreSetName: event.target.value }))}
-                                    placeholder="e.g. Michelin winter set"
-                                    className={FIELD_CLASS}
-                                />
-                            </FormField>
-
-                            <FormField label="New tyre set notes">
-                                <textarea
-                                    rows={3}
-                                    value={maintenanceForm.newTyreSetNotes}
-                                    onChange={(event) => setMaintenanceForm((current) => ({ ...current, newTyreSetNotes: event.target.value }))}
-                                    placeholder="Optional brand, size, or purchase note"
-                                    className={FIELD_CLASS}
-                                />
-                            </FormField>
-                        </div>
-                    )}
-
-                    <FormField label="Title">
-                        <input
-                            type="text"
-                            value={maintenanceForm.title}
-                            onChange={(event) => setMaintenanceForm((current) => ({ ...current, title: event.target.value }))}
-                            placeholder="Winter set installed"
-                            className={FIELD_CLASS}
-                        />
-                    </FormField>
-
-                    <div className="grid gap-4 sm:grid-cols-2">
-                        <FormField label={showTyreFields ? 'Installed on' : 'Service date'}>
-                            <input
-                                type="date"
-                                value={maintenanceForm.startDate}
-                                onChange={(event) => setMaintenanceForm((current) => ({ ...current, startDate: event.target.value }))}
-                                className={FIELD_CLASS}
-                            />
-                        </FormField>
-
-                        <FormField label={showTyreFields ? 'Removed on' : `Service odometer (${distanceUnitLabel})`}>
-                            {showTyreFields ? (
-                                <input
-                                    type="date"
-                                    value={maintenanceForm.endDate}
-                                    onChange={(event) => setMaintenanceForm((current) => ({ ...current, endDate: event.target.value }))}
-                                    className={FIELD_CLASS}
-                                />
-                            ) : (
-                                <input
-                                    type="number"
-                                    min="0"
-                                    value={maintenanceForm.endOdometerKm}
-                                    onChange={(event) => setMaintenanceForm((current) => ({ ...current, endOdometerKm: event.target.value }))}
-                                    placeholder="Optional"
-                                    className={FIELD_CLASS}
-                                />
-                            )}
-                        </FormField>
-                    </div>
-
-                    <div className="grid gap-4 sm:grid-cols-[1fr_120px]">
-                        <FormField label="Cost">
-                            <input
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={maintenanceForm.costAmount}
-                                onChange={(event) => setMaintenanceForm((current) => ({ ...current, costAmount: event.target.value }))}
-                                placeholder="Optional"
-                                className={FIELD_CLASS}
-                            />
-                        </FormField>
-
-                        <FormField label="Currency">
-                            <input
-                                type="text"
-                                value={maintenanceForm.costCurrency}
-                                onChange={(event) => setMaintenanceForm((current) => ({ ...current, costCurrency: event.target.value.toUpperCase() }))}
-                                className={FIELD_CLASS}
-                            />
-                        </FormField>
-                    </div>
-
-                    {(showTyreFields || (showTyreSetPicker && maintenanceForm.createTyreSet)) && (
-                        <div className="grid gap-4 sm:grid-cols-2">
-                            <FormField label="Season">
-                                <SelectField
-                                    value={maintenanceForm.season}
-                                    onChange={(event) => setMaintenanceForm((current) => ({
-                                        ...current,
-                                        season: event.target.value as TyreSeason,
-                                    }))}
-                                >
-                                    {TYRE_SEASON_OPTIONS.map((option) => (
-                                        <option key={option.value} value={option.value}>
-                                            {option.label}
-                                        </option>
-                                    ))}
-                                </SelectField>
-                            </FormField>
-
-                            {showTyreFields ? (
-                                <FormField label={`Start odometer (${distanceUnitLabel})`}>
-                                    <input
-                                        type="number"
-                                        min="0"
-                                        value={maintenanceForm.startOdometerKm}
-                                        onChange={(event) => setMaintenanceForm((current) => ({ ...current, startOdometerKm: event.target.value }))}
-                                        placeholder="Optional"
-                                        className={FIELD_CLASS}
-                                    />
-                                </FormField>
-                            ) : (
-                                <div className={`${SUBTLE_PANEL_CLASS} px-4 py-3 text-sm text-slate-400`}>
-                                    New tyre sets will start from the service odometer entered for this record.
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    {showTyreFields && (
-                        <FormField label={`End odometer (${distanceUnitLabel})`}>
-                            <input
-                                type="number"
-                                min="0"
-                                value={maintenanceForm.endOdometerKm}
-                                onChange={(event) => setMaintenanceForm((current) => ({ ...current, endOdometerKm: event.target.value }))}
-                                placeholder="Recorded at swap-out"
-                                className={FIELD_CLASS}
-                            />
-                        </FormField>
-                    )}
-
-                    {showRotationStatus && (
-                        <FormField label="Rotation status">
-                            <SelectField
-                                value={maintenanceForm.rotationStatus}
-                                onChange={(event) => setMaintenanceForm((current) => ({
-                                    ...current,
-                                    rotationStatus: event.target.value as RotationStatus,
-                                }))}
-                            >
-                                {ROTATION_STATUS_OPTIONS.map((option) => (
-                                    <option key={option.value} value={option.value}>
-                                        {option.label}
-                                    </option>
-                                ))}
-                            </SelectField>
-                        </FormField>
-                    )}
-
-                    <FormField label="Notes">
-                        <textarea
-                            rows={4}
-                            value={maintenanceForm.notes}
-                            onChange={(event) => setMaintenanceForm((current) => ({ ...current, notes: event.target.value }))}
-                            placeholder="Workshop, wear, or storage detail"
-                            className={FIELD_CLASS}
-                        />
-                    </FormField>
-
-                    {recordError && <InlineMessage tone="error" message={recordError} />}
-                    {recordSuccess && <InlineMessage tone="success" message={recordSuccess} />}
-
-                    <div className="flex gap-3">
-                        {maintenanceForm.id && (
-                            <button
-                                type="button"
-                                onClick={handleCancelEdit}
-                                className="inline-flex flex-1 items-center justify-center rounded-xl border border-slate-700/50 bg-slate-900/40 px-4 py-3 text-sm font-semibold text-slate-200 transition-colors hover:bg-slate-800/60"
-                            >
-                                Cancel
-                            </button>
-                        )}
-                        <button
-                            type="submit"
-                            disabled={recordSaving}
-                            className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-red-500 to-red-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-red-500/20 transition hover:shadow-red-500/30 disabled:opacity-50"
-                        >
-                            {recordSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                            {maintenanceForm.id ? 'Save changes' : 'Save record'}
-                        </button>
-                    </div>
-                </form>
-            </ModalShell>
-
-            <ModalShell
-                open={guideModalOpen}
-                title="Tesla maintenance guide"
-                description="Reference items you can turn into a maintenance record with one click."
-                onClose={() => setGuideModalOpen(false)}
-                maxWidthClass="max-w-2xl"
-            >
-                <div className="space-y-3">
-                    {TESLA_MAINTENANCE_GUIDE.map((item) => (
-                        <button
-                            key={item.title}
-                            type="button"
-                            onClick={() => handleQuickAdd(item.serviceType, item.title)}
-                            className="flex w-full items-start justify-between gap-4 rounded-xl border border-slate-700/50 bg-slate-900/20 px-4 py-4 text-left transition-colors hover:border-slate-600 hover:bg-slate-800/40"
-                        >
-                            <div>
-                                <div className="font-medium text-white">{item.title}</div>
-                                <div className="mt-1 text-sm text-slate-400">{item.cadence}</div>
-                            </div>
-                            <span className="text-xs font-medium text-red-300">Use in record</span>
-                        </button>
-                    ))}
-
-                    <div className={`${SUBTLE_PANEL_CLASS} px-4 py-3 text-sm text-slate-400`}>
-                        Tyre records: {tyreRecords.length}. Other maintenance records: {otherRecords.length}.
-                    </div>
-                </div>
-            </ModalShell>
+            {guideModalOpen && (
+                <MaintenanceGuideModal
+                    open={guideModalOpen}
+                    onClose={() => setGuideModalOpen(false)}
+                    onQuickAdd={handleQuickAdd}
+                    tyreRecordCount={maintenanceSummary?.tyreRecords ?? records.length}
+                    otherRecordCount={maintenanceSummary?.otherRecords ?? Math.max(0, historyRecords.length - records.length)}
+                />
+            )}
         </div>
     );
 }
@@ -1318,44 +1133,6 @@ function InlineMetric({
     );
 }
 
-function FormField({
-    label,
-    children,
-}: {
-    label: string;
-    children: React.ReactNode;
-}) {
-    return (
-        <label className="block">
-            <span className="mb-2 block text-sm font-medium text-slate-300">{label}</span>
-            {children}
-        </label>
-    );
-}
-
-function SelectField({
-    value,
-    onChange,
-    children,
-}: {
-    value: string;
-    onChange: (event: React.ChangeEvent<HTMLSelectElement>) => void;
-    children: React.ReactNode;
-}) {
-    return (
-        <div className="relative">
-            <select
-                value={value}
-                onChange={onChange}
-                className={`${FIELD_CLASS} appearance-none pr-12`}
-            >
-                {children}
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-        </div>
-    );
-}
-
 function InlineMessage({
     tone,
     message,
@@ -1363,63 +1140,13 @@ function InlineMessage({
     tone: 'error' | 'success';
     message: string;
 }) {
-    const isError = tone === 'error';
+    const toneClass = tone === 'error'
+        ? 'border border-red-500/20 bg-red-500/10 text-red-300'
+        : 'border border-emerald-500/20 bg-emerald-500/10 text-emerald-300';
 
     return (
-        <div className={`flex items-start gap-2 rounded-xl px-4 py-3 text-sm ${isError
-            ? 'border border-red-500/20 bg-red-500/10 text-red-300'
-            : 'border border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
-            }`}
-        >
-            {isError
-                ? <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-                : <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" />}
-            <span>{message}</span>
-        </div>
-    );
-}
-
-function ModalShell({
-    open,
-    title,
-    description,
-    onClose,
-    children,
-    maxWidthClass = 'max-w-3xl',
-}: {
-    open: boolean;
-    title: string;
-    description: string;
-    onClose: () => void;
-    children: React.ReactNode;
-    maxWidthClass?: string;
-}) {
-    if (!open) {
-        return null;
-    }
-
-    return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 p-4">
-            <div className={`w-full ${maxWidthClass} overflow-hidden rounded-2xl border border-slate-700/50 bg-slate-800/95 shadow-2xl shadow-black/40`}>
-                <div className="flex items-start justify-between gap-4 border-b border-slate-700/50 px-6 py-5">
-                    <div className="min-w-0">
-                        <h2 className="text-xl font-semibold tracking-tight text-white">{title}</h2>
-                        <p className="mt-1 text-sm leading-6 text-slate-400">{description}</p>
-                    </div>
-                    <button
-                        type="button"
-                        onClick={onClose}
-                        className="rounded-lg border border-slate-700/50 bg-slate-900/30 p-2 text-slate-400 transition-colors hover:border-slate-600 hover:text-white"
-                        aria-label="Close dialog"
-                    >
-                        <X className="h-4 w-4" />
-                    </button>
-                </div>
-
-                <div className="max-h-[80vh] overflow-y-auto px-6 py-5">
-                    {children}
-                </div>
-            </div>
+        <div className={`rounded-xl px-4 py-3 text-sm ${toneClass}`}>
+            {message}
         </div>
     );
 }

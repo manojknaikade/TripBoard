@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useSettingsStore } from '@/stores/settingsStore';
 import {
@@ -18,6 +18,7 @@ import {
 import Header from '@/components/Header';
 import dynamic from 'next/dynamic';
 import type { TripRoutePoint } from '@/lib/trips/routePoints';
+import { readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
 
 // Dynamic import to avoid SSR issues with Leaflet
 const TripMiniMap = dynamic(() => import('@/components/TripMiniMap'), {
@@ -45,6 +46,59 @@ interface Trip {
     avg_outside_temp: number | null;
     status: string;
     route_points?: TripRoutePoint[];
+}
+
+interface TripsSummary {
+    totalTrips: number;
+    totalDistance: number;
+    totalEnergy: number;
+    avgEfficiency: number;
+}
+
+const THUMBNAIL_FETCH_ROOT_MARGIN = '320px';
+const TRIPS_PAGE_SIZE = 20;
+const TRIPS_BOOTSTRAP_CACHE_TTL_MS = 45_000;
+const thumbnailRouteCache = new Map<string, TripRoutePoint[]>();
+const thumbnailRouteRequestCache = new Map<string, Promise<TripRoutePoint[]>>();
+
+type TripsListResponse = {
+    success?: boolean;
+    trips?: Trip[];
+    summary?: TripsSummary | null;
+    nextOffset?: number | null;
+    error?: string;
+};
+
+async function getTripThumbnailRoutePoints(tripId: string): Promise<TripRoutePoint[]> {
+    if (thumbnailRouteCache.has(tripId)) {
+        return thumbnailRouteCache.get(tripId) || [];
+    }
+
+    let pendingRequest = thumbnailRouteRequestCache.get(tripId);
+
+    if (!pendingRequest) {
+        pendingRequest = fetch(`/api/trips/${tripId}?thumbnail=1`)
+            .then(async (response) => {
+                if (!response.ok) {
+                    return [];
+                }
+
+                const data = await response.json();
+                return Array.isArray(data.route_points) ? data.route_points : [];
+            })
+            .catch(() => [])
+            .then((routePoints) => {
+                thumbnailRouteCache.set(tripId, routePoints);
+                return routePoints;
+            })
+            .finally(() => {
+                thumbnailRouteRequestCache.delete(tripId);
+            });
+
+        thumbnailRouteRequestCache.set(tripId, pendingRequest);
+    }
+
+    return pendingRequest;
 }
 
 function formatDuration(seconds: number): string {
@@ -87,14 +141,20 @@ function milesToKm(miles: number): number {
 }
 
 export default function TripsPage() {
-    const { units } = useSettingsStore();
+    const units = useSettingsStore((state) => state.units);
+    const autoLoadTriggerRef = useRef<HTMLDivElement | null>(null);
+    const autoLoadOffsetRef = useRef<number | null>(null);
     const [trips, setTrips] = useState<Trip[]>([]);
+    const [summary, setSummary] = useState<TripsSummary | null>(null);
     const [loading, setLoading] = useState(true);
+    const [loadingMore, setLoadingMore] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [nextOffset, setNextOffset] = useState<number | null>(0);
     const [timeframe, setTimeframe] = useState('7days');
     const [customStart, setCustomStart] = useState('');
     const [customEnd, setCustomEnd] = useState('');
     const [showCustomPicker, setShowCustomPicker] = useState(false);
+    const hasCompleteDateRange = timeframe !== 'custom' || (!!customStart && !!customEnd);
 
     // Calculate date range based on timeframe
     const getDateRange = useCallback(() => {
@@ -143,42 +203,146 @@ export default function TripsPage() {
         return { fromDate, toDate };
     }, [timeframe, customStart, customEnd]);
 
-    const fetchTrips = useCallback(async () => {
-        setLoading(true);
-        setError(null);
+    const fetchTrips = useCallback(async ({ reset, offset }: { reset: boolean; offset: number }) => {
+        let hydratedFromCache = false;
+        let requestCacheKey = '';
+
+        if (reset) {
+            setError(null);
+            setSummary(null);
+            autoLoadOffsetRef.current = null;
+        } else {
+            setLoadingMore(true);
+        }
+
         try {
             const { fromDate, toDate } = getDateRange();
             const params = new URLSearchParams({
                 from: fromDate.toISOString(),
                 to: toDate.toISOString(),
+                limit: String(TRIPS_PAGE_SIZE),
+                offset: String(offset),
+                includeSummary: reset ? '1' : '0',
             });
+
+            requestCacheKey = `trips:list:${params.toString()}`;
+
+            if (reset) {
+                const cached = readCachedJson<TripsListResponse>(requestCacheKey);
+
+                if (cached?.success) {
+                    setTrips(Array.isArray(cached.trips) ? cached.trips : []);
+                    setNextOffset(typeof cached.nextOffset === 'number' ? cached.nextOffset : null);
+                    setSummary(cached.summary || null);
+                    setLoading(false);
+                    hydratedFromCache = true;
+                } else {
+                    setLoading(true);
+                }
+            }
+
             const response = await fetch(`/api/trips?${params}`, {
                 cache: 'no-store',
             });
             const data = await response.json();
 
             if (data.success) {
-                setTrips(data.trips || []);
+                if (reset) {
+                    writeCachedJson(requestCacheKey, data, TRIPS_BOOTSTRAP_CACHE_TTL_MS);
+                }
+
+                const incomingTrips = Array.isArray(data.trips) ? data.trips : [];
+
+                setTrips((currentTrips) => {
+                    if (reset) {
+                        return incomingTrips;
+                    }
+
+                    const mergedTrips = [...currentTrips];
+                    const seenTripIds = new Set(currentTrips.map((trip) => trip.id));
+
+                    for (const trip of incomingTrips) {
+                        if (!seenTripIds.has(trip.id)) {
+                            mergedTrips.push(trip);
+                            seenTripIds.add(trip.id);
+                        }
+                    }
+
+                    return mergedTrips;
+                });
+                setNextOffset(typeof data.nextOffset === 'number' ? data.nextOffset : null);
+                if (reset) {
+                    setSummary(data.summary || null);
+                }
             } else {
-                setError(data.error || 'Failed to load trips');
+                if (!hydratedFromCache) {
+                    setError(data.error || 'Failed to load trips');
+                }
             }
         } catch {
-            setError('Failed to load trips');
+            if (!hydratedFromCache) {
+                setError('Failed to load trips');
+            }
         } finally {
-            setLoading(false);
+            if (reset) {
+                if (!hydratedFromCache) {
+                    setLoading(false);
+                }
+            } else {
+                setLoadingMore(false);
+            }
         }
     }, [getDateRange]);
 
     // Re-fetch when timeframe or custom dates change
     useEffect(() => {
-        fetchTrips();
-    }, [fetchTrips]);
+        if (!hasCompleteDateRange) {
+            autoLoadOffsetRef.current = null;
+            setNextOffset(null);
+            return;
+        }
+
+        void fetchTrips({ reset: true, offset: 0 });
+    }, [fetchTrips, hasCompleteDateRange]);
+
+    useEffect(() => {
+        if (!hasCompleteDateRange || loading || loadingMore || nextOffset === null || !autoLoadTriggerRef.current) {
+            return;
+        }
+
+        const observer = new IntersectionObserver(
+            (entries) => {
+                for (const entry of entries) {
+                    if (!entry.isIntersecting) {
+                        if (autoLoadOffsetRef.current === nextOffset) {
+                            autoLoadOffsetRef.current = null;
+                        }
+                        continue;
+                    }
+
+                    if (autoLoadOffsetRef.current === nextOffset) {
+                        continue;
+                    }
+
+                    autoLoadOffsetRef.current = nextOffset;
+                    void fetchTrips({ reset: false, offset: nextOffset });
+                }
+            },
+            { rootMargin: '360px 0px' }
+        );
+
+        observer.observe(autoLoadTriggerRef.current);
+
+        return () => observer.disconnect();
+    }, [fetchTrips, hasCompleteDateRange, loading, loadingMore, nextOffset]);
 
     // Trips are already filtered server-side
     const filteredTrips = trips;
 
+    const displayedTrips = filteredTrips;
+
     // Group trips by date
-    const tripsByDate = filteredTrips.reduce((acc, trip) => {
+    const tripsByDate = displayedTrips.reduce((acc, trip) => {
         const date = formatDate(trip.started_at);
         if (!acc[date]) {
             acc[date] = [];
@@ -187,11 +351,10 @@ export default function TripsPage() {
         return acc;
     }, {} as Record<string, Trip[]>);
 
-    // Calculate stats
-    const totalTrips = filteredTrips.length;
-    const totalMiles = filteredTrips.reduce((sum, t) => sum + (t.distance_miles || 0), 0);
-    const totalEnergy = filteredTrips.reduce((sum, t) => sum + (t.energy_used_kwh || 0), 0);
-    const avgEfficiency = totalMiles > 0 ? (totalEnergy * 1000) / totalMiles : 0;
+    const totalTrips = summary?.totalTrips ?? displayedTrips.length;
+    const totalMiles = summary?.totalDistance ?? displayedTrips.reduce((sum, t) => sum + (t.distance_miles || 0), 0);
+    const totalEnergy = summary?.totalEnergy ?? displayedTrips.reduce((sum, t) => sum + (t.energy_used_kwh || 0), 0);
+    const avgEfficiency = summary?.avgEfficiency ?? (totalMiles > 0 ? (totalEnergy * 1000) / totalMiles : 0);
 
     // Convert to user's preferred units
     const displayDistance = units === 'metric' ? milesToKm(totalMiles) : totalMiles;
@@ -284,21 +447,38 @@ export default function TripsPage() {
 
                 {/* Trips List */}
                 {!loading && trips.length > 0 && (
-                    <div className="space-y-6">
-                        {Object.entries(tripsByDate).map(([date, dateTrips]) => (
-                            <div key={date}>
-                                <div className="mb-3 flex items-center gap-2 text-sm text-slate-400">
-                                    <Calendar className="h-4 w-4" />
-                                    {date}
+                    <>
+                        <div className="space-y-6">
+                            {Object.entries(tripsByDate).map(([date, dateTrips]) => (
+                                <div key={date}>
+                                    <div className="mb-3 flex items-center gap-2 text-sm text-slate-400">
+                                        <Calendar className="h-4 w-4" />
+                                        {date}
+                                    </div>
+                                    <div className="space-y-3">
+                                        {dateTrips.map((trip) => (
+                                            <TripCard key={trip.id} trip={trip} units={units} />
+                                        ))}
+                                    </div>
                                 </div>
-                                <div className="space-y-3">
-                                    {dateTrips.map((trip) => (
-                                        <TripCard key={trip.id} trip={trip} units={units} />
-                                    ))}
-                                </div>
+                            ))}
+                        </div>
+
+                        {nextOffset !== null && (
+                            <div ref={autoLoadTriggerRef} className="mt-8 flex justify-center py-4">
+                                {loadingMore ? (
+                                    <div className="flex items-center gap-2 text-sm text-slate-400">
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                        Loading more trips...
+                                    </div>
+                                ) : (
+                                    <div className="text-xs text-slate-600">
+                                        Scroll for more trips
+                                    </div>
+                                )}
                             </div>
-                        ))}
-                    </div>
+                        )}
+                    </>
                 )}
             </main>
         </div>
@@ -343,131 +523,201 @@ function getTripName(trip: Trip, units: 'imperial' | 'metric'): string {
 
 function TripCard({ trip, units }: { trip: Trip; units: 'imperial' | 'metric' }) {
     const isInProgress = trip.status === 'in_progress';
-    const hasCoords = trip.start_latitude && trip.start_longitude;
+    const hasCoords = trip.start_latitude != null && trip.start_longitude != null;
+    const cardRef = useRef<HTMLDivElement | null>(null);
+    const [isNearViewport, setIsNearViewport] = useState(false);
+    const [fetchedRoutePoints, setFetchedRoutePoints] = useState<TripRoutePoint[] | null>(() => {
+        if (thumbnailRouteCache.has(trip.id)) {
+            return thumbnailRouteCache.get(trip.id) || [];
+        }
+
+        return null;
+    });
+    const routePoints = trip.route_points && trip.route_points.length > 0
+        ? trip.route_points
+        : fetchedRoutePoints || [];
+    const shouldFetchExactRoute =
+        hasCoords
+        && !isInProgress
+        && trip.end_latitude != null
+        && trip.end_longitude != null
+        && routePoints.length < 2;
+    const isAwaitingExactRoute =
+        isNearViewport
+        && shouldFetchExactRoute
+        && fetchedRoutePoints === null;
+
+    useEffect(() => {
+        if (isNearViewport || !cardRef.current || !hasCoords) {
+            return;
+        }
+
+        const observer = new IntersectionObserver(
+            (entries) => {
+                for (const entry of entries) {
+                    if (entry.isIntersecting) {
+                        setIsNearViewport(true);
+                        observer.disconnect();
+                        break;
+                    }
+                }
+            },
+            { rootMargin: THUMBNAIL_FETCH_ROOT_MARGIN }
+        );
+
+        observer.observe(cardRef.current);
+
+        return () => observer.disconnect();
+    }, [hasCoords, isNearViewport]);
+
+    useEffect(() => {
+        if (!isNearViewport || !shouldFetchExactRoute || fetchedRoutePoints !== null) {
+            return;
+        }
+
+        let cancelled = false;
+
+        void getTripThumbnailRoutePoints(trip.id)
+            .then((points) => {
+                if (!cancelled) {
+                    setFetchedRoutePoints(points);
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [fetchedRoutePoints, isNearViewport, shouldFetchExactRoute, trip.id]);
 
     return (
-        <Link
-            href={`/dashboard/trips/${trip.id}`}
-            className="block rounded-xl border border-slate-700/50 bg-slate-800/30 p-4 transition-all hover:border-slate-600 hover:bg-slate-800/50"
-        >
-            <div className="flex items-stretch gap-4">
-                {/* Mini Map */}
-                {hasCoords && (
-                    <div className="hidden sm:block h-24 w-32 flex-shrink-0 rounded-lg overflow-hidden border border-slate-600/50 z-0 relative">
-                        <TripMiniMap
-                            key={`${trip.id}-${trip.route_points?.length || 0}-${trip.start_latitude}-${trip.start_longitude}-${trip.end_latitude ?? 'open'}-${trip.end_longitude ?? 'open'}`}
-                            startLat={trip.start_latitude}
-                            startLon={trip.start_longitude}
-                            endLat={trip.end_latitude}
-                            endLon={trip.end_longitude}
-                            routePoints={trip.route_points || []}
-                        />
+        <div ref={cardRef}>
+            <Link
+                href={`/dashboard/trips/${trip.id}`}
+                className="block rounded-xl border border-slate-700/50 bg-slate-800/30 p-4 transition-all hover:border-slate-600 hover:bg-slate-800/50"
+            >
+                <div className="flex items-stretch gap-4">
+                    {/* Mini Map */}
+                    {hasCoords && (
+                        <div className="relative hidden h-24 w-32 flex-shrink-0 overflow-hidden rounded-lg border border-slate-600/50 sm:block">
+                            {isAwaitingExactRoute ? (
+                                <div className="h-full w-full animate-pulse bg-slate-700/30" />
+                            ) : (
+                                <TripMiniMap
+                                    key={`${trip.id}-${routePoints.length}-${trip.start_latitude}-${trip.start_longitude}-${trip.end_latitude ?? 'open'}-${trip.end_longitude ?? 'open'}`}
+                                    startLat={trip.start_latitude}
+                                    startLon={trip.start_longitude}
+                                    endLat={trip.end_latitude}
+                                    endLon={trip.end_longitude}
+                                    routePoints={routePoints}
+                                />
+                            )}
+                        </div>
+                    )}
+
+                    {/* Trip Info */}
+                    <div className="flex flex-1 items-center justify-between">
+                        <div className="flex items-center gap-4">
+                            {/* Status indicator (only on mobile or if no coords) */}
+                            {!hasCoords && (
+                                <div
+                                    className={`flex h-10 w-10 items-center justify-center rounded-full ${isInProgress ? 'bg-green-500/20' : 'bg-slate-700/50'
+                                        }`}
+                                >
+                                    <Car
+                                        className={`h-5 w-5 ${isInProgress ? 'text-green-400' : 'text-slate-400'}`}
+                                    />
+                                </div>
+                            )}
+
+                            {/* Trip details */}
+                            <div>
+                                <div className="flex items-center gap-2">
+                                    <span className="font-medium">
+                                        {getTripName(trip, units)}
+                                    </span>
+                                    {isInProgress && (
+                                        <span className="rounded-full bg-green-500/20 px-2 py-0.5 text-xs font-medium text-green-400">
+                                            In Progress
+                                        </span>
+                                    )}
+                                </div>
+                                <div className="mt-1 flex items-center gap-3 text-sm text-slate-400">
+                                    <span className="flex items-center gap-1">
+                                        <Clock className="h-3 w-3" />
+                                        {formatTime(trip.started_at)}
+                                    </span>
+                                    {trip.duration_seconds && (
+                                        <span>{formatDuration(trip.duration_seconds)}</span>
+                                    )}
+                                    {trip.distance_miles && (
+                                        <span className="flex items-center gap-1">
+                                            <MapPin className="h-3 w-3" />
+                                            {units === 'metric'
+                                                ? `${milesToKm(trip.distance_miles).toFixed(1)} km`
+                                                : `${trip.distance_miles.toFixed(1)} mi`
+                                            }
+                                        </span>
+                                    )}
+                                    {trip.energy_used_kwh && (
+                                        <span className="flex items-center gap-1">
+                                            <Battery className="h-3 w-3" />
+                                            {trip.energy_used_kwh.toFixed(1)} kWh
+                                        </span>
+                                    )}
+                                    {trip.efficiency_wh_mi && (
+                                        <span className="flex items-center gap-1">
+                                            <TrendingUp className="h-3 w-3" />
+                                            {units === 'metric'
+                                                ? `${Math.round(trip.efficiency_wh_mi / 1.60934)} Wh/km`
+                                                : `${Math.round(trip.efficiency_wh_mi)} Wh/mi`
+                                            }
+                                        </span>
+                                    )}
+                                    {trip.avg_outside_temp != null && (
+                                        <span className="flex items-center gap-1">
+                                            <Thermometer className="h-3 w-3" />
+                                            {Math.round(trip.avg_outside_temp)}°C
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Battery bar - full width bottom section like charging card */}
+                {trip.start_battery_level != null && (
+                    <div className="mt-4 flex items-center gap-4 border-t border-slate-700/50 pt-3">
+                        <div className="flex flex-1 items-center gap-3">
+                            <div className="text-sm font-medium">Battery</div>
+                            <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-slate-700">
+                                {trip.end_battery_level != null && (
+                                    <div
+                                        className="absolute left-0 top-0 h-full bg-green-500"
+                                        style={{ width: `${trip.end_battery_level}%` }}
+                                    />
+                                )}
+                                {trip.end_battery_level != null && trip.end_battery_level < trip.start_battery_level && (
+                                    <div
+                                        className="absolute top-0 h-full bg-red-500/60"
+                                        style={{
+                                            left: `${trip.end_battery_level}%`,
+                                            width: `${trip.start_battery_level - trip.end_battery_level}%`
+                                        }}
+                                    />
+                                )}
+                            </div>
+                            <div className="whitespace-nowrap font-mono text-sm text-slate-400">
+                                {trip.start_battery_level.toFixed(2)}%
+                                {trip.end_battery_level != null && (
+                                    <span> → {trip.end_battery_level.toFixed(2)}%</span>
+                                )}
+                            </div>
+                        </div>
                     </div>
                 )}
-
-                {/* Trip Info */}
-                <div className="flex flex-1 items-center justify-between">
-                    <div className="flex items-center gap-4">
-                        {/* Status indicator (only on mobile or if no coords) */}
-                        {!hasCoords && (
-                            <div
-                                className={`flex h-10 w-10 items-center justify-center rounded-full ${isInProgress ? 'bg-green-500/20' : 'bg-slate-700/50'
-                                    }`}
-                            >
-                                <Car
-                                    className={`h-5 w-5 ${isInProgress ? 'text-green-400' : 'text-slate-400'}`}
-                                />
-                            </div>
-                        )}
-
-                        {/* Trip details */}
-                        <div>
-                            <div className="flex items-center gap-2">
-                                <span className="font-medium">
-                                    {getTripName(trip, units)}
-                                </span>
-                                {isInProgress && (
-                                    <span className="rounded-full bg-green-500/20 px-2 py-0.5 text-xs font-medium text-green-400">
-                                        In Progress
-                                    </span>
-                                )}
-                            </div>
-                            <div className="mt-1 flex items-center gap-3 text-sm text-slate-400">
-                                <span className="flex items-center gap-1">
-                                    <Clock className="h-3 w-3" />
-                                    {formatTime(trip.started_at)}
-                                </span>
-                                {trip.duration_seconds && (
-                                    <span>{formatDuration(trip.duration_seconds)}</span>
-                                )}
-                                {trip.distance_miles && (
-                                    <span className="flex items-center gap-1">
-                                        <MapPin className="h-3 w-3" />
-                                        {units === 'metric'
-                                            ? `${milesToKm(trip.distance_miles).toFixed(1)} km`
-                                            : `${trip.distance_miles.toFixed(1)} mi`
-                                        }
-                                    </span>
-                                )}
-                                {trip.energy_used_kwh && (
-                                    <span className="flex items-center gap-1">
-                                        <Battery className="h-3 w-3" />
-                                        {trip.energy_used_kwh.toFixed(1)} kWh
-                                    </span>
-                                )}
-                                {trip.efficiency_wh_mi && (
-                                    <span className="flex items-center gap-1">
-                                        <TrendingUp className="h-3 w-3" />
-                                        {units === 'metric'
-                                            ? `${Math.round(trip.efficiency_wh_mi / 1.60934)} Wh/km`
-                                            : `${Math.round(trip.efficiency_wh_mi)} Wh/mi`
-                                        }
-                                    </span>
-                                )}
-                                {trip.avg_outside_temp != null && (
-                                    <span className="flex items-center gap-1">
-                                        <Thermometer className="h-3 w-3" />
-                                        {Math.round(trip.avg_outside_temp)}°C
-                                    </span>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            {/* Battery bar - full width bottom section like charging card */}
-            {trip.start_battery_level != null && (
-                <div className="mt-4 flex items-center gap-4 border-t border-slate-700/50 pt-3">
-                    <div className="flex flex-1 items-center gap-3">
-                        <div className="text-sm font-medium">Battery</div>
-                        <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-700 relative">
-                            {trip.end_battery_level != null && (
-                                <div
-                                    className="absolute left-0 top-0 h-full bg-green-500"
-                                    style={{ width: `${trip.end_battery_level}%` }}
-                                />
-                            )}
-                            {trip.end_battery_level != null && trip.end_battery_level < trip.start_battery_level && (
-                                <div
-                                    className="absolute top-0 h-full bg-red-500/60"
-                                    style={{
-                                        left: `${trip.end_battery_level}%`,
-                                        width: `${trip.start_battery_level - trip.end_battery_level}%`
-                                    }}
-                                />
-                            )}
-                        </div>
-                        <div className="text-sm font-mono text-slate-400 whitespace-nowrap">
-                            {trip.start_battery_level.toFixed(2)}%
-                            {trip.end_battery_level != null && (
-                                <span> → {trip.end_battery_level.toFixed(2)}%</span>
-                            )}
-                        </div>
-                    </div>
-                </div>
-            )}
-        </Link>
+            </Link>
+        </div>
     );
 }
 

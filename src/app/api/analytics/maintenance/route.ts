@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
-import { type MaintenanceServiceType, type RotationStatus, type TyreSeason } from '@/lib/maintenance';
+import { type MaintenanceServiceType, type TyreSeason } from '@/lib/maintenance';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,12 +10,6 @@ type MaintenanceRecordRow = {
     start_date: string;
     cost_amount: number | null;
     cost_currency: string | null;
-    tyre_set_id: string | null;
-    start_odometer_km: number | null;
-    end_odometer_km: number | null;
-    odometer_km: number | null;
-    season: TyreSeason | null;
-    rotation_status: RotationStatus;
 };
 
 type TyreSetRow = {
@@ -23,6 +17,34 @@ type TyreSetRow = {
     name: string;
     season: TyreSeason;
     status: 'active' | 'retired';
+};
+
+type TyreMileageRecordRow = {
+    tyre_set_id: string;
+    end_date: string | null;
+    start_odometer_km: number | null;
+    end_odometer_km: number | null;
+    odometer_km: number | null;
+};
+
+type LatestOdometerRow = {
+    odometer_km: number | null;
+};
+
+type MaintenanceSummaryRow = {
+    total_records: number;
+    tyre_records: number;
+    other_records: number;
+    latest_logged_odometer_km: number | null;
+    paid_records: number;
+    total_spend: number | null;
+    average_paid_cost: number | null;
+    spend_currency: string | null;
+    mixed_currencies: boolean;
+    season_changes: number;
+    rotations: number;
+    tyre_work_records: number;
+    active_tyre_sets: number;
 };
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -141,15 +163,33 @@ export async function GET(request: NextRequest) {
         const supabase = createAdminClient();
         const { searchParams } = new URL(request.url);
         const { timeframe, fromDate, toDate } = getTimeframeRange(searchParams);
+        const fromDateKey = fromDate.toISOString().slice(0, 10);
+        const toDateKey = toDate.toISOString().slice(0, 10);
 
         const [
-            { data: allMaintenanceRecords, error: allRecordsError },
+            { data: summaryRows, error: summaryError },
+            { data: maintenanceRecords, error: maintenanceRecordsError },
+            { data: tyreMileageRecords, error: tyreMileageError },
             { data: tyreSets, error: tyreSetsError },
             { data: vehicleStatus, error: vehicleStatusError },
+            { data: latestLoggedOdometerRecord, error: latestLoggedOdometerError },
         ] = await Promise.all([
             supabase
+                .rpc('get_maintenance_summary', {
+                    p_from_date: fromDateKey,
+                    p_to_date: toDateKey,
+                }),
+            supabase
                 .from('maintenance_records')
-                .select('service_type, start_date, end_date, cost_amount, cost_currency, tyre_set_id, start_odometer_km, end_odometer_km, odometer_km, season, rotation_status')
+                .select('service_type, start_date, cost_amount, cost_currency')
+                .gte('start_date', fromDateKey)
+                .lte('start_date', toDateKey)
+                .order('start_date', { ascending: true }),
+            supabase
+                .from('maintenance_records')
+                .select('tyre_set_id, end_date, start_odometer_km, end_odometer_km, odometer_km')
+                .eq('service_type', 'tyre_season')
+                .not('tyre_set_id', 'is', null)
                 .order('start_date', { ascending: true }),
             supabase
                 .from('tyre_sets')
@@ -159,10 +199,25 @@ export async function GET(request: NextRequest) {
                 .from('vehicle_status')
                 .select('odometer')
                 .maybeSingle(),
+            supabase
+                .from('maintenance_records')
+                .select('odometer_km')
+                .not('odometer_km', 'is', null)
+                .order('odometer_km', { ascending: false })
+                .limit(1)
+                .maybeSingle(),
         ]);
 
-        if (allRecordsError) {
-            return NextResponse.json({ error: allRecordsError.message }, { status: 500 });
+        if (summaryError) {
+            console.warn('Maintenance analytics summary RPC unavailable, using in-route fallback:', summaryError.message);
+        }
+
+        if (maintenanceRecordsError) {
+            return NextResponse.json({ error: maintenanceRecordsError.message }, { status: 500 });
+        }
+
+        if (tyreMileageError) {
+            return NextResponse.json({ error: tyreMileageError.message }, { status: 500 });
         }
 
         if (tyreSetsError) {
@@ -173,13 +228,15 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({ error: vehicleStatusError.message }, { status: 500 });
         }
 
-        const allRecords = ((allMaintenanceRecords || []) as Array<MaintenanceRecordRow & { end_date?: string | null }>);
-        const maintenanceRecords = allRecords.filter((record) => {
-            const recordDate = new Date(`${record.start_date}T12:00:00`).getTime();
-            return recordDate >= fromDate.getTime() && recordDate <= toDate.getTime();
-        });
-        const effectiveFromDate = timeframe === 'alltime' && allRecords.length > 0
-            ? new Date(`${allRecords[0].start_date}T12:00:00`)
+        if (latestLoggedOdometerError) {
+            return NextResponse.json({ error: latestLoggedOdometerError.message }, { status: 500 });
+        }
+
+        const filteredMaintenanceRecords = (maintenanceRecords || []) as MaintenanceRecordRow[];
+        const summaryRow = (summaryRows?.[0] ?? null) as MaintenanceSummaryRow | null;
+        const tyreMileageHistory = (tyreMileageRecords || []) as TyreMileageRecordRow[];
+        const effectiveFromDate = timeframe === 'alltime' && filteredMaintenanceRecords.length > 0
+            ? new Date(`${filteredMaintenanceRecords[0].start_date}T12:00:00`)
             : fromDate;
         effectiveFromDate.setHours(0, 0, 0, 0);
 
@@ -192,17 +249,7 @@ export async function GET(request: NextRequest) {
         const serviceTypeCounts = new Map<MaintenanceServiceType, number>();
         const costByCurrency = new Map<string, number>();
         const tyreSetMileageById = new Map<string, number>();
-        const latestLoggedOdometer = allRecords.reduce<number | null>((highest, record) => {
-            if (record.odometer_km == null) {
-                return highest;
-            }
-
-            if (highest == null || record.odometer_km > highest) {
-                return record.odometer_km;
-            }
-
-            return highest;
-        }, null);
+        const latestLoggedOdometer = (latestLoggedOdometerRecord as LatestOdometerRow | null)?.odometer_km ?? null;
         const rawVehicleOdometer =
             typeof vehicleStatus?.odometer === 'number'
                 ? vehicleStatus.odometer
@@ -215,13 +262,12 @@ export async function GET(request: NextRequest) {
         const inferredCurrentOdometerKm = currentVehicleOdometerKm != null && latestLoggedOdometer != null
             ? Math.max(currentVehicleOdometerKm, latestLoggedOdometer)
             : (currentVehicleOdometerKm ?? latestLoggedOdometer);
+        let fallbackPaidRecords = 0;
+        let fallbackTotalSpend = 0;
+        let fallbackSeasonChanges = 0;
+        let fallbackRotations = 0;
 
-        let totalSpend = 0;
-        let paidRecords = 0;
-        let rotations = 0;
-        let seasonChanges = 0;
-
-        for (const record of maintenanceRecords) {
+        for (const record of filteredMaintenanceRecords) {
             const bucketKey = getBucketKey(record.start_date, mode);
             const activity = activityByBucket.get(bucketKey);
             if (activity) {
@@ -230,17 +276,17 @@ export async function GET(request: NextRequest) {
 
             serviceTypeCounts.set(record.service_type, (serviceTypeCounts.get(record.service_type) || 0) + 1);
 
-            if (record.service_type === 'tyre_rotation') {
-                rotations += 1;
+            if (record.service_type === 'tyre_season') {
+                fallbackSeasonChanges += 1;
             }
 
-            if (record.service_type === 'tyre_season') {
-                seasonChanges += 1;
+            if (record.service_type === 'tyre_rotation') {
+                fallbackRotations += 1;
             }
 
             if (record.cost_amount != null) {
-                paidRecords += 1;
-                totalSpend += record.cost_amount;
+                fallbackPaidRecords += 1;
+                fallbackTotalSpend += record.cost_amount;
                 const currency = record.cost_currency || 'CHF';
                 costByCurrency.set(currency, (costByCurrency.get(currency) || 0) + record.cost_amount);
                 if (activity) {
@@ -249,11 +295,7 @@ export async function GET(request: NextRequest) {
             }
         }
 
-        for (const record of allRecords) {
-            if (record.service_type !== 'tyre_season' || !record.tyre_set_id) {
-                continue;
-            }
-
+        for (const record of tyreMileageHistory) {
             const mileageEnd = record.end_odometer_km
                 ?? record.odometer_km
                 ?? (!record.end_date ? inferredCurrentOdometerKm : null);
@@ -274,7 +316,10 @@ export async function GET(request: NextRequest) {
             currency,
             total: Number(total.toFixed(2)),
         }));
-        const mixedCurrencies = currencyTotals.length > 1;
+        const mixedCurrencies = summaryRow?.mixed_currencies ?? currencyTotals.length > 1;
+        const fallbackAveragePaidCost = !mixedCurrencies && fallbackPaidRecords > 0
+            ? Number((fallbackTotalSpend / fallbackPaidRecords).toFixed(2))
+            : null;
 
         const tyreSetMileage = tyreSetRows
             .map((tyreSet) => ({
@@ -289,16 +334,16 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({
             success: true,
             summary: {
-                totalRecords: maintenanceRecords.length,
-                paidRecords,
-                totalSpend: mixedCurrencies ? null : Number(totalSpend.toFixed(2)),
-                averagePaidCost: !mixedCurrencies && paidRecords > 0 ? Number((totalSpend / paidRecords).toFixed(2)) : null,
-                spendCurrency: mixedCurrencies ? null : (currencyTotals[0]?.currency || null),
+                totalRecords: summaryRow?.total_records ?? filteredMaintenanceRecords.length,
+                paidRecords: summaryRow?.paid_records ?? fallbackPaidRecords,
+                totalSpend: summaryRow?.total_spend ?? (!mixedCurrencies ? Number(fallbackTotalSpend.toFixed(2)) : null),
+                averagePaidCost: summaryRow?.average_paid_cost ?? fallbackAveragePaidCost,
+                spendCurrency: summaryRow?.spend_currency ?? (mixedCurrencies ? null : (currencyTotals[0]?.currency || null)),
                 mixedCurrencies,
-                seasonChanges,
-                rotations,
-                tyreWorkRecords: seasonChanges + rotations,
-                activeTyreSets: tyreSetRows.filter((item) => item.status === 'active').length,
+                seasonChanges: summaryRow?.season_changes ?? fallbackSeasonChanges,
+                rotations: summaryRow?.rotations ?? fallbackRotations,
+                tyreWorkRecords: summaryRow?.tyre_work_records ?? (fallbackSeasonChanges + fallbackRotations),
+                activeTyreSets: summaryRow?.active_tyre_sets ?? tyreSetRows.filter((item) => item.status === 'active').length,
             },
             activityData: [...activityByBucket.values()].map((item) => ({
                 period: item.period,

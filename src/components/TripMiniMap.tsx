@@ -1,12 +1,14 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { MapContainer, TileLayer, Marker, Polyline, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { getMapTileConfig } from '@/lib/maps/style'
 import type { TripRoutePoint } from '@/lib/trips/routePoints'
+
+const MAP_VIEWPORT_ROOT_MARGIN = '240px';
 
 // Custom icons for start/end points
 const startIcon = L.divIcon({
@@ -51,8 +53,10 @@ export default function TripMiniMap({
     endLon,
     routePoints = [],
 }: TripMiniMapProps) {
-    const { mapStyle } = useSettingsStore();
+    const mapStyle = useSettingsStore((state) => state.mapStyle);
     const tileConfig = getMapTileConfig(mapStyle);
+    const containerRef = useRef<HTMLDivElement | null>(null);
+    const [isNearViewport, setIsNearViewport] = useState(false);
     const hasEnd = endLat != null && endLon != null;
     const routeLinePoints = routePoints.map(
         (point) => [point.latitude, point.longitude] as L.LatLngTuple
@@ -84,48 +88,77 @@ export default function TripMiniMap({
         ])
         : L.latLngBounds(boundsPoints);
 
+    useEffect(() => {
+        if (isNearViewport || !containerRef.current) {
+            return;
+        }
+
+        const observer = new IntersectionObserver(
+            (entries) => {
+                for (const entry of entries) {
+                    if (entry.isIntersecting) {
+                        setIsNearViewport(true);
+                        observer.disconnect();
+                        break;
+                    }
+                }
+            },
+            { rootMargin: MAP_VIEWPORT_ROOT_MARGIN }
+        );
+
+        observer.observe(containerRef.current);
+
+        return () => observer.disconnect();
+    }, [isNearViewport]);
+
     return (
-        <div className="h-full w-full rounded-lg overflow-hidden">
-            <MapContainer
-                center={[centerLat, centerLon]}
-                zoom={12}
-                style={{ height: '100%', width: '100%' }}
-                zoomControl={false}
-                dragging={false}
-                scrollWheelZoom={false}
-                doubleClickZoom={false}
-                touchZoom={false}
-                attributionControl={false}
-            >
-                <TileLayer
-                    attribution={tileConfig.attribution}
-                    url={tileConfig.url}
-                />
+        <div ref={containerRef} className="relative z-0 isolate h-full w-full overflow-hidden rounded-lg bg-slate-700/30">
+            {isNearViewport ? (
+                <MapContainer
+                    center={[centerLat, centerLon]}
+                    zoom={12}
+                    className="z-0"
+                    style={{ height: '100%', width: '100%', zIndex: 0 }}
+                    zoomControl={false}
+                    dragging={false}
+                    scrollWheelZoom={false}
+                    doubleClickZoom={false}
+                    touchZoom={false}
+                    attributionControl={false}
+                    preferCanvas
+                >
+                    <TileLayer
+                        attribution={tileConfig.attribution}
+                        url={tileConfig.url}
+                    />
 
-                {/* Fit bounds to show both markers */}
-                <FitBounds bounds={bounds} />
+                    {/* Fit bounds to show both markers */}
+                    <FitBounds bounds={bounds} />
 
-                {/* Start marker */}
-                <Marker position={[startLat, startLon]} icon={startIcon} />
+                    {/* Start marker */}
+                    <Marker position={[startLat, startLon]} icon={startIcon} />
 
-                {/* End marker and line (only if it's an actual trip with distance) */}
-                {!isSinglePoint && fallbackEndPoint && (
-                    <>
-                        <Marker position={fallbackEndPoint} icon={endIcon} />
-                        {routeLinePoints.length >= 2 ? (
-                            <Polyline
-                                positions={routeLinePoints}
-                                pathOptions={{ color: '#38bdf8', weight: 2.5, opacity: 0.85 }}
-                            />
-                        ) : (
-                            <Polyline
-                                positions={[[startLat, startLon], fallbackEndPoint]}
-                                pathOptions={{ color: '#3b82f6', weight: 2, opacity: 0.7, dashArray: '5, 5' }}
-                            />
-                        )}
-                    </>
-                )}
-            </MapContainer>
+                    {/* End marker and line (only if it's an actual trip with distance) */}
+                    {!isSinglePoint && fallbackEndPoint && (
+                        <>
+                            <Marker position={fallbackEndPoint} icon={endIcon} />
+                            {routeLinePoints.length >= 2 ? (
+                                <Polyline
+                                    positions={routeLinePoints}
+                                    pathOptions={{ color: '#38bdf8', weight: 2.5, opacity: 0.85 }}
+                                />
+                            ) : (
+                                <Polyline
+                                    positions={[[startLat, startLon], fallbackEndPoint]}
+                                    pathOptions={{ color: '#3b82f6', weight: 2, opacity: 0.7, dashArray: '5, 5' }}
+                                />
+                            )}
+                        </>
+                    )}
+                </MapContainer>
+            ) : (
+                <div className="h-full w-full animate-pulse bg-slate-700/30" />
+            )}
         </div>
     );
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 // OpenStreetMap Nominatim API for reverse geocoding (free, no API key needed)
 const NOMINATIM_API = 'https://nominatim.openstreetmap.org/reverse';
+const GEOCODE_REVALIDATE_SECONDS = 60 * 60 * 24;
 
 function normalizeCountryName(country: string | undefined): string | null {
     if (!country) return null;
@@ -12,6 +13,16 @@ function normalizeCountryName(country: string | undefined): string | null {
         .find(Boolean);
 
     return normalized || null;
+}
+
+function normalizeCoordinate(value: string): string {
+    const parsed = Number(value);
+
+    if (!Number.isFinite(parsed)) {
+        return value;
+    }
+
+    return parsed.toFixed(5);
 }
 
 export async function GET(request: NextRequest) {
@@ -27,13 +38,17 @@ export async function GET(request: NextRequest) {
     }
 
     try {
+        const normalizedLat = normalizeCoordinate(lat);
+        const normalizedLng = normalizeCoordinate(lng);
+
         // Call Nominatim API
         const response = await fetch(
-            `${NOMINATIM_API}?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`,
+            `${NOMINATIM_API}?format=json&lat=${normalizedLat}&lon=${normalizedLng}&zoom=18&addressdetails=1`,
             {
                 headers: {
                     'User-Agent': 'TripBoard/1.0', // Required by Nominatim
                 },
+                next: { revalidate: GEOCODE_REVALIDATE_SECONDS },
             }
         );
 
@@ -69,11 +84,18 @@ export async function GET(request: NextRequest) {
             ? parts.join(', ')
             : data.display_name || `${lat}, ${lng}`;
 
-        return NextResponse.json({
-            success: true,
-            address: formattedAddress,
-            raw: data.address,
-        });
+        return NextResponse.json(
+            {
+                success: true,
+                address: formattedAddress,
+                raw: data.address,
+            },
+            {
+                headers: {
+                    'Cache-Control': `public, max-age=${GEOCODE_REVALIDATE_SECONDS}, stale-while-revalidate=${GEOCODE_REVALIDATE_SECONDS * 7}`,
+                },
+            }
+        );
     } catch (error) {
         console.error('Geocoding error:', error);
         return NextResponse.json(

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Bell, Zap, Car, Check, X } from 'lucide-react';
 
@@ -21,13 +21,6 @@ export default function NotificationBell() {
     const [loading, setLoading] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
 
-    // Poll for unread count every 30 seconds
-    useEffect(() => {
-        fetchUnreadCount();
-        const interval = setInterval(fetchUnreadCount, 30000);
-        return () => clearInterval(interval);
-    }, []);
-
     // Close dropdown on outside click
     useEffect(() => {
         function handleClickOutside(e: MouseEvent) {
@@ -39,9 +32,11 @@ export default function NotificationBell() {
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
-    const fetchUnreadCount = async () => {
+    const fetchUnreadCount = useCallback(async () => {
         try {
-            const res = await fetch('/api/notifications?unread_only=true&limit=1');
+            const res = await fetch('/api/notifications?count_only=true', {
+                cache: 'no-store',
+            });
             const data = await res.json();
             if (data.success) {
                 setUnreadCount(data.unread_count || 0);
@@ -49,12 +44,14 @@ export default function NotificationBell() {
         } catch {
             // silently fail
         }
-    };
+    }, []);
 
-    const fetchNotifications = async () => {
+    const fetchNotifications = useCallback(async () => {
         setLoading(true);
         try {
-            const res = await fetch('/api/notifications?unread_only=true&limit=20');
+            const res = await fetch('/api/notifications?unread_only=true&limit=20', {
+                cache: 'no-store',
+            });
             const data = await res.json();
             if (data.success) {
                 setNotifications(data.notifications || []);
@@ -65,11 +62,32 @@ export default function NotificationBell() {
         } finally {
             setLoading(false);
         }
-    };
+    }, []);
+
+    // Poll for unread count only while the tab is visible and the dropdown is closed.
+    useEffect(() => {
+        const pollUnreadCount = () => {
+            if (document.visibilityState !== 'visible' || isOpen) {
+                return;
+            }
+
+            void fetchUnreadCount();
+        };
+
+        pollUnreadCount();
+
+        const interval = window.setInterval(pollUnreadCount, 30000);
+        document.addEventListener('visibilitychange', pollUnreadCount);
+
+        return () => {
+            window.clearInterval(interval);
+            document.removeEventListener('visibilitychange', pollUnreadCount);
+        };
+    }, [fetchUnreadCount, isOpen]);
 
     const toggleDropdown = () => {
         if (!isOpen) {
-            fetchNotifications();
+            void fetchNotifications();
         }
         setIsOpen(!isOpen);
     };

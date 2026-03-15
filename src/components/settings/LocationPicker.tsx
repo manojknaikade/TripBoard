@@ -74,11 +74,13 @@ function MapEvents({ onClick }: { onClick: (lat: number, lon: number) => void })
 }
 
 export default function LocationPicker({ latitude, longitude, address, onLocationChange }: LocationPickerProps) {
-    const { mapStyle } = useSettingsStore();
+    const mapStyle = useSettingsStore((state) => state.mapStyle);
     const tileConfig = getMapTileConfig(mapStyle);
     const [searchQuery, setSearchQuery] = useState('');
     const [isSearching, setIsSearching] = useState(false);
     const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+    const searchAbortRef = useRef<AbortController | null>(null);
+    const searchCacheRef = useRef<Map<string, SearchResult[]>>(new Map());
 
     // Default to a central location if none provided (e.g., Zurich)
     const defaultLat = 47.3769;
@@ -89,26 +91,54 @@ export default function LocationPicker({ latitude, longitude, address, onLocatio
 
     const handleSearch = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!searchQuery.trim()) return;
+        const normalizedQuery = searchQuery.trim();
+        if (!normalizedQuery) return;
 
+        const cachedResults = searchCacheRef.current.get(normalizedQuery.toLowerCase());
+        if (cachedResults) {
+            setSearchResults(cachedResults);
+            return;
+        }
+
+        searchAbortRef.current?.abort();
+        const controller = new AbortController();
+        searchAbortRef.current = controller;
         setIsSearching(true);
         try {
-            const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}`);
+            const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(normalizedQuery)}`, {
+                signal: controller.signal,
+            });
             const data: SearchResult[] = await res.json();
+            if (controller.signal.aborted) {
+                return;
+            }
+            searchCacheRef.current.set(normalizedQuery.toLowerCase(), data);
             setSearchResults(data);
         } catch (error) {
+            if (error instanceof DOMException && error.name === 'AbortError') {
+                return;
+            }
             console.error('Search failed:', error);
         } finally {
-            setIsSearching(false);
+            if (searchAbortRef.current === controller) {
+                searchAbortRef.current = null;
+            }
+            if (!controller.signal.aborted) {
+                setIsSearching(false);
+            }
         }
     };
+
+    useEffect(() => () => {
+        searchAbortRef.current?.abort();
+    }, []);
 
     const handleSelectLocation = async (lat: number, lon: number) => {
         // Reverse geocoding
         try {
-            const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`);
+            const res = await fetch(`/api/geocode?lat=${lat}&lng=${lon}`);
             const data = await res.json();
-            onLocationChange(lat, lon, data.display_name);
+            onLocationChange(lat, lon, data.address || data.fallback || 'Unknown location');
             setSearchResults([]); // Clear search results
             setSearchQuery('');
         } catch (error) {

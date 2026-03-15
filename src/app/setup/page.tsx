@@ -42,7 +42,7 @@ export default function SetupPage() {
     const handleTest = async () => {
         setLoading(true);
         try {
-            const response = await fetch('/api/tesla/test');
+            const response = await fetch(`/api/tesla/vehicles?summary=1&region=${region}`);
             const data = await response.json();
 
             if (data.success) {

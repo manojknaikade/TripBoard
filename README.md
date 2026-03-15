@@ -119,9 +119,12 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
 
    `database_schema.sql` is only a copied reference snapshot from Supabase for inspection. It is not the source of truth and should not be used for setup.
 
+   If a migration fails with `relation ... does not exist`, the database is usually missing an earlier dependency or the base `supabase/schema.sql` bootstrap has not been applied yet.
+
    **Key migrations:**
    - `supabase/migrations/20260312000000_create_tesla_sessions.sql` — Adds encrypted server-side Tesla session storage
    - `supabase/migrations/20260312010000_harden_public_table_rls.sql` — Enables RLS on exposed public tables and adds tighter policies
+   - `supabase/migrations/20260312013000_harden_functions_and_policies.sql` — Hardens exposed SQL functions and related policies after the base schema exists
    - `supabase/migrations/20260311000000_trip_temperature_trigger.sql` — Adds temperature columns to `trips` and updates the `process_telemetry` trigger
    - `supabase/migrations/20260311000001_backfill_trip_temperatures.sql` — Backfills temperature data for all existing trips from raw telemetry
    - `supabase/migrations/20260313030000_add_map_style_setting.sql` — Adds a persisted per-user map style preference
@@ -130,6 +133,8 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
    - `supabase/migrations/20260313060000_add_record_odometer_ranges.sql` — Adds explicit start/end odometer fields for seasonal records
    - `supabase/migrations/20260313070000_add_maintenance_cost.sql` — Adds per-record service cost and currency fields
    - `supabase/migrations/20260313080000_add_trip_route_waypoints.sql` — Captures exact route waypoints for future trips and backfills historical trip routes from `telemetry_raw`
+   - `supabase/migrations/20260315021000_add_tesla_charging_sync_queue.sql` — Adds the Tesla Supercharger enrichment queue and extends `tesla_sessions` with `user_id`
+   - `supabase/migrations/20260315190000_add_maintenance_summary_function.sql` — Adds an optional SQL aggregate used as a performance optimization for maintenance summary endpoints
 
 5. **Run the Development Server**
 
@@ -191,6 +196,13 @@ After applying the charging-detection migration in Supabase, stop any still-runn
 The production `tesla-ingester.service` now loads its Supabase credentials from `/home/ubuntu/.env` via `EnvironmentFile=` instead of hardcoding secrets in the unit file. The Go binary expects `SUPABASE_KEY`, and that value should be the Supabase service role key.
 The current production charging-billing enrichment runs as a separate `systemd` timer on the VPS using `scripts/process-charging-sync.js`, so completed Supercharger sessions are typically enriched within 30 seconds of being closed in Supabase.
 
+## Performance Notes
+
+- The app now uses a short-lived in-memory client fetch cache for selected dashboard pages and analytics views. It is intentionally a UX optimization, not a persistence layer.
+- List pages such as trips, charging, and maintenance hydrate from a recent cached response when available, then refresh in the background so the first screen feels immediate without requiring a hard reload.
+- Maintenance uses a dedicated bootstrap endpoint (`/api/maintenance/bootstrap`) to load tyre sets, the first history page, summary cards, and current odometer in a single request.
+- Live vehicle status on the main dashboard is handled separately and is not covered by the generic short-lived page cache because freshness matters more there.
+
 ## Maintenance Tracking Notes
 
 - Maintenance records store odometer values in kilometers in the database. The UI converts to and from the user’s unit preference at the page boundary.
@@ -199,6 +211,7 @@ The current production charging-billing enrichment runs as a separate `systemd` 
 - Mounted/stored status is derived from seasonal history, while season itself remains the consistent visual accent for tyre sets.
 - The maintenance dashboard now uses modal entry points for the maintenance form and the Tesla maintenance guide so the main page stays focused on KPI, tyre sets, and service history.
 - Maintenance analytics uses the same maintenance data model, including open tyre stints that fall back to the current vehicle odometer when an explicit end odometer is not yet logged.
+- `get_maintenance_summary()` is an optimization, not a hard dependency. If the SQL function migration has not been applied yet, the maintenance APIs fall back to query-based summary calculation.
 
 ## Security Notes
 

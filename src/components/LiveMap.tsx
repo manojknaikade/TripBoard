@@ -35,15 +35,21 @@ function Recenter({ lat, lon }: { lat: number; lon: number }) {
 }
 
 export default function LiveMap() {
-    const { mapStyle } = useSettingsStore();
+    const mapStyle = useSettingsStore((state) => state.mapStyle);
     const tileConfig = getMapTileConfig(mapStyle);
     const [vehicle, setVehicle] = useState<VehicleStatus | null>(null);
 
     // Poll for updates
     useEffect(() => {
         const fetchStatus = async () => {
+            if (document.visibilityState !== 'visible') {
+                return;
+            }
+
             try {
-                const res = await fetch('/api/vehicle/status');
+                const res = await fetch('/api/vehicle/status?fields=map', {
+                    cache: 'no-store',
+                });
                 const data = await res.json();
                 if (data.lat && data.lon) {
                     setVehicle(data);
@@ -55,7 +61,12 @@ export default function LiveMap() {
 
         fetchStatus();
         const interval = setInterval(fetchStatus, 5000); // 5 seconds
-        return () => clearInterval(interval);
+        document.addEventListener('visibilitychange', fetchStatus);
+
+        return () => {
+            clearInterval(interval);
+            document.removeEventListener('visibilitychange', fetchStatus);
+        };
     }, []);
 
     if (!vehicle) {
