@@ -816,11 +816,11 @@ export default function DashboardClient({
                   </div>
                   <div className="flex min-w-[12rem] flex-col items-start gap-2 text-sm sm:items-end">
                     <div className="flex flex-wrap items-center gap-3">
-                      <span className="inline-flex items-center gap-2 text-slate-300">
+                      <span className="inline-flex items-center gap-2 text-lg font-semibold text-slate-300">
                         <Thermometer className="h-4 w-4 text-slate-400" />
                         Ext: {formatTemp(displayData.outside_temp)}
                       </span>
-                      <span className="inline-flex items-center gap-2 text-green-300">
+                      <span className="inline-flex items-center gap-2 text-lg font-semibold text-green-300">
                         <Thermometer className="h-4 w-4" />
                         Int: {formatTemp(displayData.inside_temp)}
                       </span>
@@ -890,19 +890,19 @@ export default function DashboardClient({
                   </div>
 
                   <div className="mt-6 grid gap-4 border-t border-slate-700/40 pt-4 sm:grid-cols-3">
-                    <div>
+                    <div className="text-center">
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Odometer</p>
                       <p className="mt-2 text-2xl font-semibold tracking-tight text-white">
                         {formatDistance(displayData.odometer)}
                       </p>
                     </div>
-                    <div>
+                    <div className="text-center">
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Security</p>
                       <p className={`mt-2 text-lg font-semibold ${displayData.locked ? 'text-green-300' : 'text-red-400'}`}>
                         {displayData.locked ? 'Locked' : 'Unlocked'}
                       </p>
                     </div>
-                    <div>
+                    <div className="text-center">
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Sentry mode</p>
                       <p className={`mt-2 text-lg font-semibold ${displayData.sentry_mode ? 'text-green-300' : 'text-slate-200'}`}>
                         {displayData.sentry_mode ? 'Enabled' : 'Off'}

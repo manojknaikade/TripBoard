@@ -407,7 +407,7 @@ export default function TripDetailPage() {
                     meta={
                         <Link
                             href="/dashboard/trips"
-                            className="inline-flex items-center gap-2 text-sm text-slate-400 transition-colors hover:text-white"
+                            className="inline-flex items-center gap-2 text-sm font-medium text-red-300 transition-colors hover:text-red-200"
                         >
                             <ArrowLeft className="h-4 w-4" />
                             Back to Trips
@@ -588,14 +588,14 @@ function StatBox({
     };
 
     return (
-        <div className={`p-5 ${SURFACE_CARD_CLASS}`}>
-            <div className="flex items-center gap-4">
-                <div className={`flex h-11 w-11 items-center justify-center ${SUBCARD_CLASS} ${colorClasses[color as keyof typeof colorClasses]}`}>
+        <div className={`p-4 ${SURFACE_CARD_CLASS}`}>
+            <div className="flex items-center gap-3">
+                <div className={`flex h-10 w-10 items-center justify-center ${SUBCARD_CLASS} ${colorClasses[color as keyof typeof colorClasses]}`}>
                     {icon}
                 </div>
                 <div>
                     <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">{label}</div>
-                    <div className="mt-2 text-2xl font-semibold tracking-tight text-white">{value}</div>
+                    <div className="mt-1.5 text-xl font-semibold tracking-tight text-white">{value}</div>
                 </div>
             </div>
         </div>

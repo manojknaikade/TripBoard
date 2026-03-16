@@ -111,7 +111,7 @@ export function DashboardStatCard({
                 {icon}
             </div>
             <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">{label}</p>
-            <div className="mt-3 min-h-[4.5rem]">
+            <div className="mt-3 min-h-[3.25rem]">
                 <div className="flex items-end justify-between gap-3">
                     <div className={cx('text-3xl font-semibold tracking-tight text-white', valueClassName)}>
                         {value}
@@ -120,7 +120,7 @@ export function DashboardStatCard({
                 </div>
             </div>
             {helper ? (
-                <div className="mt-4 text-sm leading-6 text-slate-400">{helper}</div>
+                <div className="mt-2 text-sm leading-6 text-slate-400">{helper}</div>
             ) : null}
         </div>
     );
