@@ -20,3 +20,5 @@
   - Use for perceived-performance work across dashboard, trips, charging, maintenance, and analytics.
 - `tripboard-telemetry`: [/.codex/skills/tripboard-telemetry/SKILL.md](/Users/manojnaikade/Documents/TripBoard/.codex/skills/tripboard-telemetry/SKILL.md)
   - Use for telemetry ingestion, VPS/systemd workflows, and Tesla charging-sync worker tasks.
+- `tripboard-dashboard-ui`: [/.codex/skills/tripboard-dashboard-ui/SKILL.md](/Users/manojnaikade/Documents/TripBoard/.codex/skills/tripboard-dashboard-ui/SKILL.md)
+  - Use for dashboard UI audits, screenshot-driven spacing fixes, card hierarchy work, and preserving the established TripBoard dashboard visual system.

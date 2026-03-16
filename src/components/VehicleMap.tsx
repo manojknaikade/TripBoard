@@ -11,6 +11,7 @@ interface VehicleMapProps {
     longitude: number;
     heading?: number;
     vehicleName?: string;
+    className?: string;
 }
 
 function buildTeslaIcon(heading = 0) {
@@ -39,7 +40,13 @@ function buildTeslaIcon(heading = 0) {
     });
 }
 
-export default function VehicleMap({ latitude, longitude, heading, vehicleName }: VehicleMapProps) {
+export default function VehicleMap({
+    latitude,
+    longitude,
+    heading,
+    vehicleName,
+    className,
+}: VehicleMapProps) {
     const mapStyle = useSettingsStore((state) => state.mapStyle);
     const tileConfig = getMapTileConfig(mapStyle);
     const initialCenterRef = useRef({ latitude, longitude });
@@ -107,7 +114,7 @@ export default function VehicleMap({ latitude, longitude, heading, vehicleName }
     return (
         <div
             ref={containerRef}
-            className="h-64 w-full overflow-hidden rounded-xl bg-slate-700/30"
+            className={className ?? 'h-64 w-full overflow-hidden rounded-xl bg-slate-700/30'}
             style={{ zIndex: 0 }}
         />
     );

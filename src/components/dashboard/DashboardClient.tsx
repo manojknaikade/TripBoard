@@ -9,7 +9,6 @@ import {
   MapPin,
   Lock,
   Unlock,
-  Sun,
   Moon,
   RefreshCw,
   Car,
@@ -17,9 +16,9 @@ import {
   AlertCircle,
   Power,
   Clock,
-  BatteryCharging,
 } from 'lucide-react';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useVehicleStore } from '@/stores/vehicleStore';
 import Header from '@/components/Header';
 import dynamic from 'next/dynamic';
 import { fetchCachedJson, readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
@@ -97,6 +96,10 @@ type DashboardClientProps = {
 const CACHE_KEY = 'tripboard_vehicle_cache_v2';
 const MAP_VIEWPORT_ROOT_MARGIN = '240px';
 const VEHICLE_LIST_CACHE_TTL_MS = 60_000;
+const FOCUS_RING_CLASS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/70 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900';
+const SURFACE_CARD_CLASS = 'rounded-[28px] border border-slate-700/50 bg-slate-800/30';
+const SUBCARD_CLASS = 'rounded-2xl border border-slate-700/40 bg-slate-900/18';
+const SUBDUED_BADGE_CLASS = 'inline-flex items-center rounded-full border border-slate-700/55 bg-slate-900/28 px-3 py-1 text-xs font-medium text-slate-300';
 
 function buildVehicleCacheKey(vehicleId: number, dataSource: string, region: string) {
   return `${dataSource}:${region}:${vehicleId}`;
@@ -145,12 +148,36 @@ function formatTimeAgo(timestamp: number): string {
   return days === 1 ? '1 day ago' : `${days} days ago`;
 }
 
+function getStatusToneClasses(tone: 'live' | 'warning' | 'quiet' | 'danger') {
+  switch (tone) {
+    case 'live':
+      return 'border-green-500/20 bg-green-500/10 text-green-300';
+    case 'warning':
+      return 'border-yellow-500/20 bg-yellow-500/10 text-yellow-300';
+    case 'danger':
+      return 'border-red-500/20 bg-red-500/10 text-red-300';
+    default:
+      return 'border-slate-700/70 bg-slate-800/80 text-slate-300';
+  }
+}
+
+function getChargingStateLabel(chargingState: string) {
+  if (chargingState === 'Disconnected') {
+    return 'Not charging';
+  }
+
+  return chargingState;
+}
+
 export default function DashboardClient({
   initialSettings,
   initialVehicles,
   initialVehiclesError,
 }: DashboardClientProps) {
   const applySnapshot = useSettingsStore((state) => state.applySnapshot);
+  const setVehicleStoreVehicles = useVehicleStore((state) => state.setVehicles);
+  const selectedVehicleId = useVehicleStore((state) => state.selectedVehicleId);
+  const selectVehicleInStore = useVehicleStore((state) => state.selectVehicle);
   const [settingsHydrated, setSettingsHydrated] = useState(false);
   const [vehicles, setVehicles] = useState<Vehicle[]>(initialVehicles);
   const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | null>(initialVehicles[0] || null);
@@ -164,7 +191,7 @@ export default function DashboardClient({
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
   const [streetAddress, setStreetAddress] = useState<string | null>(null);
   const [isLocationCardNearViewport, setIsLocationCardNearViewport] = useState(false);
-  const locationCardRef = useRef<HTMLDivElement | null>(null);
+  const locationCardRef = useRef<HTMLElement | null>(null);
   const geocodeCacheRef = useRef<Map<string, string>>(new Map());
   const vehicleFetchIdRef = useRef(0);
 
@@ -179,6 +206,43 @@ export default function DashboardClient({
     applySnapshot(initialSettings);
     setSettingsHydrated(true);
   }, [applySnapshot, initialSettings]);
+
+  useEffect(() => {
+    if (vehicles.length === 0) {
+      return;
+    }
+
+    setVehicleStoreVehicles(
+      vehicles.map((vehicle) => ({
+        id: vehicle.id.toString(),
+        vin: vehicle.vin,
+        display_name: vehicle.display_name,
+        state: (vehicle.state as 'online' | 'asleep' | 'offline'),
+      }))
+    );
+  }, [vehicles, setVehicleStoreVehicles]);
+
+  useEffect(() => {
+    if (vehicles.length === 0) {
+      return;
+    }
+
+    const preferredVehicle = selectedVehicleId
+      ? vehicles.find((vehicle) => vehicle.id.toString() === selectedVehicleId)
+      : null;
+    const fallbackVehicle = selectedVehicle
+      ? vehicles.find((vehicle) => vehicle.id === selectedVehicle.id) || vehicles[0]
+      : vehicles[0];
+    const nextVehicle = preferredVehicle || fallbackVehicle;
+
+    if (!selectedVehicle || selectedVehicle.id !== nextVehicle.id) {
+      setSelectedVehicle(nextVehicle);
+    }
+
+    if (selectedVehicleId !== nextVehicle.id.toString()) {
+      selectVehicleInStore(nextVehicle.id.toString());
+    }
+  }, [vehicles, selectedVehicle, selectedVehicleId, selectVehicleInStore]);
 
   // Load cached data on mount
   useEffect(() => {
@@ -437,6 +501,99 @@ export default function DashboardClient({
   const displayTimestamp = vehicleData ? lastUpdated : cachedData?.timestamp;
   const isShowingCachedSnapshot = !vehicleData && !!cachedData;
   const cachedSnapshotAgeLabel = cachedData ? formatTimeAgo(cachedData.timestamp) : null;
+  const snapshotAgeMs = displayTimestamp ? Date.now() - displayTimestamp : null;
+  const isSnapshotStale = snapshotAgeMs !== null && snapshotAgeMs > 6 * 60 * 60 * 1000;
+
+  const vehicleStatusMeta = (() => {
+    if (waking) {
+      return {
+        label: 'Waking',
+        tone: 'warning' as const,
+        message: 'Sending a wake request and waiting for fresh vehicle data.',
+      };
+    }
+
+    if (error && !displayData) {
+      return {
+        label: 'Disconnected',
+        tone: 'danger' as const,
+        message: error,
+      };
+    }
+
+    if (isAsleep && cachedSnapshotAgeLabel) {
+      return {
+        label: 'Sleeping',
+        tone: 'quiet' as const,
+        message: `Vehicle is asleep. Showing the last known snapshot from ${cachedSnapshotAgeLabel}.`,
+      };
+    }
+
+    if (isShowingCachedSnapshot && cachedSnapshotAgeLabel) {
+      return {
+        label: 'Cached',
+        tone: isSnapshotStale ? 'warning' as const : 'quiet' as const,
+        message: `Showing a cached snapshot from ${cachedSnapshotAgeLabel} while live data refreshes.`,
+      };
+    }
+
+    if (isSnapshotStale && displayTimestamp) {
+      return {
+        label: 'Stale',
+        tone: 'warning' as const,
+        message: `Latest available data is ${formatTimeAgo(displayTimestamp)} old. Refresh to request a newer snapshot.`,
+      };
+    }
+
+    if (displayTimestamp) {
+      return {
+        label: dataLoading ? 'Refreshing' : 'Live',
+        tone: 'live' as const,
+        message: `Latest vehicle snapshot updated ${formatTimeAgo(displayTimestamp)}.`,
+      };
+    }
+
+    return {
+      label: 'Waiting',
+      tone: 'quiet' as const,
+      message: 'Waiting for vehicle data.',
+    };
+  })();
+
+  const titleStatusMeta = displayData?.state
+    ? {
+      label: `Vehicle ${displayData.state}`,
+      tone: 'quiet' as const,
+    }
+    : {
+      label: vehicleStatusMeta.label,
+      tone: vehicleStatusMeta.tone,
+    };
+
+  const doorStatuses = displayData ? [
+    { label: 'Driver Front', isOpen: displayData.df === 1, windowState: displayData.fd_window },
+    { label: 'Pass. Front', isOpen: displayData.pf === 1, windowState: displayData.fp_window },
+    { label: 'Driver Rear', isOpen: displayData.dr === 1, windowState: displayData.rd_window },
+    { label: 'Pass. Rear', isOpen: displayData.pr === 1, windowState: displayData.rp_window },
+    { label: 'Frunk', isOpen: displayData.ft === 1 },
+    { label: 'Trunk', isOpen: displayData.rt === 1 },
+  ] : [];
+  const openingsNeedingAttention = doorStatuses.filter((entry) => entry.isOpen || (entry.windowState && entry.windowState !== 'Closed'));
+  const openingsSummary = openingsNeedingAttention.length === 0
+    ? 'All openings closed'
+    : `${openingsNeedingAttention.length} opening${openingsNeedingAttention.length === 1 ? '' : 's'} need attention`;
+  const doorEntries = doorStatuses.filter((entry) => !['Frunk', 'Trunk'].includes(entry.label));
+  const cargoEntries = doorStatuses.filter((entry) => ['Frunk', 'Trunk'].includes(entry.label));
+  const windowEntries = doorStatuses
+    .filter((entry) => entry.windowState !== undefined)
+    .map((entry) => ({
+      label: entry.label,
+      isOpen: entry.windowState !== 'Closed',
+    }));
+
+  const batteryLevelPercent = displayData ? Math.round(displayData.battery_level) : 0;
+  const chargeLimitPercent = displayData ? displayData.charge_limit_soc : 0;
+  const chargeLimitDeltaPercent = Math.max(0, chargeLimitPercent - batteryLevelPercent);
 
   useEffect(() => {
     if (
@@ -540,67 +697,55 @@ export default function DashboardClient({
       <Header />
 
       {/* Main Content */}
-      <main className="mx-auto max-w-7xl px-6 pb-24 pt-8 md:pb-8">
-        {/* Vehicle Selector & Refresh */}
-        <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-wrap items-center gap-2 sm:gap-4">
-            <Car className="h-6 w-6 text-red-400" />
-            <select
-              value={selectedVehicle?.id || ''}
-              onChange={(e) => {
-                const v = vehicles.find((v) => v.id === Number(e.target.value));
-                if (v) setSelectedVehicle(v);
-              }}
-              className="rounded-lg border border-slate-600 bg-slate-800 px-4 py-2 text-white"
-            >
-              {vehicles.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.display_name}
-                </option>
-              ))}
-            </select>
-            <span
-              className={`rounded-full px-3 py-1 text-xs font-medium ${waking
-                ? 'bg-yellow-500/20 text-yellow-400'
-                : isAsleep
-                  ? 'bg-slate-700 text-slate-400'
-                  : 'bg-green-500/20 text-green-400'
-                }`}
-            >
-              {waking ? 'Waking...' : isAsleep ? 'Asleep' : 'Online'}
-            </span>
-            {displayTimestamp && (
-              <span className="flex items-center gap-1 text-xs text-slate-500">
-                <Clock className="h-3 w-3" />
-                {formatTimeAgo(displayTimestamp)}
-              </span>
-            )}
-          </div>
+      <main className="mx-auto max-w-7xl px-6 pb-20 pt-6 md:pb-8">
+        <section className={`mb-6 px-6 py-5 shadow-[0_18px_56px_-44px_rgba(15,23,42,0.85)] ${SURFACE_CARD_CLASS}`}>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-3">
+                <h1 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">
+                  {selectedVehicle?.display_name ?? 'Vehicle overview'}
+                </h1>
+                <span
+                  className={`inline-flex items-center rounded-full border px-3 py-1 text-sm font-medium ${getStatusToneClasses(titleStatusMeta.tone)}`}
+                >
+                  {titleStatusMeta.label}
+                </span>
+              </div>
+            </div>
 
-          <div className="flex gap-2">
-            {isAsleep && !waking && (
+            <div className="flex flex-col gap-3 lg:items-end">
+              <div className="flex flex-wrap gap-3 lg:justify-end">
+              {displayTimestamp && (
+                <span className="inline-flex h-11 items-center gap-2 rounded-2xl border border-slate-700/70 bg-slate-900/30 px-4 text-sm text-slate-100">
+                  <Clock className="h-3.5 w-3.5 text-slate-300" />
+                  Updated {formatTimeAgo(displayTimestamp)}
+                </span>
+              )}
+              {isAsleep && !waking && (
+                <button
+                  onClick={handleWakeAndRefresh}
+                  className={`flex h-11 items-center gap-2 rounded-2xl bg-red-500 px-5 text-sm font-medium text-white transition-colors hover:bg-red-600 ${FOCUS_RING_CLASS}`}
+                >
+                  <Power className="h-4 w-4" />
+                  Wake & Refresh
+                </button>
+              )}
               <button
-                onClick={handleWakeAndRefresh}
-                className="flex items-center gap-2 rounded-lg bg-red-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600"
+                onClick={handleRefresh}
+                disabled={dataLoading || waking}
+                className={`flex h-11 items-center gap-2 rounded-2xl border border-slate-700/80 bg-slate-800/80 px-5 text-sm font-medium text-slate-100 transition-colors hover:border-slate-600 hover:bg-slate-700/80 disabled:opacity-50 ${FOCUS_RING_CLASS}`}
               >
-                <Power className="h-4 w-4" />
-                Wake & Refresh
+                <RefreshCw className={`h-4 w-4 ${dataLoading ? 'animate-spin' : ''}`} />
+                Refresh data
               </button>
-            )}
-            <button
-              onClick={handleRefresh}
-              disabled={dataLoading || waking}
-              className="flex items-center gap-2 rounded-lg bg-slate-800 px-4 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-700 disabled:opacity-50"
-            >
-              <RefreshCw className={`h-4 w-4 ${dataLoading ? 'animate-spin' : ''}`} />
-              Refresh
-            </button>
+            </div>
+            </div>
           </div>
-        </div>
+        </section>
 
         {/* Error Message */}
         {error && (
-          <div className="mb-6 rounded-xl bg-red-500/10 p-4 text-red-400">
+          <div className="mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-red-300">
             <p>{error}</p>
           </div>
         )}
@@ -630,175 +775,176 @@ export default function DashboardClient({
         {/* Vehicle Data (live or cached) */}
         {displayData && !waking && (
           <>
-            {/* Cached Data Banner */}
-            {isShowingCachedSnapshot && (
-              <div className="mb-4 flex items-center gap-2 rounded-lg bg-slate-700/50 px-4 py-2 text-sm text-slate-400">
-                <Moon className="h-4 w-4" />
-                <span>
-                  {isAsleep
-                    ? `Vehicle is sleeping. Showing last known data from ${cachedSnapshotAgeLabel}`
-                    : `Refreshing live data. Showing cached snapshot from ${cachedSnapshotAgeLabel}`}
-                </span>
-              </div>
-            )}
-
-            {/* Battery Card */}
-            <div className="mb-8 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
-              <div className="mb-4 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <Battery className="h-6 w-6 text-green-400" />
-                  <h2 className="text-lg font-semibold">Battery</h2>
-                </div>
-                <span className="text-sm text-slate-400">
-                  {displayData.charging_state === 'Charging' ? '⚡ Charging' : displayData.charging_state}
-                </span>
-              </div>
-
-              {/* Battery Visualization */}
-              <div className="mb-4">
-                <div className="mb-2 flex justify-between text-sm">
-                  <span className="text-slate-400">Charge Level</span>
-                  <span className="font-semibold">{Math.round(displayData.battery_level)}%</span>
-                </div>
-                <div className="h-4 w-full overflow-hidden rounded-full bg-slate-700">
-                  <div
-                    className={`h-full rounded-full transition-all ${Math.round(displayData.battery_level) > 20 ? 'bg-green-500' : 'bg-red-500'
-                      }`}
-                    style={{ width: `${Math.round(displayData.battery_level)}%` }}
-                  />
-                </div>
-                <div className="mt-2 flex justify-between text-xs text-slate-500">
-                  <span>Limit: {displayData.charge_limit_soc}%</span>
-                  <span>~{formatDistance(displayData.battery_range)} range</span>
-                </div>
-              </div>
-
-              {/* Charging Info */}
-              {displayData.charging_state === 'Charging' && (
-                <div className="mt-4 grid grid-cols-3 gap-4 rounded-xl bg-green-500/10 p-4">
-                  <div className="text-center">
-                    <p className="text-xs text-slate-400">Time to Full</p>
-                    <p className="text-lg font-semibold text-green-400">
-                      {displayData.time_to_full_charge ? `${displayData.time_to_full_charge.toFixed(1)}h` : '-'}
-                    </p>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-xs text-slate-400">Power</p>
-                    <p className="text-lg font-semibold text-green-400">
-                      {displayData.charger_power ? `${displayData.charger_power} kW` : '-'}
-                    </p>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-xs text-slate-400">Energy Added</p>
-                    <p className="text-lg font-semibold text-green-400">
-                      {displayData.charge_energy_added ? `${displayData.charge_energy_added.toFixed(1)} kWh` : '-'}
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Stats Grid - Single Row with 5 cards */}
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-              <StatCard
-                icon={<Gauge className="h-5 w-5" />}
-                label="Odometer"
-                value={formatDistance(displayData.odometer)}
-                color="blue"
-              />
-              <StatCard
-                icon={<Thermometer className="h-5 w-5" />}
-                label="Temperature"
-                value={`${formatTemp(displayData.inside_temp)} inside`}
-                subvalue={`${formatTemp(displayData.outside_temp)} outside`}
-                color="orange"
-              />
-              <StatCard
-                icon={displayData.locked ? <Lock className="h-5 w-5" /> : <Unlock className="h-5 w-5" />}
-                label="Security"
-                value={displayData.locked ? 'Locked' : 'Unlocked'}
-                subvalue={displayData.sentry_mode ? 'Sentry On' : 'Sentry Off'}
-                color={displayData.locked ? 'green' : 'red'}
-              />
-              <StatCard
-                icon={displayData.is_climate_on ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
-                label="Climate"
-                value={displayData.is_climate_on ? 'On' : 'Off'}
-                color="purple"
-              />
-              <StatCard
-                icon={<BatteryCharging className="h-5 w-5" />}
-                label="Range"
-                value={formatDistance(displayData.battery_range)}
-                subvalue={`${Math.round(displayData.battery_level)}% charged`}
-                color="green"
-              />
-            </div>
-
-            {/* Location Map - Right after stats */}
-            {displayData.latitude && displayData.longitude && (
-              <div
-                ref={locationCardRef}
-                className="mt-6 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6"
-              >
-                <div className="mb-4 flex items-center justify-between">
+            <div className="mb-6 grid gap-5 xl:grid-cols-2">
+              <section className={`flex h-full flex-col p-6 ${SURFACE_CARD_CLASS}`}>
+                <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="flex items-center gap-3">
-                    <MapPin className="h-5 w-5 text-red-400" />
-                    <span className="font-medium">Vehicle Location</span>
+                    <Car className="h-6 w-6 text-slate-200" />
+                    <h2 className="text-lg font-semibold text-white">Vehicle details</h2>
+                  </div>
+                  <div className="flex min-w-[12rem] flex-col items-start gap-2 text-sm sm:items-end">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span className="inline-flex items-center gap-2 text-slate-300">
+                        <Thermometer className="h-4 w-4 text-slate-400" />
+                        Ext: {formatTemp(displayData.outside_temp)}
+                      </span>
+                      <span className="inline-flex items-center gap-2 text-green-300">
+                        <Thermometer className="h-4 w-4" />
+                        Int: {formatTemp(displayData.inside_temp)}
+                      </span>
+                    </div>
+                    <span className="text-slate-300">
+                      Cabin conditioning is <span className={displayData.is_climate_on ? 'text-green-300' : 'text-slate-100'}>
+                        {displayData.is_climate_on ? 'ON' : 'OFF'}
+                      </span>
+                    </span>
+                  </div>
+                </div>
+
+                <div className="mt-7 flex flex-1 flex-col justify-center">
+                  <div className="space-y-[1.125rem]">
+                    <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-4">
+                      <div className="flex items-end gap-4">
+                        <Battery className="mb-2 h-10 w-10 -rotate-90 text-green-400" />
+                        <p className="text-6xl font-semibold tracking-tight text-white">
+                          {batteryLevelPercent}%
+                        </p>
+                      </div>
+                      <p className="pb-1 text-5xl font-medium tracking-tight text-slate-100">
+                        {formatDistance(displayData.battery_range)}
+                      </p>
+                    </div>
+
+                    <div className="relative h-4 w-full overflow-hidden rounded-full bg-slate-700/75">
+                      <div
+                        className="absolute left-0 top-0 h-full rounded-full bg-slate-500/55"
+                        style={{ width: `${chargeLimitPercent}%` }}
+                      />
+                      <div
+                        className={`h-full rounded-full transition-all ${Math.round(displayData.battery_level) > 20 ? 'bg-green-500' : 'bg-red-500'}`}
+                        style={{ width: `${batteryLevelPercent}%` }}
+                      />
+                      {chargeLimitDeltaPercent > 0 && (
+                        <div
+                          className="absolute top-0 h-full bg-slate-500/55"
+                          style={{
+                            left: `${batteryLevelPercent}%`,
+                            width: `${chargeLimitDeltaPercent}%`,
+                          }}
+                        />
+                      )}
+                      <div
+                        className="absolute inset-y-[-2px] z-10 w-px bg-slate-100/80"
+                        style={{ left: `${chargeLimitPercent}%` }}
+                      />
+                    </div>
+                    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-300">
+                      <span className={displayData.charging_state === 'Charging'
+                        ? `inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${getStatusToneClasses('live')}`
+                        : SUBDUED_BADGE_CLASS}
+                      >
+                        {displayData.charging_state === 'Charging' ? 'Charging' : getChargingStateLabel(displayData.charging_state)}
+                      </span>
+                      <span className={SUBDUED_BADGE_CLASS}>
+                        Charge limit {chargeLimitPercent}%
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="mt-6 grid gap-4 border-t border-slate-700/40 pt-4 sm:grid-cols-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Odometer</p>
+                      <p className="mt-2 text-2xl font-semibold tracking-tight text-white">
+                        {formatDistance(displayData.odometer)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Security</p>
+                      <p className={`mt-2 text-lg font-semibold ${displayData.locked ? 'text-green-300' : 'text-red-400'}`}>
+                        {displayData.locked ? 'Locked' : 'Unlocked'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Sentry mode</p>
+                      <p className={`mt-2 text-lg font-semibold ${displayData.sentry_mode ? 'text-green-300' : 'text-slate-200'}`}>
+                        {displayData.sentry_mode ? 'Enabled' : 'Off'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              {displayData.latitude && displayData.longitude && (
+                <section
+                  ref={locationCardRef}
+                  className={`flex h-full flex-col p-6 ${SURFACE_CARD_CLASS}`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-3">
+                        <MapPin className="h-5 w-5 text-red-400" />
+                        <h2 className="text-lg font-semibold text-white">Vehicle Location</h2>
+                      </div>
+                      <a
+                        href={`https://www.google.com/maps/search/?api=1&query=${displayData.latitude},${displayData.longitude}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className={`text-sm leading-6 text-slate-300 underline-offset-4 transition-colors hover:text-white hover:underline ${FOCUS_RING_CLASS}`}
+                      >
+                        {streetAddress
+                          ? streetAddress
+                          : `${displayData.latitude.toFixed(4)}, ${displayData.longitude.toFixed(4)}`}
+                      </a>
+                    </div>
                     {isAsleep && (
-                      <span className="text-xs text-slate-500">(last known)</span>
+                      <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium ${getStatusToneClasses('quiet')}`}>
+                        Last known
+                      </span>
                     )}
                   </div>
-                </div>
-                {isLocationCardNearViewport && streetAddress && (
-                  <p className="mb-4 text-slate-300">{streetAddress}</p>
-                )}
-                {isLocationCardNearViewport ? (
-                  <VehicleMap
-                    latitude={displayData.latitude}
-                    longitude={displayData.longitude}
-                    vehicleName={displayData.display_name}
-                  />
-                ) : (
-                  <div className="h-64 w-full animate-pulse rounded-xl bg-slate-700/30" />
-                )}
+
+                  <div className="mt-3 flex flex-1">
+                    {isLocationCardNearViewport ? (
+                      <VehicleMap
+                        latitude={displayData.latitude}
+                        longitude={displayData.longitude}
+                        vehicleName={displayData.display_name}
+                        className="h-full min-h-[15.5rem] w-full overflow-hidden rounded-2xl bg-slate-700/30"
+                      />
+                    ) : (
+                      <div className={`h-full min-h-[15.5rem] w-full animate-pulse ${SUBCARD_CLASS}`} />
+                    )}
+                  </div>
+
+                </section>
+              )}
+            </div>
+
+            {isShowingCachedSnapshot && (
+              <div className="mb-5 flex items-center gap-2 rounded-2xl border border-yellow-500/15 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-100">
+                <Moon className="h-4 w-4 text-yellow-300" />
+                <span>
+                  {isAsleep
+                    ? `Vehicle is sleeping. Showing the last known snapshot from ${cachedSnapshotAgeLabel}.`
+                    : `Live refresh is in progress. Showing a cached snapshot from ${cachedSnapshotAgeLabel}.`}
+                </span>
               </div>
             )}
 
-            {/* Doors & Openings - Show in both modes */}
-            <div className="mt-6 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
-              <div className="mb-4 flex items-center gap-3">
-                <Car className="h-5 w-5 text-blue-400" />
-                <span className="font-medium">Doors & Openings</span>
-              </div>
-              <div className="grid grid-cols-3 gap-4 sm:grid-cols-6">
-                <DoorStatus label="Driver Front" isOpen={displayData.df === 1} windowState={displayData.fd_window} />
-                <DoorStatus label="Pass. Front" isOpen={displayData.pf === 1} windowState={displayData.fp_window} />
-                <DoorStatus label="Driver Rear" isOpen={displayData.dr === 1} windowState={displayData.rd_window} />
-                <DoorStatus label="Pass. Rear" isOpen={displayData.pr === 1} windowState={displayData.rp_window} />
-                <DoorStatus label="Frunk" isOpen={displayData.ft === 1} />
-                <DoorStatus label="Trunk" isOpen={displayData.rt === 1} />
-              </div>
-            </div>
-
-            {/* Tire Pressure - Show in both modes */}
-            <div className="mt-6 rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
-              <div className="mb-4 flex items-center gap-3">
-                <Gauge className="h-5 w-5 text-orange-400" />
-                <span className="font-medium">Tire Pressure</span>
-              </div>
-              {displayData.tpms_pressure_fl ? (
-                <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-                  <TirePressure label="Front Left" pressure={displayData.tpms_pressure_fl} />
-                  <TirePressure label="Front Right" pressure={displayData.tpms_pressure_fr} />
-                  <TirePressure label="Rear Left" pressure={displayData.tpms_pressure_rl} />
-                  <TirePressure label="Rear Right" pressure={displayData.tpms_pressure_rr} />
-                </div>
-              ) : (
-                <p className="text-sm text-slate-500">
-                  Tire pressure data requires expanded telemetry subscription.
-                </p>
-              )}
+            <div className="mb-6 space-y-5">
+              <DoorsOpeningsCard
+                openingsSummary={openingsSummary}
+                openingsNeedAttention={openingsNeedingAttention.length > 0}
+                doorEntries={doorEntries}
+                cargoEntries={cargoEntries}
+                windowEntries={windowEntries}
+              />
+              <TirePressureOverviewCard
+                frontLeft={displayData.tpms_pressure_fl}
+                frontRight={displayData.tpms_pressure_fr}
+                rearLeft={displayData.tpms_pressure_rl}
+                rearRight={displayData.tpms_pressure_rr}
+              />
             </div>
           </>
         )}
@@ -814,78 +960,164 @@ export default function DashboardClient({
   );
 }
 
-
-
-function StatCard({
-  icon,
-  label,
-  value,
-  subvalue,
-  color,
+function TirePressureOverviewCard({
+  frontLeft,
+  frontRight,
+  rearLeft,
+  rearRight,
 }: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  subvalue?: string;
-  color: 'blue' | 'green' | 'purple' | 'orange' | 'red';
+  frontLeft: number;
+  frontRight: number;
+  rearLeft: number;
+  rearRight: number;
 }) {
-  const colors = {
-    blue: 'bg-blue-500/10 text-blue-400',
-    green: 'bg-green-500/10 text-green-400',
-    purple: 'bg-purple-500/10 text-purple-400',
-    orange: 'bg-orange-500/10 text-orange-400',
-    red: 'bg-red-500/10 text-red-400',
-  };
+  const tires = [
+    { label: 'Front Left', pressure: frontLeft },
+    { label: 'Front Right', pressure: frontRight },
+    { label: 'Rear Left', pressure: rearLeft },
+    { label: 'Rear Right', pressure: rearRight },
+  ];
+
+  const hasPressureData = tires.some((tire) => tire.pressure);
 
   return (
-    <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
-      <div className={`mb-3 inline-flex rounded-lg p-2 ${colors[color]}`}>{icon}</div>
-      <p className="text-sm text-slate-400">{label}</p>
-      <p className="text-xl font-bold">{value}</p>
-      {subvalue && <p className="text-sm text-slate-500">{subvalue}</p>}
-    </div>
-  );
-}
-
-function DoorStatus({ label, isOpen, windowState }: { label: string; isOpen: boolean; windowState?: string }) {
-  const windowOpen = windowState && windowState !== 'Closed';
-  const hasIssue = isOpen || windowOpen;
-
-  return (
-    <div className="text-center">
-      <div
-        className={`mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-full ${hasIssue ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'
-          }`}
-      >
-        {isOpen ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+    <div className={`flex h-full flex-col p-6 ${SURFACE_CARD_CLASS}`}>
+      <div className="mb-4 flex items-center gap-3">
+        <div className="flex items-center gap-3">
+          <Gauge className="h-6 w-6 text-orange-300" />
+          <h2 className="text-lg font-semibold text-white">Tire pressure</h2>
+        </div>
       </div>
-      <p className="text-xs text-slate-400">{label}</p>
-      <p className={`text-sm font-medium ${isOpen ? 'text-red-400' : 'text-green-400'}`}>
-        {isOpen ? 'Open' : 'Closed'}
-      </p>
-      {windowState && (
-        <p className={`text-xs mt-0.5 ${windowOpen ? 'text-orange-400' : 'text-slate-500'}`}>
-          🪟 {windowOpen ? 'Open' : 'Closed'}
+      {hasPressureData ? (
+        <div className="grid gap-4 lg:grid-cols-4">
+          {tires.map((tire) => (
+            <div key={tire.label} className={`relative flex min-h-[7.25rem] flex-col justify-center p-4 ${SUBCARD_CLASS}`}>
+              <span
+                className={`absolute right-3 top-3 h-2.5 w-2.5 rounded-full ${tire.pressure
+                  ? Math.round(tire.pressure * 14.5) < 35
+                    ? 'bg-red-400'
+                    : 'bg-green-400'
+                  : 'bg-slate-500'}`}
+              />
+              <p className="text-center text-xs font-medium text-slate-400">{tire.label}</p>
+              <div className="mt-2.5 flex items-end justify-center gap-x-2.5 gap-y-1">
+                <p className="text-[2.2rem] font-semibold leading-none tracking-tight text-white">
+                  {tire.pressure ? Math.round(tire.pressure * 14.5) : '--'}
+                </p>
+                <p className="pb-0.5 text-base font-medium text-slate-100">PSI</p>
+              </div>
+              <p className="mt-1 text-center text-sm text-slate-400">
+                {tire.pressure ? `${tire.pressure.toFixed(2)} bar` : '-- bar'}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-3 text-sm text-slate-400">
+          Tire pressure data requires expanded telemetry subscription.
         </p>
       )}
     </div>
   );
 }
 
-function TirePressure({ label, pressure }: { label: string; pressure: number }) {
-  // Convert bar to PSI for display if needed (1 bar ≈ 14.5 PSI)
-  const psi = pressure ? Math.round(pressure * 14.5) : null;
-  const isLow = psi !== null && psi < 35;
+function DoorsOpeningsCard({
+  openingsSummary,
+  openingsNeedAttention,
+  doorEntries,
+  cargoEntries,
+  windowEntries,
+}: {
+  openingsSummary: string;
+  openingsNeedAttention: boolean;
+  doorEntries: Array<{ label: string; isOpen: boolean }>;
+  cargoEntries: Array<{ label: string; isOpen: boolean }>;
+  windowEntries: Array<{ label: string; isOpen: boolean }>;
+}) {
+  const windowStatusByLabel = new Map(windowEntries.map((entry) => [entry.label, entry.isOpen]));
+  const tiles = [
+    ...doorEntries.map((entry) => ({
+      label: entry.label,
+      isOpen: entry.isOpen,
+      windowIsOpen: windowStatusByLabel.get(entry.label) ?? null,
+    })),
+    ...cargoEntries.map((entry) => ({
+      label: entry.label,
+      isOpen: entry.isOpen,
+      windowIsOpen: null,
+    })),
+  ];
 
   return (
-    <div className="text-center rounded-lg bg-slate-700/30 p-3">
-      <p className="text-xs text-slate-400">{label}</p>
-      <p className={`text-lg font-bold ${isLow ? 'text-orange-400' : 'text-slate-200'}`}>
-        {psi !== null ? `${psi} PSI` : '--'}
+    <div className={`flex h-full flex-col p-6 ${SURFACE_CARD_CLASS}`}>
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="flex items-center gap-3">
+            <Car className="h-6 w-6 text-red-400" />
+            <h2 className="text-lg font-semibold text-white">Doors &amp; openings</h2>
+          </div>
+        </div>
+        <span
+          className={`inline-flex items-center rounded-full border px-3 py-1 text-sm font-medium ${openingsNeedAttention
+            ? getStatusToneClasses('warning')
+            : getStatusToneClasses('live')}`}
+        >
+          {openingsSummary}
+        </span>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+        {tiles.map((entry) => (
+          <OpeningTile
+            key={entry.label}
+            label={entry.label}
+            isOpen={entry.isOpen}
+            windowIsOpen={entry.windowIsOpen}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function OpeningTile({
+  label,
+  isOpen,
+  windowIsOpen,
+}: {
+  label: string;
+  isOpen: boolean;
+  windowIsOpen: boolean | null;
+}) {
+  const hasWindowIssue = windowIsOpen === true;
+  const iconClasses = isOpen
+    ? 'bg-red-500/20 text-red-400'
+    : hasWindowIssue
+      ? 'bg-orange-500/20 text-orange-300'
+      : 'bg-green-500/20 text-green-400';
+  const statusClasses = isOpen ? 'text-red-400' : 'text-green-300';
+  const primaryStatus = isOpen ? 'Open' : 'Closed';
+
+  return (
+    <div className={`flex min-h-[7.75rem] flex-col items-center rounded-2xl border border-slate-700/40 bg-slate-900/18 p-4 text-center`}>
+      <div className={`flex h-9 w-9 items-center justify-center rounded-full ${iconClasses}`}>
+        {isOpen ? (
+          <Unlock className="h-4 w-4" />
+        ) : hasWindowIssue ? (
+          <AlertCircle className="h-4 w-4" />
+        ) : (
+          <Lock className="h-4 w-4" />
+        )}
+      </div>
+      <p className="mt-3 text-sm text-slate-100">{label}</p>
+      <p className={`mt-2 text-sm font-medium ${statusClasses}`}>
+        {primaryStatus}
       </p>
-      <p className="text-xs text-slate-500">
-        {pressure ? `${pressure.toFixed(2)} bar` : '--'}
-      </p>
+      {windowIsOpen !== null && (
+        <p className={`mt-1 text-xs ${hasWindowIssue ? 'text-orange-300' : 'text-slate-400'}`}>
+          Window {windowIsOpen ? 'open' : 'closed'}
+        </p>
+      )}
     </div>
   );
 }

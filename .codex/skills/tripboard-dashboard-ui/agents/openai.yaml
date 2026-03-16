@@ -1,0 +1,4 @@
+interface:
+  display_name: "TripBoard Dashboard UI"
+  short_description: "Preserve and extend the dashboard UI system."
+  default_prompt: "Use $tripboard-dashboard-ui to refine the TripBoard dashboard while preserving its card system, spacing rhythm, and state treatments."
