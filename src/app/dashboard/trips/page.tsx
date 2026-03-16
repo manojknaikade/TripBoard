@@ -20,6 +20,17 @@ import dynamic from 'next/dynamic';
 import type { TripRoutePoint } from '@/lib/trips/routePoints';
 import { fetchCachedJson, readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
 import VirtualizedList from '@/components/VirtualizedList';
+import {
+    DashboardStatCard,
+    EmptyStateCard,
+    LIST_CARD_CLASS,
+    PageHero,
+    PageShell,
+    SectionDateHeader,
+    StatusBadge,
+    SUBCARD_CLASS,
+    TimeframeSelector,
+} from '@/components/ui/dashboardPage';
 
 // Dynamic import to avoid SSR issues with Leaflet
 const TripMiniMap = dynamic(() => import('@/components/TripMiniMap'), {
@@ -62,6 +73,16 @@ const TRIPS_PAGE_SIZE = 20;
 const TRIPS_BOOTSTRAP_CACHE_TTL_MS = 45_000;
 const thumbnailRouteCache = new Map<string, TripRoutePoint[]>();
 const thumbnailRouteRequestCache = new Map<string, Promise<TripRoutePoint[]>>();
+const timeframeOptions = [
+    { id: 'week', label: 'This Week' },
+    { id: '7days', label: 'Last 7 Days' },
+    { id: 'month', label: 'This Month' },
+    { id: '30days', label: 'Last 30 Days' },
+    { id: '3months', label: 'Last 3 Months' },
+    { id: 'year', label: 'This Year' },
+    { id: 'alltime', label: 'All Time' },
+    { id: 'custom', label: 'Custom' },
+];
 
 type TripsListResponse = {
     success?: boolean;
@@ -429,100 +450,93 @@ export default function TripsPage() {
         <div className="min-h-screen">
             <Header />
 
-            {/* Main Content */}
-            <main className="mx-auto max-w-7xl px-6 py-8">
-                <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                        <h1 className="text-2xl font-bold">Trip History</h1>
-                        <p className="text-slate-400">View and analyze your driving trips</p>
-                    </div>
+            <PageShell>
+                <PageHero
+                    title="Trip History"
+                    description="Driving records, distance, energy use, and efficiency across the selected period."
+                    actions={
+                        <TimeframeSelector
+                            options={timeframeOptions}
+                            selected={timeframe}
+                            onSelect={setTimeframe}
+                            customStart={customStart}
+                            customEnd={customEnd}
+                            onCustomStartChange={setCustomStart}
+                            onCustomEndChange={setCustomEnd}
+                            showCustomPicker={showCustomPicker}
+                            onToggleCustomPicker={() => setShowCustomPicker(!showCustomPicker)}
+                        />
+                    }
+                />
 
-                    {/* Timeframe Selector */}
-                    <TimeframeSelector
-                        selected={timeframe}
-                        onSelect={setTimeframe}
-                        customStart={customStart}
-                        customEnd={customEnd}
-                        onCustomStartChange={setCustomStart}
-                        onCustomEndChange={setCustomEnd}
-                        showCustomPicker={showCustomPicker}
-                        onToggleCustomPicker={() => setShowCustomPicker(!showCustomPicker)}
-                    />
-                </div>
-
-                {/* Stats Cards */}
-                <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                    <StatCard
+                <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                    <DashboardStatCard
                         icon={<Car className="h-5 w-5" />}
                         label="Total Trips"
                         value={totalTrips.toString()}
-                        color="blue"
+                        helper="Completed and in-progress trips in the active period."
+                        tone="brand"
                     />
-                    <StatCard
+                    <DashboardStatCard
                         icon={<Navigation className="h-5 w-5" />}
                         label="Total Distance"
                         value={`${displayDistance.toFixed(1)} ${displayDistanceUnit}`}
-                        color="green"
+                        helper="Combined distance across all visible trips."
+                        tone="live"
                     />
-                    <StatCard
+                    <DashboardStatCard
                         icon={<Battery className="h-5 w-5" />}
                         label="Energy Used"
                         value={`${totalEnergy.toFixed(1)} kWh`}
-                        color="purple"
+                        helper="Battery energy consumed during the selected timeframe."
+                        tone="warning"
                     />
-                    <StatCard
+                    <DashboardStatCard
                         icon={<TrendingUp className="h-5 w-5" />}
                         label="Avg Efficiency"
                         value={avgEfficiency > 0 ? `${Math.round(displayEfficiency)} ${efficiencyUnit}` : '--'}
-                        color="orange"
+                        helper="Average consumption efficiency across completed trips."
+                        tone="quiet"
                     />
                 </div>
 
-                {/* Loading State */}
                 {loading && (
                     <div className="flex items-center justify-center py-16">
                         <Loader2 className="h-8 w-8 animate-spin text-red-500" />
                     </div>
                 )}
 
-                {/* Error State */}
                 {error && (
-                    <div className="rounded-xl bg-red-500/10 p-6 text-center text-red-400">
-                        <p>{error}</p>
+                    <div className="mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 px-5 py-4 text-sm text-red-300">
+                        {error}
                     </div>
                 )}
 
-                {/* Empty State */}
                 {!loading && !error && trips.length === 0 && (
-                    <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-12 text-center">
-                        <History className="mx-auto mb-4 h-12 w-12 text-slate-500" />
-                        <h2 className="mb-2 text-xl font-semibold">No trips yet</h2>
-                        <p className="text-slate-400">
-                            Once you start driving with telemetry enabled, your trips will appear here.
-                        </p>
-                        <p className="mt-4 text-sm text-slate-500">
-                            Make sure to pair your virtual key and enable telemetry streaming.
-                        </p>
-                    </div>
+                    <EmptyStateCard
+                        icon={<History className="h-7 w-7" />}
+                        title="No trips yet"
+                        description="Once you start driving with telemetry enabled, your trips will appear here."
+                        secondary="Make sure to pair your virtual key and enable telemetry streaming."
+                    />
                 )}
 
-                {/* Trips List */}
                 {!loading && trips.length > 0 && (
                     <>
                         <VirtualizedList
                             key={`trips:${virtualTripListItems[0]?.key || 'empty'}:${virtualTripListItems[virtualTripListItems.length - 1]?.key || 'empty'}:${virtualTripListItems.length}`}
                             items={virtualTripListItems}
                             getItemKey={(item) => item.key}
-                            estimateHeight={(item) => item.type === 'header' ? 40 : 170}
+                            estimateHeight={(item) => item.type === 'header' ? 40 : 188}
                             overscanPx={1000}
                             renderItem={(item) => (
                                 item.type === 'header' ? (
-                                    <div className="flex items-center gap-2 pb-3 text-sm text-slate-400">
+                                    <SectionDateHeader>
                                         <Calendar className="h-4 w-4" />
                                         {item.label}
-                                    </div>
+                                    </SectionDateHeader>
                                 ) : (
-                                    <div className="pb-3">
+                                    <div className="pb-4">
                                         <TripCard trip={item.trip} units={units} />
                                     </div>
                                 )
@@ -530,14 +544,14 @@ export default function TripsPage() {
                         />
 
                         {nextOffset !== null && (
-                            <div ref={autoLoadTriggerRef} className="mt-8 flex justify-center py-4">
+                            <div ref={autoLoadTriggerRef} className="mt-6 flex justify-center py-4">
                                 {loadingMore ? (
                                     <div className="flex items-center gap-2 text-sm text-slate-400">
                                         <Loader2 className="h-4 w-4 animate-spin" />
                                         Loading more trips...
                                     </div>
                                 ) : (
-                                    <div className="text-xs text-slate-600">
+                                    <div className="text-xs text-slate-500">
                                         Scroll for more trips
                                     </div>
                                 )}
@@ -545,7 +559,7 @@ export default function TripsPage() {
                         )}
                     </>
                 )}
-            </main>
+            </PageShell>
         </div>
     );
 }
@@ -658,12 +672,11 @@ function TripCard({ trip, units }: { trip: Trip; units: 'imperial' | 'metric' })
         <div ref={cardRef}>
             <Link
                 href={`/dashboard/trips/${trip.id}`}
-                className="block rounded-xl border border-slate-700/50 bg-slate-800/30 p-4 transition-all hover:border-slate-600 hover:bg-slate-800/50"
+                className={LIST_CARD_CLASS}
             >
-                <div className="flex items-stretch gap-4">
-                    {/* Mini Map */}
+                <div className="flex items-stretch gap-5">
                     {hasCoords && (
-                        <div className="relative hidden h-24 w-32 flex-shrink-0 overflow-hidden rounded-lg border border-slate-600/50 sm:block">
+                        <div className={`relative hidden h-28 w-36 flex-shrink-0 overflow-hidden sm:block ${SUBCARD_CLASS}`}>
                             {isAwaitingExactRoute ? (
                                 <div className="h-full w-full animate-pulse bg-slate-700/30" />
                             ) : (
@@ -679,34 +692,32 @@ function TripCard({ trip, units }: { trip: Trip; units: 'imperial' | 'metric' })
                         </div>
                     )}
 
-                    {/* Trip Info */}
                     <div className="flex flex-1 items-center justify-between">
                         <div className="flex items-center gap-4">
-                            {/* Status indicator (only on mobile or if no coords) */}
                             {!hasCoords && (
                                 <div
-                                    className={`flex h-10 w-10 items-center justify-center rounded-full ${isInProgress ? 'bg-green-500/20' : 'bg-slate-700/50'
-                                        }`}
+                                    className={`flex h-11 w-11 items-center justify-center rounded-2xl border ${
+                                        isInProgress
+                                            ? 'border-green-500/20 bg-green-500/10 text-green-300'
+                                            : 'border-slate-700/60 bg-slate-900/25 text-slate-300'
+                                    }`}
                                 >
-                                    <Car
-                                        className={`h-5 w-5 ${isInProgress ? 'text-green-400' : 'text-slate-400'}`}
-                                    />
+                                    <Car className="h-5 w-5" />
                                 </div>
                             )}
 
-                            {/* Trip details */}
                             <div>
-                                <div className="flex items-center gap-2">
-                                    <span className="font-medium">
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <span className="text-base font-semibold text-white">
                                         {getTripName(trip, units)}
                                     </span>
                                     {isInProgress && (
-                                        <span className="rounded-full bg-green-500/20 px-2 py-0.5 text-xs font-medium text-green-400">
+                                        <StatusBadge tone="live" className="py-1 text-xs">
                                             In Progress
-                                        </span>
+                                        </StatusBadge>
                                     )}
                                 </div>
-                                <div className="mt-1 flex items-center gap-3 text-sm text-slate-400">
+                                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-slate-400">
                                     <span className="flex items-center gap-1">
                                         <Clock className="h-3 w-3" />
                                         {formatTime(trip.started_at)}
@@ -750,11 +761,10 @@ function TripCard({ trip, units }: { trip: Trip; units: 'imperial' | 'metric' })
                     </div>
                 </div>
 
-                {/* Battery bar - full width bottom section like charging card */}
                 {trip.start_battery_level != null && (
-                    <div className="mt-4 flex items-center gap-4 border-t border-slate-700/50 pt-3">
+                    <div className="mt-5 border-t border-slate-700/50 pt-4">
                         <div className="flex flex-1 items-center gap-3">
-                            <div className="text-sm font-medium">Battery</div>
+                            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">Battery</div>
                             <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-slate-700">
                                 {trip.end_battery_level != null && (
                                     <div
@@ -772,7 +782,7 @@ function TripCard({ trip, units }: { trip: Trip; units: 'imperial' | 'metric' })
                                     />
                                 )}
                             </div>
-                            <div className="whitespace-nowrap font-mono text-sm text-slate-400">
+                            <div className="whitespace-nowrap text-sm font-medium text-slate-300">
                                 {trip.start_battery_level.toFixed(2)}%
                                 {trip.end_battery_level != null && (
                                     <span> → {trip.end_battery_level.toFixed(2)}%</span>
@@ -782,117 +792,6 @@ function TripCard({ trip, units }: { trip: Trip; units: 'imperial' | 'metric' })
                     </div>
                 )}
             </Link>
-        </div>
-    );
-}
-
-
-
-function StatCard({
-    icon,
-    label,
-    value,
-    color,
-}: {
-    icon: React.ReactNode;
-    label: string;
-    value: string;
-    color: 'blue' | 'green' | 'purple' | 'orange';
-}) {
-    const colors = {
-        blue: 'bg-blue-500/10 text-blue-400',
-        green: 'bg-green-500/10 text-green-400',
-        purple: 'bg-purple-500/10 text-purple-400',
-        orange: 'bg-orange-500/10 text-orange-400',
-    };
-
-    return (
-        <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
-            <div className={`mb-3 inline-flex rounded-lg p-2 ${colors[color]}`}>{icon}</div>
-            <p className="text-sm text-slate-400">{label}</p>
-            <p className="text-xl font-bold">{value}</p>
-        </div>
-    );
-}
-// Timeframe selector options and component
-const timeframeOptions = [
-    { id: 'week', label: 'This Week' },
-    { id: '7days', label: 'Last 7 Days' },
-    { id: 'month', label: 'This Month' },
-    { id: '30days', label: 'Last 30 Days' },
-    { id: '3months', label: 'Last 3 Months' },
-    { id: 'year', label: 'This Year' },
-    { id: 'alltime', label: 'All Time' },
-    { id: 'custom', label: 'Custom' },
-];
-
-interface TimeframeSelectorProps {
-    selected: string;
-    onSelect: (id: string) => void;
-    customStart: string;
-    customEnd: string;
-    onCustomStartChange: (date: string) => void;
-    onCustomEndChange: (date: string) => void;
-    showCustomPicker: boolean;
-    onToggleCustomPicker: () => void;
-}
-
-function TimeframeSelector({
-    selected,
-    onSelect,
-    customStart,
-    customEnd,
-    onCustomStartChange,
-    onCustomEndChange,
-    showCustomPicker,
-    onToggleCustomPicker,
-}: TimeframeSelectorProps) {
-    return (
-        <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap gap-2">
-                {timeframeOptions.map((option) => (
-                    <button
-                        key={option.id}
-                        onClick={() => {
-                            onSelect(option.id);
-                            if (option.id === 'custom') {
-                                onToggleCustomPicker();
-                            }
-                        }}
-                        className={`flex items-center gap-1.5 rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${selected === option.id
-                            ? 'bg-red-500 text-white'
-                            : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-white'
-                            }`}
-                    >
-                        {option.id === 'custom' && <Calendar className="h-3.5 w-3.5" />}
-                        {option.label}
-                    </button>
-                ))}
-            </div>
-
-            {/* Custom Date Picker */}
-            {selected === 'custom' && showCustomPicker && (
-                <div className="flex flex-wrap items-center gap-3 rounded-lg bg-slate-800/50 p-3">
-                    <div className="flex items-center gap-2">
-                        <label className="text-sm text-slate-400">From:</label>
-                        <input
-                            type="date"
-                            value={customStart}
-                            onChange={(e) => onCustomStartChange(e.target.value)}
-                            className="rounded-lg border border-slate-600 bg-slate-700 px-3 py-1.5 text-sm text-white focus:border-red-500 focus:outline-none"
-                        />
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <label className="text-sm text-slate-400">To:</label>
-                        <input
-                            type="date"
-                            value={customEnd}
-                            onChange={(e) => onCustomEndChange(e.target.value)}
-                            className="rounded-lg border border-slate-600 bg-slate-700 px-3 py-1.5 text-sm text-white focus:border-red-500 focus:outline-none"
-                        />
-                    </div>
-                </div>
-            )}
         </div>
     );
 }

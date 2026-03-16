@@ -30,6 +30,17 @@ import {
 } from '@/lib/charging/teslaSync';
 import { fetchCachedJson, invalidateCachedJsonMatching, readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
 import VirtualizedList from '@/components/VirtualizedList';
+import {
+    DashboardStatCard,
+    EmptyStateCard,
+    LIST_CARD_CLASS,
+    PageHero,
+    PageShell,
+    SectionDateHeader,
+    StatusBadge,
+    SUBCARD_CLASS,
+    TimeframeSelector,
+} from '@/components/ui/dashboardPage';
 
 const TripMiniMap = dynamic(() => import('@/components/TripMiniMap'), {
     ssr: false,
@@ -73,23 +84,22 @@ type GeocodeResult = {
     fallback?: string;
 };
 
-interface TimeframeSelectorProps {
-    selected: string;
-    onSelect: (value: string) => void;
-    customStart: string;
-    customEnd: string;
-    onCustomStartChange: (value: string) => void;
-    onCustomEndChange: (value: string) => void;
-    showCustomPicker: boolean;
-    onToggleCustomPicker: () => void;
-}
-
 const CHARGING_PAGE_SIZE = 20;
 const CHARGING_AUTOLOAD_ROOT_MARGIN = '640px 0px';
 const CHARGING_LABEL_FETCH_ROOT_MARGIN = '320px';
 const CHARGING_BOOTSTRAP_CACHE_TTL_MS = 45_000;
 const chargingLocationLabelCache = new Map<string, string>();
 const chargingLocationLabelRequestCache = new Map<string, Promise<string>>();
+const timeframeOptions = [
+    { id: 'week', label: 'This Week' },
+    { id: '7days', label: 'Last 7 Days' },
+    { id: 'month', label: 'This Month' },
+    { id: '30days', label: 'Last 30 Days' },
+    { id: '3months', label: 'Last 3 Months' },
+    { id: 'year', label: 'This Year' },
+    { id: 'alltime', label: 'All Time' },
+    { id: 'custom', label: 'Custom' },
+];
 
 type ChargingListResponse = {
     success?: boolean;
@@ -575,55 +585,60 @@ export default function ChargingPage() {
                 </div>
             )}
 
-            <main className="mx-auto max-w-7xl px-6 py-8">
-                <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                        <h1 className="text-2xl font-bold">Charging History</h1>
-                        <p className="text-slate-400">View and manage your charging sessions</p>
-                    </div>
+            <PageShell>
+                <PageHero
+                    title="Charging History"
+                    description="Charging sessions, delivered energy, peak rate, and cost across the selected timeframe."
+                    actions={
+                        <TimeframeSelector
+                            options={timeframeOptions}
+                            selected={timeframe}
+                            onSelect={setTimeframe}
+                            customStart={customStart}
+                            customEnd={customEnd}
+                            onCustomStartChange={setCustomStart}
+                            onCustomEndChange={setCustomEnd}
+                            showCustomPicker={showCustomPicker}
+                            onToggleCustomPicker={() => setShowCustomPicker(!showCustomPicker)}
+                        />
+                    }
+                />
 
-                    <TimeframeSelector
-                        selected={timeframe}
-                        onSelect={setTimeframe}
-                        customStart={customStart}
-                        customEnd={customEnd}
-                        onCustomStartChange={setCustomStart}
-                        onCustomEndChange={setCustomEnd}
-                        showCustomPicker={showCustomPicker}
-                        onToggleCustomPicker={() => setShowCustomPicker(!showCustomPicker)}
-                    />
-                </div>
-
-                <div className="mb-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-                    <StatCard
+                <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+                    <DashboardStatCard
                         icon={<Zap className="h-5 w-5" />}
                         label="Total Sessions"
                         value={totalSessions.toString()}
-                        color="blue"
+                        helper="Charging sessions recorded in the active period."
+                        tone="brand"
                     />
-                    <StatCard
+                    <DashboardStatCard
                         icon={<Battery className="h-5 w-5" />}
                         label="Energy to Battery"
                         value={`${totalBatteryEnergy.toFixed(1)} kWh`}
-                        color="green"
+                        helper="Estimated energy stored in the battery."
+                        tone="live"
                     />
-                    <StatCard
+                    <DashboardStatCard
                         icon={<Zap className="h-5 w-5" />}
                         label="Tesla Delivered"
                         value={totalDeliveredEnergy > 0 ? `${totalDeliveredEnergy.toFixed(1)} kWh` : '--'}
-                        color="purple"
+                        helper="Delivered energy where charger-side telemetry is available."
+                        tone="quiet"
                     />
-                    <StatCard
+                    <DashboardStatCard
                         icon={<Zap className="h-5 w-5" />}
                         label="Max Charge Rate"
                         value={maxChargeRate > 0 ? `${maxChargeRate.toFixed(0)} kW` : '--'}
-                        color="orange"
+                        helper="Highest observed charge rate across visible sessions."
+                        tone="warning"
                     />
-                    <StatCard
+                    <DashboardStatCard
                         icon={<Banknote className="h-5 w-5" />}
                         label="Total Cost"
                         value={`${totalCost.toFixed(2)} ${preferredCurrency}`}
-                        color="purple"
+                        helper="Visible total using Tesla billing or manual cost entries."
+                        tone="quiet"
                     />
                 </div>
 
@@ -632,29 +647,29 @@ export default function ChargingPage() {
                         <Loader2 className="h-8 w-8 animate-spin text-red-500" />
                     </div>
                 ) : error ? (
-                    <div className="rounded-xl bg-red-500/10 p-6 text-center text-red-400">{error}</div>
+                    <div className="mb-6 rounded-2xl border border-red-500/20 bg-red-500/10 px-5 py-4 text-sm text-red-300">{error}</div>
                 ) : displayedSessions.length === 0 ? (
-                    <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-12 text-center">
-                        <History className="mx-auto mb-4 h-12 w-12 text-slate-500" />
-                        <h2 className="mb-2 text-xl font-semibold">No charging yet</h2>
-                        <p className="text-slate-400">Charging sessions will appear here automatically.</p>
-                    </div>
+                    <EmptyStateCard
+                        icon={<History className="h-7 w-7" />}
+                        title="No charging yet"
+                        description="Charging sessions will appear here automatically."
+                    />
                 ) : (
                     <>
                         <VirtualizedList
                             key={`charging:${virtualChargingListItems[0]?.key || 'empty'}:${virtualChargingListItems[virtualChargingListItems.length - 1]?.key || 'empty'}:${virtualChargingListItems.length}`}
                             items={virtualChargingListItems}
                             getItemKey={(item) => item.key}
-                            estimateHeight={(item) => item.type === 'header' ? 40 : 176}
+                            estimateHeight={(item) => item.type === 'header' ? 40 : 196}
                             overscanPx={1000}
                             renderItem={(item) => (
                                 item.type === 'header' ? (
-                                    <div className="flex items-center gap-2 pb-3 text-sm text-slate-400">
+                                    <SectionDateHeader>
                                         <Calendar className="h-4 w-4" />
                                         {item.label}
-                                    </div>
+                                    </SectionDateHeader>
                                 ) : (
-                                    <div className="pb-3">
+                                    <div className="pb-4">
                                         <SessionCard
                                             session={item.session}
                                             preferredCurrency={preferredCurrency}
@@ -671,14 +686,14 @@ export default function ChargingPage() {
                         />
 
                         {nextOffset !== null && (
-                            <div ref={autoLoadTriggerRef} className="mt-8 flex justify-center py-4">
+                            <div ref={autoLoadTriggerRef} className="mt-6 flex justify-center py-4">
                                 {loadingMore ? (
                                     <div className="flex items-center gap-2 text-sm text-slate-400">
                                         <Loader2 className="h-4 w-4 animate-spin" />
                                         Loading more sessions...
                                     </div>
                                 ) : (
-                                    <div className="text-xs text-slate-600">
+                                    <div className="text-xs text-slate-500">
                                         Scroll for more sessions
                                     </div>
                                 )}
@@ -686,7 +701,7 @@ export default function ChargingPage() {
                         )}
                     </>
                 )}
-            </main>
+            </PageShell>
         </div>
     );
 }
@@ -775,11 +790,11 @@ function SessionCard({
         <div ref={cardRef}>
             <Link
                 href={`/dashboard/charging/${session.id}`}
-                className="block rounded-xl border border-slate-700/50 bg-slate-800/30 p-4 transition-all hover:border-slate-600 hover:bg-slate-800/50"
+                className={LIST_CARD_CLASS}
             >
-                <div className="flex items-stretch gap-4">
+                <div className="flex items-stretch gap-5">
                     {hasLocation && (
-                        <div className="relative hidden h-24 w-32 flex-shrink-0 overflow-hidden rounded-lg border border-slate-600/50 sm:block">
+                        <div className={`relative hidden h-28 w-36 flex-shrink-0 overflow-hidden sm:block ${SUBCARD_CLASS}`}>
                             <TripMiniMap
                                 startLat={session.latitude!}
                                 startLon={session.longitude!}
@@ -792,27 +807,27 @@ function SessionCard({
                     <div className="flex flex-1 flex-col justify-between">
                         <div className="flex items-start justify-between">
                             <div>
-                                <div className="flex items-center gap-2">
-                                    <span className="font-medium">
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <span className="text-base font-semibold text-white">
                                         {displayLocationLabel}
                                     </span>
                                     {isSupercharger && (
-                                        <span className="rounded-full border border-red-500/20 bg-red-500/20 px-2 py-0.5 text-xs font-medium text-red-500">
+                                        <StatusBadge tone="brand" className="py-1 text-xs">
                                             Supercharger
-                                        </span>
+                                        </StatusBadge>
                                     )}
                                     {!isSupercharger && isDC && (
-                                        <span className="rounded-full border border-orange-500/20 bg-orange-500/20 px-2 py-0.5 text-xs font-medium text-orange-400">
+                                        <StatusBadge tone="warning" className="py-1 text-xs">
                                             DC Fast
-                                        </span>
+                                        </StatusBadge>
                                     )}
                                     {!session.is_complete && (
-                                        <span className="animate-pulse rounded-full bg-green-500/20 px-2 py-0.5 text-xs font-medium text-green-400">
+                                        <StatusBadge tone="live" className="py-1 text-xs">
                                             Charging...
-                                        </span>
+                                        </StatusBadge>
                                     )}
                                 </div>
-                                <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-slate-400">
+                                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-slate-400">
                                     <span className="flex items-center gap-1">
                                         <Clock className="h-3 w-3" />
                                         {formatTime(session.start_time)}
@@ -892,11 +907,10 @@ function SessionCard({
                     </div>
                 </div>
 
-                {/* Battery bar - separate full-width row */}
                 {session.start_battery_pct != null && (
-                    <div className="mt-4 flex items-center gap-4 border-t border-slate-700/50 pt-3">
+                    <div className="mt-5 border-t border-slate-700/50 pt-4">
                         <div className="flex flex-1 items-center gap-3">
-                            <div className="text-sm font-medium">Battery</div>
+                            <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">Battery</div>
                             <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-slate-700">
                                 <div
                                     className="absolute left-0 top-0 h-full bg-slate-500"
@@ -912,7 +926,7 @@ function SessionCard({
                                     />
                                 )}
                             </div>
-                            <div className="whitespace-nowrap font-mono text-sm text-slate-400">
+                            <div className="whitespace-nowrap text-sm font-medium text-slate-300">
                                 {session.start_battery_pct.toFixed(2)}%
                                 {session.end_battery_pct != null ? ` → ${session.end_battery_pct.toFixed(2)}%` : ''}
                             </div>
@@ -920,52 +934,6 @@ function SessionCard({
                     </div>
                 )}
             </Link>
-        </div>
-    );
-}
-
-function StatCard({ icon, label, value, color }: { icon: React.ReactNode; label: string; value: string; color: 'blue' | 'green' | 'purple' | 'orange'; }) {
-    const colors = {
-        blue: 'bg-blue-500/10 text-blue-400',
-        green: 'bg-green-500/10 text-green-400',
-        purple: 'bg-purple-500/10 text-purple-400',
-        orange: 'bg-orange-500/10 text-orange-400',
-    };
-    return (
-        <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
-            <div className={`mb-3 inline-flex rounded-lg p-2 ${colors[color]}`}>{icon}</div>
-            <p className="text-sm text-slate-400">{label}</p>
-            <p className="text-xl font-bold truncate">{value}</p>
-        </div>
-    );
-}
-
-// Reuse the TimeframeSelector from Trips page (simplified here for brevity, usually extracted to a component)
-function TimeframeSelector({ selected, onSelect, customStart, customEnd, onCustomStartChange, onCustomEndChange, showCustomPicker, onToggleCustomPicker }: TimeframeSelectorProps) {
-    const options = [
-        { id: 'week', label: 'This Week' }, { id: '7days', label: 'Last 7 Days' },
-        { id: 'month', label: 'This Month' }, { id: '30days', label: 'Last 30 Days' },
-        { id: '3months', label: 'Last 3 Months' }, { id: 'year', label: 'This Year' }, { id: 'alltime', label: 'All Time' }, { id: 'custom', label: 'Custom' },
-    ];
-    return (
-        <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-                {options.map((opt) => (
-                    <button
-                        key={opt.id}
-                        onClick={() => { onSelect(opt.id); if (opt.id === 'custom') onToggleCustomPicker(); }}
-                        className={`flex items-center gap-1.5 rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${selected === opt.id ? 'bg-red-500 text-white' : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'}`}
-                    >
-                        {opt.id === 'custom' && <Calendar className="h-3.5 w-3.5" />} {opt.label}
-                    </button>
-                ))}
-            </div>
-            {selected === 'custom' && showCustomPicker && (
-                <div className="flex gap-3 rounded-lg bg-slate-800/50 p-3">
-                    <input type="date" value={customStart} onChange={(e) => onCustomStartChange(e.target.value)} className="rounded-lg border border-slate-600 bg-slate-700 px-3 py-1.5 text-sm" />
-                    <input type="date" value={customEnd} onChange={(e) => onCustomEndChange(e.target.value)} className="rounded-lg border border-slate-600 bg-slate-700 px-3 py-1.5 text-sm" />
-                </div>
-            )}
         </div>
     );
 }

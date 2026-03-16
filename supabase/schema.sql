@@ -676,6 +676,67 @@ $$;
 ALTER FUNCTION "public"."get_trip_list_summary"("p_from" timestamp with time zone, "p_to" timestamp with time zone, "p_vehicle_id" "text") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."get_trip_speed_metrics"("p_trip_id" "uuid") RETURNS TABLE("max_speed_mph" numeric, "avg_speed_mph" numeric)
+    LANGUAGE "sql" STABLE
+    SET "search_path" TO 'public'
+    AS $$
+    WITH trip_row AS (
+        SELECT
+            t.id,
+            t.vin,
+            t.start_time,
+            COALESCE(t.end_time, NOW()) AS end_time
+        FROM public.trips t
+        WHERE t.id = p_trip_id
+        LIMIT 1
+    ),
+    telemetry_samples AS (
+        SELECT
+            tr.timestamp,
+            MAX(
+                CASE
+                    WHEN item->>'key' = 'VehicleSpeed'
+                        THEN COALESCE(
+                            (item->'value'->>'doubleValue')::numeric,
+                            (item->'value'->>'intValue')::numeric
+                        )
+                    ELSE NULL
+                END
+            ) AS speed_mph
+        FROM trip_row t
+        JOIN public.telemetry_raw tr
+          ON tr.vin = t.vin
+         AND tr.timestamp >= t.start_time
+         AND tr.timestamp <= t.end_time
+        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(tr.payload->'data', '[]'::jsonb)) AS item
+        GROUP BY tr.timestamp
+    ),
+    telemetry_stats AS (
+        SELECT
+            MAX(speed_mph)::numeric AS max_speed_mph,
+            AVG(speed_mph)::numeric AS avg_speed_mph
+        FROM telemetry_samples
+        WHERE speed_mph IS NOT NULL
+    ),
+    waypoint_stats AS (
+        SELECT
+            MAX(tw.speed_mph)::numeric AS max_speed_mph,
+            AVG(tw.speed_mph)::numeric AS avg_speed_mph
+        FROM public.trip_waypoints tw
+        WHERE tw.trip_id = p_trip_id
+          AND tw.speed_mph IS NOT NULL
+    )
+    SELECT
+        COALESCE(telemetry_stats.max_speed_mph, waypoint_stats.max_speed_mph) AS max_speed_mph,
+        COALESCE(telemetry_stats.avg_speed_mph, waypoint_stats.avg_speed_mph) AS avg_speed_mph
+    FROM telemetry_stats
+    CROSS JOIN waypoint_stats;
+$$;
+
+
+ALTER FUNCTION "public"."get_trip_speed_metrics"("p_trip_id" "uuid") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."handle_new_user"() RETURNS "trigger"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'public'
@@ -1316,6 +1377,101 @@ ALTER FUNCTION "public"."reconcile_stale_charging_sessions"("p_stale_after" inte
 
 COMMENT ON FUNCTION "public"."reconcile_stale_charging_sessions"("p_stale_after" interval) IS 'Closes open charging_sessions when telemetry indicates charging stopped or the latest vehicle_status becomes stale.';
 
+
+
+CREATE OR REPLACE FUNCTION "public"."sync_trip_speed_metrics_on_completion"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public'
+    AS $$
+BEGIN
+    IF NEW.is_complete IS TRUE
+       AND (
+           COALESCE(OLD.is_complete, false) IS DISTINCT FROM true
+           OR OLD.end_time IS DISTINCT FROM NEW.end_time
+       ) THEN
+        SELECT metrics.max_speed_mph, metrics.avg_speed_mph
+        INTO NEW.max_speed_mph, NEW.avg_speed_mph
+        FROM public.get_trip_speed_metrics(NEW.id) AS metrics;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."sync_trip_speed_metrics_on_completion"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."sync_vehicle_charge_limit_from_telemetry"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public'
+    AS $$
+DECLARE
+    _entry jsonb;
+    _value_obj jsonb;
+    _charge_limit_soc integer;
+BEGIN
+    IF NEW.payload->'data' IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    FOR _entry IN SELECT * FROM jsonb_array_elements(NEW.payload->'data')
+    LOOP
+        IF _entry->>'key' = 'ChargeLimitSoc' THEN
+            _value_obj := _entry->'value';
+            _charge_limit_soc := COALESCE(
+                (_value_obj->>'intValue')::numeric,
+                (_value_obj->>'doubleValue')::numeric,
+                NULLIF(_value_obj->>'stringValue', '')::numeric
+            )::integer;
+
+            UPDATE public.vehicle_status
+            SET charge_limit_soc = _charge_limit_soc
+            WHERE vin = NEW.vin;
+
+            EXIT;
+        END IF;
+    END LOOP;
+
+    RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."sync_vehicle_charge_limit_from_telemetry"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."sync_vehicle_state_from_telemetry"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    SET "search_path" TO 'public'
+    AS $$
+DECLARE
+    _charge_state text;
+    _shift_state text;
+    _speed numeric;
+    _state text;
+BEGIN
+    SELECT charge_state, shift_state, speed
+    INTO _charge_state, _shift_state, _speed
+    FROM public.vehicle_status
+    WHERE vin = NEW.vin;
+
+    _state := CASE
+        WHEN _shift_state IN ('D', 'R') OR COALESCE(_speed, 0) > 0 THEN 'driving'
+        WHEN _charge_state IN ('Charging', 'Starting') THEN 'charging'
+        ELSE 'parked'
+    END;
+
+    UPDATE public.vehicle_status
+    SET state = _state
+    WHERE vin = NEW.vin;
+
+    RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."sync_vehicle_state_from_telemetry"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."update_updated_at_column"() RETURNS "trigger"
@@ -1968,7 +2124,9 @@ CREATE TABLE IF NOT EXISTS "public"."vehicle_status" (
     "home_address" "text",
     "current_charging_session_id" "uuid",
     "home_latitude" numeric,
-    "home_longitude" numeric
+    "home_longitude" numeric,
+    "charge_limit_soc" integer,
+    "state" "text"
 );
 
 
@@ -2180,6 +2338,18 @@ CREATE OR REPLACE TRIGGER "enqueue_supercharger_tesla_sync_job" AFTER INSERT OR 
 
 
 CREATE OR REPLACE TRIGGER "trigger_process_telemetry" AFTER INSERT ON "public"."telemetry_raw" FOR EACH ROW EXECUTE FUNCTION "public"."process_telemetry"();
+
+
+
+CREATE OR REPLACE TRIGGER "trigger_sync_trip_speed_metrics_on_completion" BEFORE UPDATE ON "public"."trips" FOR EACH ROW WHEN (("new"."is_complete" IS TRUE)) EXECUTE FUNCTION "public"."sync_trip_speed_metrics_on_completion"();
+
+
+
+CREATE OR REPLACE TRIGGER "trigger_sync_vehicle_charge_limit_from_telemetry" AFTER INSERT ON "public"."telemetry_raw" FOR EACH ROW EXECUTE FUNCTION "public"."sync_vehicle_charge_limit_from_telemetry"();
+
+
+
+CREATE OR REPLACE TRIGGER "trigger_sync_vehicle_state_from_telemetry" AFTER INSERT ON "public"."telemetry_raw" FOR EACH ROW EXECUTE FUNCTION "public"."sync_vehicle_state_from_telemetry"();
 
 
 
@@ -2558,6 +2728,12 @@ GRANT ALL ON FUNCTION "public"."get_trip_list_summary"("p_from" timestamp with t
 
 
 
+GRANT ALL ON FUNCTION "public"."get_trip_speed_metrics"("p_trip_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."get_trip_speed_metrics"("p_trip_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."get_trip_speed_metrics"("p_trip_id" "uuid") TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."handle_new_user"() TO "anon";
 GRANT ALL ON FUNCTION "public"."handle_new_user"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."handle_new_user"() TO "service_role";
@@ -2573,6 +2749,24 @@ GRANT ALL ON FUNCTION "public"."process_telemetry"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."reconcile_stale_charging_sessions"("p_stale_after" interval) TO "anon";
 GRANT ALL ON FUNCTION "public"."reconcile_stale_charging_sessions"("p_stale_after" interval) TO "authenticated";
 GRANT ALL ON FUNCTION "public"."reconcile_stale_charging_sessions"("p_stale_after" interval) TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."sync_trip_speed_metrics_on_completion"() TO "anon";
+GRANT ALL ON FUNCTION "public"."sync_trip_speed_metrics_on_completion"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."sync_trip_speed_metrics_on_completion"() TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."sync_vehicle_charge_limit_from_telemetry"() TO "anon";
+GRANT ALL ON FUNCTION "public"."sync_vehicle_charge_limit_from_telemetry"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."sync_vehicle_charge_limit_from_telemetry"() TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."sync_vehicle_state_from_telemetry"() TO "anon";
+GRANT ALL ON FUNCTION "public"."sync_vehicle_state_from_telemetry"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."sync_vehicle_state_from_telemetry"() TO "service_role";
 
 
 

@@ -44,7 +44,7 @@ interface VehicleData {
   battery_level: number;
   battery_range: number;
   charging_state: string;
-  charge_limit_soc: number;
+  charge_limit_soc: number | null;
   charge_rate: number;
   charger_power: number;
   time_to_full_charge: number;
@@ -167,6 +167,37 @@ function getChargingStateLabel(chargingState: string) {
   }
 
   return chargingState;
+}
+
+function clampPercent(value: number) {
+  return Math.min(100, Math.max(0, Math.round(value)));
+}
+
+function formatVehicleStateLabel(state: string) {
+  const normalized = state.trim().toLowerCase();
+
+  switch (normalized) {
+    case 'charging':
+      return { label: 'Charging', tone: 'live' as const };
+    case 'driving':
+      return { label: 'Driving', tone: 'live' as const };
+    case 'parked':
+      return { label: 'Parked', tone: 'quiet' as const };
+    case 'online':
+      return { label: 'Online', tone: 'live' as const };
+    case 'offline':
+      return { label: 'Offline', tone: 'danger' as const };
+    case 'asleep':
+    case 'sleeping':
+      return { label: 'Sleeping', tone: 'quiet' as const };
+    default:
+      return {
+        label: state
+          .replace(/[_-]+/g, ' ')
+          .replace(/\b\w/g, (char) => char.toUpperCase()),
+        tone: 'quiet' as const,
+      };
+  }
 }
 
 export default function DashboardClient({
@@ -561,10 +592,7 @@ export default function DashboardClient({
   })();
 
   const titleStatusMeta = displayData?.state
-    ? {
-      label: `Vehicle ${displayData.state}`,
-      tone: 'quiet' as const,
-    }
+    ? formatVehicleStateLabel(displayData.state)
     : {
       label: vehicleStatusMeta.label,
       tone: vehicleStatusMeta.tone,
@@ -591,9 +619,13 @@ export default function DashboardClient({
       isOpen: entry.windowState !== 'Closed',
     }));
 
-  const batteryLevelPercent = displayData ? Math.round(displayData.battery_level) : 0;
-  const chargeLimitPercent = displayData ? displayData.charge_limit_soc : 0;
-  const chargeLimitDeltaPercent = Math.max(0, chargeLimitPercent - batteryLevelPercent);
+  const batteryLevelPercent = displayData ? clampPercent(displayData.battery_level) : 0;
+  const chargeLimitPercent = displayData?.charge_limit_soc;
+  const hasChargeLimit = typeof chargeLimitPercent === 'number' && Number.isFinite(chargeLimitPercent);
+  const clampedChargeLimitPercent = hasChargeLimit ? clampPercent(chargeLimitPercent) : null;
+  const chargeLimitDeltaPercent = clampedChargeLimitPercent === null
+    ? 0
+    : Math.max(0, clampedChargeLimitPercent - batteryLevelPercent);
 
   useEffect(() => {
     if (
@@ -816,15 +848,17 @@ export default function DashboardClient({
                     </div>
 
                     <div className="relative h-4 w-full overflow-hidden rounded-full bg-slate-700/75">
-                      <div
-                        className="absolute left-0 top-0 h-full rounded-full bg-slate-500/55"
-                        style={{ width: `${chargeLimitPercent}%` }}
-                      />
+                      {clampedChargeLimitPercent !== null && (
+                        <div
+                          className="absolute left-0 top-0 h-full rounded-full bg-slate-500/55"
+                          style={{ width: `${clampedChargeLimitPercent}%` }}
+                        />
+                      )}
                       <div
                         className={`h-full rounded-full transition-all ${Math.round(displayData.battery_level) > 20 ? 'bg-green-500' : 'bg-red-500'}`}
                         style={{ width: `${batteryLevelPercent}%` }}
                       />
-                      {chargeLimitDeltaPercent > 0 && (
+                      {clampedChargeLimitPercent !== null && chargeLimitDeltaPercent > 0 && (
                         <div
                           className="absolute top-0 h-full bg-slate-500/55"
                           style={{
@@ -833,10 +867,12 @@ export default function DashboardClient({
                           }}
                         />
                       )}
-                      <div
-                        className="absolute inset-y-[-2px] z-10 w-px bg-slate-100/80"
-                        style={{ left: `${chargeLimitPercent}%` }}
-                      />
+                      {clampedChargeLimitPercent !== null && (
+                        <div
+                          className="absolute inset-y-[-2px] z-10 w-px bg-slate-100/80"
+                          style={{ left: `${clampedChargeLimitPercent}%` }}
+                        />
+                      )}
                     </div>
                     <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-300">
                       <span className={displayData.charging_state === 'Charging'
@@ -846,7 +882,9 @@ export default function DashboardClient({
                         {displayData.charging_state === 'Charging' ? 'Charging' : getChargingStateLabel(displayData.charging_state)}
                       </span>
                       <span className={SUBDUED_BADGE_CLASS}>
-                        Charge limit {chargeLimitPercent}%
+                        {clampedChargeLimitPercent !== null
+                          ? `Charge limit ${clampedChargeLimitPercent}%`
+                          : 'Charge limit unavailable'}
                       </span>
                     </div>
                   </div>

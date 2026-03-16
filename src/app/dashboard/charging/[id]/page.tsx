@@ -33,6 +33,13 @@ import {
     isSuperchargerChargingSession,
 } from '@/lib/charging/teslaSync';
 import { invalidateCachedJsonMatching, readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
+import {
+    PageHero,
+    PageShell,
+    StatusBadge,
+    SUBCARD_CLASS,
+    SURFACE_CARD_CLASS,
+} from '@/components/ui/dashboardPage';
 
 const TripDetailMap = dynamic(() => import('@/components/TripDetailMap'), {
     loading: () => <div className="h-96 w-full animate-pulse rounded-xl bg-slate-800" />,
@@ -250,19 +257,20 @@ export default function ChargingDetailPage() {
 
     if (error || !session) {
         return (
-            <div className="min-h-screen p-8">
-                <div className="mx-auto max-w-4xl">
+            <div className="min-h-screen">
+                <Header />
+                <PageShell>
                     <Link
                         href="/dashboard/charging"
-                        className="inline-flex items-center gap-2 text-slate-400 hover:text-white"
+                        className="inline-flex items-center gap-2 text-slate-400 transition-colors hover:text-white"
                     >
                         <ArrowLeft className="h-4 w-4" />
                         Back to Charging History
                     </Link>
-                    <div className="mt-8 rounded-xl border border-slate-700/50 bg-slate-800/30 p-8 text-center">
+                    <div className={`mt-8 p-8 text-center ${SURFACE_CARD_CLASS}`}>
                         <p className="text-slate-400">{error || 'Session not found'}</p>
                     </div>
-                </div>
+                </PageShell>
             </div>
         );
     }
@@ -340,57 +348,48 @@ export default function ChargingDetailPage() {
                 </div>
             )}
 
-            <main className="mx-auto max-w-7xl px-6 pb-24 pt-8 md:pb-8">
-                <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                        <div className="mb-2">
-                            <Link
-                                href="/dashboard/charging"
-                                className="inline-flex items-center gap-2 text-sm text-slate-400 hover:text-white transition-colors"
-                            >
-                                <ArrowLeft className="h-4 w-4" />
-                                Back to Charging
-                            </Link>
-                        </div>
-                        <div className="flex items-center gap-3">
-                            <h1 className="text-2xl font-bold">Charging Details</h1>
-                            {isSupercharger && (
-                                <span className="rounded-full bg-red-500/20 px-2.5 py-0.5 text-xs font-medium text-red-500 border border-red-500/20">
-                                    Supercharger
-                                </span>
-                            )}
-                            {!isSupercharger && isDC && (
-                                <span className="rounded-full bg-orange-500/20 px-2.5 py-0.5 text-xs font-medium text-orange-400 border border-orange-500/20">
-                                    DC Fast
-                                </span>
-                            )}
-                        </div>
-                        <p className="text-slate-400 mt-1">
-                            {address || (!hasCoords ? 'Unknown Location' : 'Loading location...')}
-                        </p>
-                    </div>
-
-                    {canUseManualCost && (
-                        <button
-                            onClick={() => {
-                                setCostInput((session.cost_user_entered ?? displayCost)?.toString() || '');
-                                setCurrencyInput(session.currency || preferredCurrency);
-                                setIsEditingCost(true);
-                            }}
-                            className="flex items-center gap-2 rounded-lg bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 border border-slate-700"
+            <PageShell>
+                <PageHero
+                    title="Charging Details"
+                    description={address || (!hasCoords ? 'Unknown location' : 'Loading location...')}
+                    badge={
+                        isSupercharger ? (
+                            <StatusBadge tone="brand">Supercharger</StatusBadge>
+                        ) : !isSupercharger && isDC ? (
+                            <StatusBadge tone="warning">DC Fast</StatusBadge>
+                        ) : undefined
+                    }
+                    meta={
+                        <Link
+                            href="/dashboard/charging"
+                            className="inline-flex items-center gap-2 text-sm text-slate-400 transition-colors hover:text-white"
                         >
-                            <Banknote className="h-4 w-4" />
-                            {session.cost_user_entered != null ? 'Edit Manual Cost' : 'Add Manual Cost'}
-                        </button>
-                    )}
-                </div>
+                            <ArrowLeft className="h-4 w-4" />
+                            Back to Charging
+                        </Link>
+                    }
+                    actions={
+                        canUseManualCost ? (
+                            <button
+                                onClick={() => {
+                                    setCostInput((session.cost_user_entered ?? displayCost)?.toString() || '');
+                                    setCurrencyInput(session.currency || preferredCurrency);
+                                    setIsEditingCost(true);
+                                }}
+                                className="flex items-center gap-2 rounded-2xl border border-slate-700/50 bg-slate-900/25 px-4 py-2 text-sm font-medium text-white transition-colors hover:border-slate-600 hover:bg-slate-800/50"
+                            >
+                                <Banknote className="h-4 w-4" />
+                                {session.cost_user_entered != null ? 'Edit Manual Cost' : 'Add Manual Cost'}
+                            </button>
+                        ) : undefined
+                    }
+                />
 
-                {/* Map Section */}
                 {hasCoords && (
-                    <div className="mb-8 overflow-hidden rounded-xl border border-slate-700/50 relative">
+                    <section className={`relative mb-6 overflow-hidden p-4 ${SURFACE_CARD_CLASS}`}>
                         <ViewportGate
                             className="h-96 w-full"
-                            placeholder={<div className="h-96 w-full animate-pulse rounded-xl bg-slate-800" />}
+                            placeholder={<div className={`h-96 w-full animate-pulse ${SUBCARD_CLASS}`} />}
                         >
                             <TripDetailMap
                                 startLat={session.latitude!}
@@ -399,12 +398,10 @@ export default function ChargingDetailPage() {
                                 endLng={session.longitude!}
                             />
                         </ViewportGate>
-                    </div>
+                    </section>
                 )}
 
-                {/* Charging Info Grid */}
-                <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-                    {/* Time & Date */}
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                     <StatBox
                         icon={<Calendar className="h-5 w-5" />}
                         label="Started"
@@ -536,7 +533,7 @@ export default function ChargingDetailPage() {
                         />
                     )}
                 </div>
-            </main>
+            </PageShell>
         </div>
     );
 }
@@ -555,27 +552,27 @@ function StatBox({
     subtext?: string;
 }) {
     const colorClasses = {
-        blue: 'text-blue-400 bg-blue-500/10',
-        green: 'text-green-400 bg-green-500/10',
-        yellow: 'text-yellow-400 bg-yellow-500/10',
-        orange: 'text-orange-400 bg-orange-500/10',
-        red: 'text-red-400 bg-red-500/10',
-        purple: 'text-purple-400 bg-purple-500/10',
-        slate: 'text-slate-400 bg-slate-500/10',
+        blue: 'text-slate-300',
+        green: 'text-green-300',
+        yellow: 'text-amber-300',
+        orange: 'text-amber-300',
+        red: 'text-red-300',
+        purple: 'text-slate-300',
+        slate: 'text-slate-300',
     };
 
     return (
-        <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-6 flex flex-col justify-center">
-            <div className="flex items-center gap-3">
-                <div className={`p-2 rounded-lg ${colorClasses[color as keyof typeof colorClasses]?.split(' ')[1]}`}>
-                    <div className={colorClasses[color as keyof typeof colorClasses]?.split(' ')[0]}>
-                        {icon}
-                    </div>
+        <div className={`flex flex-col justify-center p-5 ${SURFACE_CARD_CLASS}`}>
+            <div className="flex items-center gap-4">
+                <div className={`flex h-11 w-11 items-center justify-center ${SUBCARD_CLASS} ${colorClasses[color as keyof typeof colorClasses]}`}>
+                    {icon}
                 </div>
-                <div>
-                    <div className="text-sm text-slate-400">{label}</div>
-                    <div className="text-lg font-semibold flex items-baseline gap-2">
-                        {value}
+                <div className="min-w-0">
+                    <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">{label}</div>
+                    <div className="mt-2 flex items-baseline gap-2">
+                        <div className="text-2xl font-semibold tracking-tight text-white">
+                            {value}
+                        </div>
                         {subtext && <span className="text-xs font-normal text-slate-500">{subtext}</span>}
                     </div>
                 </div>
@@ -595,19 +592,24 @@ function LocationCard({
     lon?: number | null;
     color: string;
 }) {
-    const colorClasses = {
-        blue: 'border-blue-500/30 bg-blue-500/10',
-        green: 'border-green-500/30 bg-green-500/10',
-        red: 'border-red-500/30 bg-red-500/10',
+    const toneMap = {
+        blue: 'quiet' as const,
+        green: 'live' as const,
+        red: 'brand' as const,
     };
 
     return (
-        <div className={`rounded-xl border p-6 flex flex-col justify-center ${colorClasses[color as keyof typeof colorClasses]}`}>
+        <div className={`flex flex-col justify-center p-6 ${SURFACE_CARD_CLASS}`}>
             <div className="flex items-start gap-3">
-                <MapPin className="h-5 w-5 text-slate-400 mt-0.5" />
+                <div className={`flex h-11 w-11 items-center justify-center ${SUBCARD_CLASS}`}>
+                    <MapPin className="mt-0.5 h-5 w-5 text-slate-300" />
+                </div>
                 <div className="flex-1">
-                    <h3 className="font-semibold text-sm">{title}</h3>
-                    <p className="mt-1 text-slate-300 font-mono text-sm tracking-tight break-all">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-sm font-semibold text-white">{title}</h3>
+                        <StatusBadge tone={toneMap[color as keyof typeof toneMap]}>Coordinates</StatusBadge>
+                    </div>
+                    <p className="mt-2 break-all font-mono text-sm tracking-tight text-slate-300">
                         {lat != null && lon != null ? `${lat.toFixed(5)}, ${lon.toFixed(5)}` : 'Unknown'}
                     </p>
                 </div>

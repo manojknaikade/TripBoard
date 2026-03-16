@@ -1,11 +1,9 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import Link from 'next/link';
 import {
     Zap,
     Battery,
-    Calendar,
     Loader2,
     Banknote,
     Activity
@@ -15,17 +13,13 @@ import AnalyticsChartsSkeleton from '@/components/analytics/AnalyticsChartsSkele
 import { fetchCachedJson, readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
 import { useSettingsStore } from '@/stores/settingsStore';
 import type { ChargingAnalyticsData } from '@/lib/analytics/types';
-
-interface TimeframeSelectorProps {
-    selected: string;
-    onSelect: (value: string) => void;
-    customStart: string;
-    customEnd: string;
-    onCustomStartChange: (value: string) => void;
-    onCustomEndChange: (value: string) => void;
-    showCustomPicker: boolean;
-    onToggleCustomPicker: () => void;
-}
+import {
+    AnalyticsTabs,
+    DashboardStatCard,
+    PageHero,
+    PageShell,
+    TimeframeSelector,
+} from '@/components/ui/dashboardPage';
 
 const ChargingAnalyticsCharts = dynamic(() => import('@/components/analytics/ChargingAnalyticsCharts'), {
     ssr: false,
@@ -34,6 +28,16 @@ const ChargingAnalyticsCharts = dynamic(() => import('@/components/analytics/Cha
 
 const ANALYTICS_CACHE_TTL_MS = 45_000;
 const DEFAULT_CHARGING_TIMEFRAME = '7days';
+const timeframeOptions = [
+    { id: 'week', label: 'This Week' },
+    { id: '7days', label: 'Last 7 Days' },
+    { id: 'month', label: 'This Month' },
+    { id: '30days', label: 'Last 30 Days' },
+    { id: '3months', label: 'Last 3 Months' },
+    { id: 'year', label: 'This Year' },
+    { id: 'alltime', label: 'All Time' },
+    { id: 'custom', label: 'Custom' },
+];
 
 function buildChargingAnalyticsUrl(timeframe: string, customStart: string, customEnd: string) {
     let url = `/api/analytics/summary?scope=charging&timeframe=${timeframe}`;
@@ -121,27 +125,24 @@ export default function ChargingAnalyticsClient({ initialData = null }: { initia
     };
 
     return (
-        <main className="mx-auto max-w-7xl px-6 py-8">
-            <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                    <h1 className="text-2xl font-bold flex items-center gap-2">
-                        <Zap className="h-6 w-6 text-yellow-500" />
-                        Charging Analytics
-                    </h1>
-                    <p className="text-slate-400">Insights into your charging costs and behavior</p>
-                </div>
-
-                <TimeframeSelector
-                    selected={timeframe}
-                    onSelect={setTimeframe}
-                    customStart={customStart}
-                    customEnd={customEnd}
-                    onCustomStartChange={setCustomStart}
-                    onCustomEndChange={setCustomEnd}
-                    showCustomPicker={showCustomPicker}
-                    onToggleCustomPicker={() => setShowCustomPicker(!showCustomPicker)}
-                />
-            </div>
+        <PageShell>
+            <PageHero
+                title="Charging Analytics"
+                description="Trends in charging energy, losses, source mix, and cost across the selected period."
+                actions={
+                    <TimeframeSelector
+                        options={timeframeOptions}
+                        selected={timeframe}
+                        onSelect={setTimeframe}
+                        customStart={customStart}
+                        customEnd={customEnd}
+                        onCustomStartChange={setCustomStart}
+                        onCustomEndChange={setCustomEnd}
+                        showCustomPicker={showCustomPicker}
+                        onToggleCustomPicker={() => setShowCustomPicker(!showCustomPicker)}
+                    />
+                }
+            />
 
             {loading && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50">
@@ -149,56 +150,50 @@ export default function ChargingAnalyticsClient({ initialData = null }: { initia
                 </div>
             )}
 
-            <div className="mb-8 flex gap-4 border-b border-slate-700/50 pb-4">
-                <Link href="/dashboard/analytics" className="text-sm font-medium text-slate-400 hover:text-white transition-colors">
-                    Driving Activity
-                </Link>
-                <span className="text-sm font-medium text-white border-b-2 border-red-500 pb-4 -mb-[18px]">
-                    Charging
-                </span>
-                <Link href="/dashboard/analytics/maintenance" className="text-sm font-medium text-slate-400 hover:text-white transition-colors">
-                    Maintenance
-                </Link>
-            </div>
+            <AnalyticsTabs activeHref="/dashboard/analytics/charging" />
 
-            <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-                <StatCard
+            <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+                <DashboardStatCard
                     icon={<Battery className="h-5 w-5" />}
                     label="Energy to Battery"
                     value={`${summary.totalChargingBatteryEnergy} kWh`}
-                    color="green"
+                    helper="Estimated energy stored in the battery."
+                    tone="live"
                 />
-                <StatCard
+                <DashboardStatCard
                     icon={<Zap className="h-5 w-5" />}
                     label="Energy Delivered"
                     value={`${summary.totalChargingDeliveredEnergy} kWh`}
-                    color="blue"
+                    helper="Charger-delivered energy reported by Tesla or source telemetry."
+                    tone="brand"
                 />
-                <StatCard
+                <DashboardStatCard
                     icon={<Activity className="h-5 w-5" />}
                     label="Charging Loss"
                     value={`${summary.totalChargingLossEnergy} kWh`}
-                    detail={`${summary.avgChargingLossPct.toFixed(1)}% of delivered`}
-                    color="orange"
+                    helper={`${summary.avgChargingLossPct.toFixed(1)}% of delivered energy`}
+                    tone="warning"
                 />
-                <StatCard
+                <DashboardStatCard
                     icon={<Banknote className="h-5 w-5" />}
                     label="Wasted Cost"
                     value={`${summary.totalChargingLossCost.toFixed(2)} ${preferredCurrency}`}
-                    color="purple"
+                    helper="Estimated cost associated with charging loss."
+                    tone="warning"
                 />
-                <StatCard
+                <DashboardStatCard
                     icon={<Banknote className="h-5 w-5" />}
                     label="Total Cost"
                     value={`${summary.totalChargingCost.toFixed(2)} ${preferredCurrency}`}
-                    detail={`${summary.avgCostPerKwh.toFixed(2)} ${preferredCurrency}/delivered kWh`}
-                    color="purple"
+                    helper={`${summary.avgCostPerKwh.toFixed(2)} ${preferredCurrency}/delivered kWh`}
+                    tone="quiet"
                 />
-                <StatCard
+                <DashboardStatCard
                     icon={<Zap className="h-5 w-5" />}
                     label="Sessions"
                     value={summary.chargingSessions.toString()}
-                    color="orange"
+                    helper="Charging sessions captured in the selected timeframe."
+                    tone="quiet"
                 />
             </div>
 
@@ -208,52 +203,6 @@ export default function ChargingAnalyticsClient({ initialData = null }: { initia
                 costBySource={data?.costBySource || []}
                 preferredCurrency={preferredCurrency}
             />
-        </main>
-    );
-}
-
-function StatCard({ icon, label, value, color, detail }: { icon: React.ReactNode; label: string; value: string; color: 'blue' | 'green' | 'purple' | 'orange'; detail?: string; }) {
-    const colors = {
-        blue: 'bg-blue-500/10 text-blue-400',
-        green: 'bg-green-500/10 text-green-400',
-        purple: 'bg-purple-500/10 text-purple-400',
-        orange: 'bg-orange-500/10 text-orange-400',
-    };
-    return (
-        <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-4">
-            <div className={`mb-3 inline-flex rounded-lg p-2 ${colors[color]}`}>{icon}</div>
-            <p className="text-sm text-slate-400">{label}</p>
-            <p className="text-2xl font-bold">{value}</p>
-            {detail && <p className="mt-1 text-xs text-slate-500">{detail}</p>}
-        </div>
-    );
-}
-
-function TimeframeSelector({ selected, onSelect, customStart, customEnd, onCustomStartChange, onCustomEndChange, showCustomPicker, onToggleCustomPicker }: TimeframeSelectorProps) {
-    const options = [
-        { id: 'week', label: 'This Week' }, { id: '7days', label: 'Last 7 Days' },
-        { id: 'month', label: 'This Month' }, { id: '30days', label: 'Last 30 Days' },
-        { id: '3months', label: 'Last 3 Months' }, { id: 'year', label: 'This Year' }, { id: 'alltime', label: 'All Time' }, { id: 'custom', label: 'Custom' },
-    ];
-    return (
-        <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-                {options.map((opt) => (
-                    <button
-                        key={opt.id}
-                        onClick={() => { onSelect(opt.id); if (opt.id === 'custom') onToggleCustomPicker(); }}
-                        className={`flex items-center gap-1.5 rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${selected === opt.id ? 'bg-red-500 text-white' : 'bg-slate-700/50 text-slate-400 hover:bg-slate-700'}`}
-                    >
-                        {opt.id === 'custom' && <Calendar className="h-3.5 w-3.5" />} {opt.label}
-                    </button>
-                ))}
-            </div>
-            {selected === 'custom' && showCustomPicker && (
-                <div className="flex gap-3 rounded-lg bg-slate-800/50 p-3">
-                    <input type="date" value={customStart} onChange={(e) => onCustomStartChange(e.target.value)} className="rounded-lg border border-slate-600 bg-slate-700 px-3 py-1.5 text-sm" />
-                    <input type="date" value={customEnd} onChange={(e) => onCustomEndChange(e.target.value)} className="rounded-lg border border-slate-600 bg-slate-700 px-3 py-1.5 text-sm" />
-                </div>
-            )}
-        </div>
+        </PageShell>
     );
 }

@@ -147,6 +147,7 @@ export async function POST(request: NextRequest) {
                 InsideTemp: { interval_seconds: 60 },
                 OutsideTemp: { interval_seconds: 60 },
                 DetailedChargeState: { interval_seconds: 10 },
+                ChargeLimitSoc: { interval_seconds: 60 },
                 FastChargerPresent: { interval_seconds: 10 },
                 FastChargerType: { interval_seconds: 10 },
                 LocatedAtHome: { interval_seconds: 10 },

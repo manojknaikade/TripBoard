@@ -2,6 +2,26 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { getTeslaSession } from '@/lib/tesla/auth-server'
 import { NextRequest, NextResponse } from 'next/server'
 
+const ACTIVE_CHARGING_STATES = new Set(['Charging', 'Starting'])
+
+function deriveTelemetryVehicleStateFallback(data: {
+    charge_state?: string | null
+    shift_state?: string | null
+    speed?: number | string | null
+}) {
+    const speed = Number(data.speed || 0)
+
+    if (data.shift_state === 'D' || data.shift_state === 'R' || speed > 0) {
+        return 'driving'
+    }
+
+    if (ACTIVE_CHARGING_STATES.has(data.charge_state || '')) {
+        return 'charging'
+    }
+
+    return 'parked'
+}
+
 export async function GET(request: NextRequest) {
     const session = await getTeslaSession(request)
     if (!session) {
@@ -32,13 +52,9 @@ export async function GET(request: NextRequest) {
         })
     }
 
-    // Calculate state based on shift and speed
-    let state = 'parked';
-    if (data.shift_state === 'D' || data.shift_state === 'R') {
-        state = 'driving';
-    } else if (data.shift_state === 'P' && (data.speed || 0) === 0) {
-        state = 'parked';
-    }
+    const state = typeof data.state === 'string' && data.state.length > 0
+        ? data.state
+        : deriveTelemetryVehicleStateFallback(data)
 
     // Transform to match the dashboard's expected format
     return NextResponse.json({
@@ -54,7 +70,7 @@ export async function GET(request: NextRequest) {
             battery_level: data.battery_level || 0,
             battery_range: Math.round(data.rated_range || data.est_battery_range || (data.battery_level || 0) * 4),
             charging_state: data.charge_state || 'Disconnected',
-            charge_limit_soc: 80,
+            charge_limit_soc: data.charge_limit_soc ?? null,
             charge_rate: 0,
             charger_power: data.charger_power || 0,
             time_to_full_charge: data.time_to_full_charge || 0,

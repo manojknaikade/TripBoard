@@ -11,6 +11,7 @@ import {
     YAxis,
 } from 'recharts';
 import { SERVICE_TYPE_OPTIONS, type MaintenanceServiceType, type TyreSeason } from '@/lib/maintenance';
+import { SUBCARD_CLASS, SURFACE_CARD_CLASS } from '@/components/ui/dashboardPage';
 
 type ActivityDatum = {
     period: string;
@@ -106,7 +107,7 @@ export default function MaintenanceAnalyticsCharts({
 
     return (
         <div className="grid gap-6 lg:grid-cols-2">
-            <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+            <div className={`p-6 ${SURFACE_CARD_CLASS}`}>
                 <h2 className="mb-6 text-lg font-semibold">Maintenance Activity</h2>
                 <ResponsiveContainer width="100%" height={260}>
                     <BarChart data={activityData}>
@@ -122,7 +123,7 @@ export default function MaintenanceAnalyticsCharts({
                 </ResponsiveContainer>
             </div>
 
-            <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+            <div className={`p-6 ${SURFACE_CARD_CLASS}`}>
                 <h2 className="mb-6 text-lg font-semibold">
                     {mixedCurrencies ? 'Spend by Currency' : 'Logged Spend'}
                 </h2>
@@ -130,7 +131,7 @@ export default function MaintenanceAnalyticsCharts({
                 {mixedCurrencies ? (
                     <div className="space-y-4">
                         {currencyTotals.map((entry) => (
-                            <div key={entry.currency} className="flex items-center justify-between rounded-xl border border-slate-700/50 bg-slate-900/20 px-4 py-3">
+                            <div key={entry.currency} className={`flex items-center justify-between px-4 py-3 ${SUBCARD_CLASS}`}>
                                 <span className="text-sm text-slate-300">{entry.currency}</span>
                                 <span className="text-lg font-semibold text-white">{formatCurrency(entry.total, entry.currency)}</span>
                             </div>
@@ -155,7 +156,7 @@ export default function MaintenanceAnalyticsCharts({
                 )}
             </div>
 
-            <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+            <div className={`p-6 ${SURFACE_CARD_CLASS}`}>
                 <h2 className="mb-4 text-lg font-semibold">Service Mix</h2>
                 {serviceTypeBreakdown.length === 0 ? (
                     <p className="py-10 text-center text-sm text-slate-400">No maintenance records in the selected period.</p>
@@ -187,7 +188,7 @@ export default function MaintenanceAnalyticsCharts({
                 )}
             </div>
 
-            <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+            <div className={`p-6 ${SURFACE_CARD_CLASS}`}>
                 <h2 className="mb-4 text-lg font-semibold">Tyre Set Mileage Tracked</h2>
                 {tyreSetMileage.length === 0 ? (
                     <p className="py-10 text-center text-sm text-slate-400">No seasonal tyre mileage with explicit odometer ranges in the selected period.</p>

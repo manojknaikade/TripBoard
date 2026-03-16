@@ -29,6 +29,15 @@ import {
     type TyreSet,
 } from '@/lib/maintenance';
 import type { DistanceUnits, MaintenanceFormState, TyreSetSummary } from '@/lib/maintenanceUi';
+import {
+    DashboardStatCard,
+    PageHero,
+    PageShell,
+    StatusBadge,
+    SUBCARD_CLASS,
+    SUBDUED_BADGE_CLASS,
+    SURFACE_CARD_CLASS,
+} from '@/components/ui/dashboardPage';
 
 type TyreSetDerivedStatus = TyreSetSummary['derivedStatus'];
 type MaintenanceSummary = {
@@ -758,13 +767,31 @@ export default function MaintenancePage() {
         <div className="min-h-screen">
             <Header />
 
-            <main className="mx-auto max-w-7xl px-6 py-8">
-                <div className="mb-8 max-w-3xl">
-                    <h1 className="text-3xl font-semibold tracking-tight text-white">Maintenance</h1>
-                    <p className="mt-2 text-sm leading-6 text-slate-400">
-                        See what is mounted, what is in storage, and log seasonal swaps, rotations, and service cost in one place.
-                    </p>
-                </div>
+            <PageShell>
+                <PageHero
+                    title="Maintenance"
+                    description="Track mounted and stored tyre sets, seasonal swaps, rotations, and service history in one place."
+                    actions={
+                        <>
+                            <button
+                                type="button"
+                                onClick={() => setRecordModalOpen(true)}
+                                className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-red-500 to-red-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-red-500/20 transition hover:shadow-red-500/30"
+                            >
+                                <Plus className="h-4 w-4" />
+                                Maintenance record
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setGuideModalOpen(true)}
+                                className={`inline-flex items-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold text-slate-100 transition-colors hover:border-slate-600 hover:bg-slate-800/45 ${SURFACE_CARD_CLASS}`}
+                            >
+                                <BookOpen className="h-4 w-4" />
+                                Tesla maintenance guide
+                            </button>
+                        </>
+                    }
+                />
 
                 {pageError && (
                     <div className="mb-6">
@@ -772,25 +799,32 @@ export default function MaintenancePage() {
                     </div>
                 )}
 
-                <div className="mb-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                    <SummaryCard
+                <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                    <DashboardStatCard
                         icon={mountedTyreSet?.season === 'winter' ? <Snowflake className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
                         label="Currently mounted"
                         value={mountedTyreSet?.name || 'No open set'}
-                        valueClassName="text-xl leading-tight md:text-[1.375rem] xl:whitespace-nowrap"
+                        valueClassName="text-2xl leading-tight md:text-[1.75rem]"
                         helper={mountedTyreSet?.currentMountedMileageKm != null
                             ? `Current stint ${formatDistanceValue(mountedTyreSet.currentMountedMileageKm, units)}`
                             : 'Add an open seasonal record'}
+                        tone={mountedTyreSet ? 'live' : 'quiet'}
+                        iconClassName={
+                            mountedTyreSet?.season === 'winter'
+                                ? 'border-cyan-400/30 bg-cyan-400/10 text-cyan-200'
+                                : undefined
+                        }
                     />
-                    <SummaryCard
+                    <DashboardStatCard
                         icon={<Package className="h-4 w-4" />}
                         label="In storage"
                         value={`${storedTyreSets.length} set${storedTyreSets.length === 1 ? '' : 's'}`}
                         helper={storedTyreSets[0]
                             ? `${storedTyreSets[0].name} ${formatDistanceValue(storedTyreSets[0].totalMileageKm, units)}`
                             : 'No active stored sets'}
+                        tone="quiet"
                     />
-                    <SummaryCard
+                    <DashboardStatCard
                         icon={<Gauge className="h-4 w-4" />}
                         label="Current odometer"
                         value={currentVehicleOdometer != null
@@ -799,40 +833,23 @@ export default function MaintenancePage() {
                                 ? formatDistanceValue(latestLoggedOdometer, units)
                                 : 'Not available'}
                         helper={currentVehicleOdometer != null ? 'Live telemetry' : 'Using last logged changeover'}
+                        tone="brand"
                     />
-                    <SummaryCard
+                    <DashboardStatCard
                         icon={<Wrench className="h-4 w-4" />}
                         label="Tracked tyre mileage"
                         value={formatDistanceValue(seasonalDistanceEstimate, units)}
                         helper={unknownRotationCount > 0
                             ? `${unknownRotationCount} rotation status${unknownRotationCount === 1 ? '' : 'es'} to review`
                             : 'Rotation history looks complete'}
+                        tone={unknownRotationCount > 0 ? 'warning' : 'live'}
                     />
                 </div>
 
-                <div className="mb-6 flex flex-wrap gap-3">
-                    <button
-                        type="button"
-                        onClick={() => setRecordModalOpen(true)}
-                        className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-red-500 to-red-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-red-500/20 transition hover:shadow-red-500/30"
-                    >
-                        <Plus className="h-4 w-4" />
-                        Maintenance record
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => setGuideModalOpen(true)}
-                        className="inline-flex items-center gap-2 rounded-xl border border-slate-700/50 bg-slate-800/30 px-4 py-3 text-sm font-semibold text-slate-100 transition-colors hover:border-slate-600 hover:bg-slate-800/45"
-                    >
-                        <BookOpen className="h-4 w-4" />
-                        Tesla maintenance guide
-                    </button>
-                </div>
-
-                <section className="mb-6">
+                <section className={`mb-6 p-6 ${SURFACE_CARD_CLASS}`}>
                     <SectionHeader
                         title="Tyre sets"
-                        description="Mounted and stored sets across the full width, with total mileage as the headline and the key lifecycle details underneath."
+                        description="Mounted and stored sets with mileage, stint details, and lifecycle status."
                         meta={`${tyreSetSummaries.length} sets`}
                         fullWidthDescription
                     />
@@ -846,19 +863,19 @@ export default function MaintenancePage() {
                             {tyreSetSummaries.map((summary) => (
                                 <article
                                     key={summary.id}
-                                    className="relative flex h-full flex-col overflow-hidden rounded-xl border border-slate-700/50 bg-slate-900/10 p-5"
+                                    className={`relative flex h-full flex-col overflow-hidden p-5 ${SUBCARD_CLASS}`}
                                 >
                                     <span className={`absolute inset-y-0 left-0 w-1 ${getTyreSetMarkerClass(summary.derivedStatus, summary.season)}`} />
 
                                     <div className="flex items-start justify-between gap-4 pl-2">
                                         <div className="min-w-0 flex-1">
                                             <div className="flex flex-wrap items-center gap-2">
-                                                <Pill className={getSeasonBadgeClass(summary.season)}>
+                                                <StatusBadge tone="quiet" className={getSeasonBadgeClass(summary.season)}>
                                                     {seasonLabels[summary.season]}
-                                                </Pill>
-                                                <Pill className={getStatusBadgeClass(summary.derivedStatus)}>
+                                                </StatusBadge>
+                                                <StatusBadge tone="quiet" className={getStatusBadgeClass(summary.derivedStatus)}>
                                                     {formatTyreSetStatus(summary.derivedStatus)}
-                                                </Pill>
+                                                </StatusBadge>
                                             </div>
                                         </div>
                                         <button
@@ -914,10 +931,10 @@ export default function MaintenancePage() {
                     )}
                 </section>
 
-                <section>
+                <section className={`p-6 ${SURFACE_CARD_CLASS}`}>
                     <SectionHeader
                         title="Service history"
-                        description="Full-width maintenance cards with the record details, dates, odometer values, and cost aligned for scanning."
+                        description="Maintenance entries aligned for quick scanning of service type, dates, odometer values, and cost."
                         meta={`${maintenanceSummary?.totalRecords ?? historyRecords.length} records`}
                         fullWidthDescription
                     />
@@ -940,18 +957,18 @@ export default function MaintenancePage() {
                                     return (
                                         <div className="pb-4">
                                             <article
-                                                className={`rounded-xl border border-slate-700/50 bg-slate-900/20 p-5 border-l-2 ${getRecordBorderClass(record)}`}
+                                                className={`border-l-2 p-5 ${SUBCARD_CLASS} ${getRecordBorderClass(record)}`}
                                             >
                                                 <div className="flex items-start justify-between gap-4">
                                                     <div className="min-w-0 flex-1">
                                                         <div className="mb-3 flex flex-wrap items-center gap-2">
-                                                            <Pill className="border-slate-600/80 bg-slate-800/80 text-slate-200">
+                                                            <StatusBadge tone="quiet" className="border-slate-600/80 bg-slate-800/80 text-slate-200">
                                                                 {serviceTypeLabels[record.service_type]}
-                                                            </Pill>
+                                                            </StatusBadge>
                                                             {linkedTyreSet && (
-                                                                <Pill className="border-slate-600/80 bg-slate-800/80 text-slate-300">
+                                                                <StatusBadge tone="quiet" className="border-slate-600/80 bg-slate-800/80 text-slate-300">
                                                                     {linkedTyreSet.name}
-                                                                </Pill>
+                                                                </StatusBadge>
                                                             )}
                                                         </div>
 
@@ -1013,7 +1030,7 @@ export default function MaintenancePage() {
                         </div>
                     )}
                 </section>
-            </main>
+            </PageShell>
 
             {(recordModalOpen || recordSaving || recordError || recordSuccess) && (
                 <MaintenanceRecordModal
@@ -1046,31 +1063,6 @@ export default function MaintenancePage() {
     );
 }
 
-function SummaryCard({
-    icon,
-    label,
-    value,
-    helper,
-    valueClassName,
-}: {
-    icon: React.ReactNode;
-    label: string;
-    value: string;
-    helper: string;
-    valueClassName?: string;
-}) {
-    return (
-        <div className="flex min-h-[148px] flex-col rounded-2xl border border-slate-700/50 bg-slate-800/30 p-5">
-            <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl border border-slate-700/50 bg-slate-900/35 text-red-400">
-                {icon}
-            </div>
-            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">{label}</p>
-            <p className={`mt-3 font-semibold tracking-tight text-white ${valueClassName || 'text-2xl'}`}>{value}</p>
-            <p className="mt-auto pt-4 text-sm leading-6 text-slate-400">{helper}</p>
-        </div>
-    );
-}
-
 function SectionHeader({
     title,
     description,
@@ -1089,7 +1081,7 @@ function SectionHeader({
                 <p className="mt-1 text-sm leading-6 text-slate-400">{description}</p>
             </div>
             {meta && (
-                <div className="shrink-0 rounded-full border border-slate-700/50 bg-slate-900/25 px-3 py-1 text-xs font-medium text-slate-400">
+                <div className={`shrink-0 ${SUBDUED_BADGE_CLASS}`}>
                     {meta}
                 </div>
             )}
@@ -1107,23 +1099,9 @@ function LoadingState() {
 
 function EmptyState({ message }: { message: string }) {
     return (
-        <div className="rounded-xl border border-dashed border-slate-700/60 bg-slate-900/20 p-6 text-sm leading-6 text-slate-400">
+        <div className={`border border-dashed border-slate-700/60 p-6 text-sm leading-6 text-slate-400 ${SUBCARD_CLASS}`}>
             {message}
         </div>
-    );
-}
-
-function Pill({
-    children,
-    className,
-}: {
-    children: React.ReactNode;
-    className: string;
-}) {
-    return (
-        <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${className}`}>
-            {children}
-        </span>
     );
 }
 
@@ -1154,7 +1132,7 @@ function InlineMessage({
         : 'border border-emerald-500/20 bg-emerald-500/10 text-emerald-300';
 
     return (
-        <div className={`rounded-xl px-4 py-3 text-sm ${toneClass}`}>
+        <div className={`rounded-2xl px-4 py-3 text-sm ${toneClass}`}>
             {message}
         </div>
     );

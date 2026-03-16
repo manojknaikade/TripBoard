@@ -18,7 +18,8 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
   - **Route Thumbnails:** Trip list mini-maps render the recorded route instead of a straight-line placeholder
   - **Geocoding:** Automatic address resolution for start/end locations
   - **Map Style Preference:** Switch between street and dark basemaps
-  - **Metrics:** Distance, duration, energy used, efficiency (Wh/km or Wh/mi), speed, and **outside temperature** (min/max/avg)
+  - **Metrics:** Distance, duration, energy used, efficiency (Wh/km or Wh/mi), average/max speed, and **outside temperature** (min/max/avg)
+  - **Trip detail links:** Start and end location cards open directly in Google Maps
   - **Filtering:** Filter trips by Week, Month, or Custom Date Range
   - **Export:** Download trip data as CSV or JSON
 
@@ -136,6 +137,9 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
    - `supabase/migrations/20260315190000_add_maintenance_summary_function.sql` — Adds an optional SQL aggregate used as a performance optimization for maintenance summary endpoints
    - `supabase/migrations/20260315220000_add_analytics_rollups_and_indexes.sql` — Adds charging analytics SQL rollups and partial time-range indexes used by the dashboard analytics routes
    - `supabase/migrations/20260315233000_add_list_summary_functions.sql` — Adds SQL rollups for trip-list and charging-list summary cards so those headers do not require scanning filtered rows in Next.js route handlers
+   - `supabase/migrations/20260316014830_add_vehicle_status_charge_limit_soc.sql` — Stores `ChargeLimitSoc` from Fleet Telemetry in `vehicle_status` so telemetry mode can show the real dashboard charge limit without Tesla API polling
+   - `supabase/migrations/20260316021448_add_vehicle_status_state.sql` — Stores a canonical telemetry-derived `state` in `vehicle_status` so dashboard status does not depend on route-side derivation alone
+   - `supabase/migrations/20260316022700_backfill_trip_speed_metrics.sql` — Recomputes historical and future trip `max_speed_mph` / `avg_speed_mph` from Fleet Telemetry `VehicleSpeed`
 
 5. **Run the Development Server**
 
@@ -181,15 +185,17 @@ supabase/
 
 TripBoard uses a **database-level trigger** (`process_telemetry`) on the `telemetry_raw` table to automatically:
 
-- Update `vehicle_status` with the latest telemetry values
+- Update `vehicle_status` with the latest telemetry values and a canonical derived state (`parked`, `charging`, or `driving`)
 - Detect trip start/end based on gear changes (D/R → start, P → end)
 - Record `trip_waypoints` during active trips so trip detail maps and list thumbnails can render the exact route taken
+- Recompute trip max/average speed from `VehicleSpeed` telemetry when trips complete, with a historical backfill for older trips
 - Track outside temperature (min/max/avg) during active trips
 - Detect and record charging sessions with charger type classification
 - Reconcile stale open charging sessions with `reconcile_stale_charging_sessions()`
 - Queue completed Supercharger sessions for one-time Tesla billing enrichment
 
 The Go telemetry server on the VPS ingests raw Tesla Fleet Telemetry and inserts into `telemetry_raw`. All trip/charging logic runs as PL/pgSQL triggers in Supabase.
+Telemetry-backed dashboard views also depend on the Fleet Telemetry config including `ChargeLimitSoc`; after deploying the migration, re-send telemetry field definitions from Settings so future telemetry updates populate `vehicle_status.charge_limit_soc`.
 Completed Supercharger sessions are queued in Supabase and can be processed either by calling `GET /api/internal/charging/tesla-sync` from a server-side cron with `Authorization: Bearer $CHARGING_SYNC_SECRET` (or `CRON_SECRET`), or by running `scripts/process-charging-sync.js` as a standalone worker on the VPS.
 Historical trip routes can be backfilled from `telemetry_raw` into `trip_waypoints` by applying `supabase/migrations/20260313080000_add_trip_route_waypoints.sql`.
 The legacy `scripts/vps-telemetry-server.js` charging detector is no longer part of the intended production path.

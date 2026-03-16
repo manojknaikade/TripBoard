@@ -13,6 +13,7 @@ import {
     XAxis,
     YAxis,
 } from 'recharts';
+import { SURFACE_CARD_CLASS } from '@/components/ui/dashboardPage';
 
 type ChargingMixDatum = {
     name: string;
@@ -73,7 +74,7 @@ export default function ChargingAnalyticsCharts({
 
     return (
         <div className="grid gap-6 lg:grid-cols-2">
-            <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+            <div className={`p-6 ${SURFACE_CARD_CLASS}`}>
                 <h2 className="mb-6 text-lg font-semibold">Charging Energy (Daily)</h2>
                 <ResponsiveContainer width="100%" height={250}>
                     <BarChart data={dailyData}>
@@ -106,7 +107,7 @@ export default function ChargingAnalyticsCharts({
                 </p>
             </div>
 
-            <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+            <div className={`p-6 ${SURFACE_CARD_CLASS}`}>
                 <h2 className="mb-6 text-lg font-semibold">Charging Cost (Daily)</h2>
                 <ResponsiveContainer width="100%" height={250}>
                     <BarChart data={dailyData}>
@@ -129,7 +130,7 @@ export default function ChargingAnalyticsCharts({
                 </ResponsiveContainer>
             </div>
 
-            <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+            <div className={`p-6 ${SURFACE_CARD_CLASS}`}>
                 <h2 className="mb-2 text-center text-lg font-semibold">Charging Sources Match</h2>
                 {!hasRealChargingData && (
                     <p className="mb-4 text-center text-sm text-slate-400">
@@ -171,7 +172,7 @@ export default function ChargingAnalyticsCharts({
                 </div>
             </div>
 
-            <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+            <div className={`p-6 ${SURFACE_CARD_CLASS}`}>
                 <h2 className="mb-2 text-lg font-semibold">Cost by Charging Source</h2>
                 {costBySource.length === 0 ? (
                     <p className="py-8 text-center text-sm text-slate-400">

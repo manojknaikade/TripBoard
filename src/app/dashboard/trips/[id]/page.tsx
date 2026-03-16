@@ -20,6 +20,13 @@ import dynamic from 'next/dynamic';
 import ViewportGate from '@/components/ViewportGate';
 import type { TripRoutePoint } from '@/lib/trips/routePoints';
 import { readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
+import {
+    PageHero,
+    PageShell,
+    StatusBadge,
+    SUBCARD_CLASS,
+    SURFACE_CARD_CLASS,
+} from '@/components/ui/dashboardPage';
 
 const TripDetailMap = dynamic(() => import('@/components/TripDetailMap'), {
     loading: () => <div className="h-96 w-full animate-pulse rounded-xl bg-slate-800" />,
@@ -87,6 +94,18 @@ function formatDuration(seconds: number): string {
         return `${hours}h ${minutes}m`;
     }
     return `${minutes}m`;
+}
+
+function formatSpeed(speedMph: number | null, units: 'imperial' | 'metric'): string {
+    if (speedMph == null) {
+        return 'N/A';
+    }
+
+    if (units === 'metric') {
+        return `${Math.round(speedMph * 1.60934)} km/h`;
+    }
+
+    return `${Math.round(speedMph)} mph`;
 }
 
 function formatDateTime(dateString: string): string {
@@ -355,19 +374,20 @@ export default function TripDetailPage() {
 
     if (error || !trip) {
         return (
-            <div className="min-h-screen p-8">
-                <div className="mx-auto max-w-4xl">
+            <div className="min-h-screen">
+                <Header />
+                <PageShell>
                     <Link
                         href="/dashboard/trips"
-                        className="inline-flex items-center gap-2 text-slate-400 hover:text-white"
+                        className="inline-flex items-center gap-2 text-slate-400 transition-colors hover:text-white"
                     >
                         <ArrowLeft className="h-4 w-4" />
                         Back to Trips
                     </Link>
-                    <div className="mt-8 rounded-xl border border-slate-700/50 bg-slate-800/30 p-8 text-center">
+                    <div className={`mt-8 p-8 text-center ${SURFACE_CARD_CLASS}`}>
                         <p className="text-slate-400">{error || 'Trip not found'}</p>
                     </div>
-                </div>
+                </PageShell>
             </div>
         );
     }
@@ -379,38 +399,33 @@ export default function TripDetailPage() {
         <div className="min-h-screen">
             <Header />
 
-            {/* Main Content */}
-            <main className="mx-auto max-w-7xl px-6 pb-24 pt-8 md:pb-8">
-                <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                        <div className="mb-2">
-                            <Link
-                                href="/dashboard/trips"
-                                className="inline-flex items-center gap-2 text-sm text-slate-400 hover:text-white transition-colors"
-                            >
-                                <ArrowLeft className="h-4 w-4" />
-                                Back to Trips
-                            </Link>
-                        </div>
-                        <h1 className="text-2xl font-bold">Trip Details</h1>
-                        <p className="text-slate-400">
-                            {getTripSubtitle(trip, startAddress, endAddress)}
-                        </p>
-                    </div>
-                </div>
+            <PageShell>
+                <PageHero
+                    title="Trip Details"
+                    description={getTripSubtitle(trip, startAddress, endAddress)}
+                    badge={isInProgress ? <StatusBadge tone="live">In Progress</StatusBadge> : undefined}
+                    meta={
+                        <Link
+                            href="/dashboard/trips"
+                            className="inline-flex items-center gap-2 text-sm text-slate-400 transition-colors hover:text-white"
+                        >
+                            <ArrowLeft className="h-4 w-4" />
+                            Back to Trips
+                        </Link>
+                    }
+                />
 
-                {/* Map Section */}
                 {hasCoords && (
-                    <div className="mb-8">
+                    <section className={`mb-6 overflow-hidden p-4 ${SURFACE_CARD_CLASS}`}>
                         <ViewportGate
                             className="h-96 w-full"
                             onVisible={() => {
                                 void fetchRoutePoints();
                             }}
-                            placeholder={<div className="h-96 w-full animate-pulse rounded-xl bg-slate-800" />}
+                            placeholder={<div className={`h-96 w-full animate-pulse ${SUBCARD_CLASS}`} />}
                         >
                             {loadingRoutePoints ? (
-                                <div className="h-96 w-full animate-pulse rounded-xl bg-slate-800" />
+                                <div className={`h-96 w-full animate-pulse ${SUBCARD_CLASS}`} />
                             ) : (
                                 <TripDetailMap
                                     startLat={trip.start_latitude!}
@@ -421,12 +436,10 @@ export default function TripDetailPage() {
                                 />
                             )}
                         </ViewportGate>
-                    </div>
+                    </section>
                 )}
 
-                {/* Trip Info Grid */}
-                <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-                    {/* Time & Date */}
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                     <StatBox
                         icon={<Calendar className="h-5 w-5" />}
                         label="Started"
@@ -491,23 +504,17 @@ export default function TripDetailPage() {
                     )}
 
                     {/* Speed */}
-                    {trip.max_speed && (
-                        <StatBox
-                            icon={<Gauge className="h-5 w-5" />}
-                            label="Max Speed"
-                            value={units === 'metric'
-                                ? `${Math.round(trip.max_speed * 1.60934)} km/h`
-                                : `${Math.round(trip.max_speed)} mph`}
-                            color="red"
-                        />
-                    )}
+                    <StatBox
+                        icon={<Gauge className="h-5 w-5" />}
+                        label="Max Speed"
+                        value={formatSpeed(trip.max_speed, units)}
+                        color="red"
+                    />
                     {trip.avg_speed && (
                         <StatBox
                             icon={<Gauge className="h-5 w-5" />}
                             label="Avg Speed"
-                            value={units === 'metric'
-                                ? `${Math.round(trip.avg_speed * 1.60934)} km/h`
-                                : `${Math.round(trip.avg_speed)} mph`}
+                            value={formatSpeed(trip.avg_speed, units)}
                             color="blue"
                         />
                     )}
@@ -521,26 +528,23 @@ export default function TripDetailPage() {
                             color="blue"
                         />
                     )}
-                    {trip.min_outside_temp != null && (
+                    {(trip.min_outside_temp != null || trip.max_outside_temp != null) && (
                         <StatBox
                             icon={<Thermometer className="h-5 w-5" />}
-                            label="Min Temperature"
-                            value={`${Math.round(trip.min_outside_temp)}°C`}
-                            color="blue"
-                        />
-                    )}
-                    {trip.max_outside_temp != null && (
-                        <StatBox
-                            icon={<Thermometer className="h-5 w-5" />}
-                            label="Max Temperature"
-                            value={`${Math.round(trip.max_outside_temp)}°C`}
+                            label="Temperature Range"
+                            value={
+                                trip.min_outside_temp != null && trip.max_outside_temp != null
+                                    ? `${Math.round(trip.min_outside_temp)}°C to ${Math.round(trip.max_outside_temp)}°C`
+                                    : trip.min_outside_temp != null
+                                        ? `${Math.round(trip.min_outside_temp)}°C`
+                                        : `${Math.round(trip.max_outside_temp!)}°C`
+                            }
                             color="orange"
                         />
                     )}
                 </div>
 
-                {/* Locations */}
-                <div className="mt-8 grid gap-4 md:grid-cols-2">
+                <div className="mt-6 grid gap-4 md:grid-cols-2">
                     <LocationCard
                         title="Start Location"
                         address={startAddress || (loadingAddresses ? 'Loading address...' : undefined) || trip.start_address}
@@ -558,7 +562,7 @@ export default function TripDetailPage() {
                         />
                     )}
                 </div>
-            </main>
+            </PageShell>
         </div>
     );
 }
@@ -575,23 +579,23 @@ function StatBox({
     color: string;
 }) {
     const colorClasses = {
-        blue: 'text-blue-400',
-        green: 'text-green-400',
-        yellow: 'text-yellow-400',
-        orange: 'text-orange-400',
-        red: 'text-red-400',
-        purple: 'text-purple-400',
+        blue: 'text-slate-300',
+        green: 'text-green-300',
+        yellow: 'text-amber-300',
+        orange: 'text-amber-300',
+        red: 'text-red-300',
+        purple: 'text-slate-300',
     };
 
     return (
-        <div className="rounded-xl border border-slate-700/50 bg-slate-800/30 p-6">
-            <div className="flex items-center gap-3">
-                <div className={colorClasses[color as keyof typeof colorClasses]}>
+        <div className={`p-5 ${SURFACE_CARD_CLASS}`}>
+            <div className="flex items-center gap-4">
+                <div className={`flex h-11 w-11 items-center justify-center ${SUBCARD_CLASS} ${colorClasses[color as keyof typeof colorClasses]}`}>
                     {icon}
                 </div>
                 <div>
-                    <div className="text-sm text-slate-400">{label}</div>
-                    <div className="text-lg font-semibold">{value}</div>
+                    <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">{label}</div>
+                    <div className="mt-2 text-2xl font-semibold tracking-tight text-white">{value}</div>
                 </div>
             </div>
         </div>
@@ -611,20 +615,42 @@ function LocationCard({
     lon?: number | null;
     color: string;
 }) {
-    const colorClasses = {
-        green: 'border-green-500/30 bg-green-500/10',
-        red: 'border-red-500/30 bg-red-500/10',
+    const toneMap = {
+        green: 'live' as const,
+        red: 'brand' as const,
     };
+    const resolvedAddress = address || (lat != null && lon != null ? `${lat.toFixed(3)}, ${lon.toFixed(3)}` : 'Unknown');
+    const googleMapsUrl = lat != null && lon != null
+        ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${lat},${lon}`)}`
+        : null;
 
     return (
-        <div className={`rounded-xl border p-6 ${colorClasses[color as keyof typeof colorClasses]}`}>
+        <div className={`p-6 ${SURFACE_CARD_CLASS}`}>
             <div className="flex items-start gap-3">
-                <MapPin className="h-5 w-5 text-slate-400" />
+                <div className={`flex h-11 w-11 items-center justify-center ${SUBCARD_CLASS}`}>
+                    <MapPin className="h-5 w-5 text-slate-300" />
+                </div>
                 <div className="flex-1">
-                    <h3 className="font-semibold">{title}</h3>
-                    <p className="mt-1 text-slate-400">
-                        {address || (lat && lon ? `${lat.toFixed(3)}, ${lon.toFixed(3)}` : 'Unknown')}
-                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="font-semibold text-white">{title}</h3>
+                        <StatusBadge tone={toneMap[color as keyof typeof toneMap]}>Location</StatusBadge>
+                    </div>
+                    {googleMapsUrl ? (
+                        <div className="mt-2">
+                            <a
+                                href={googleMapsUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="block text-sm leading-6 text-slate-300 transition-colors hover:text-white"
+                            >
+                                {resolvedAddress}
+                            </a>
+                        </div>
+                    ) : (
+                        <p className="mt-2 text-sm leading-6 text-slate-400">
+                            {resolvedAddress}
+                        </p>
+                    )}
                 </div>
             </div>
         </div>

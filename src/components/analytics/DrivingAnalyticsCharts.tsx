@@ -13,6 +13,7 @@ import {
     XAxis,
     YAxis,
 } from 'recharts';
+import { SURFACE_CARD_CLASS } from '@/components/ui/dashboardPage';
 
 type WeeklyDatum = {
     day: string;
@@ -58,7 +59,7 @@ export default function DrivingAnalyticsCharts({
 
     return (
         <div className="grid gap-6 lg:grid-cols-2">
-            <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+            <div className={`p-6 ${SURFACE_CARD_CLASS}`}>
                 <h2 className="mb-6 text-lg font-semibold">Daily Distance</h2>
                 <ResponsiveContainer width="100%" height={250}>
                     <BarChart data={weeklyData}>
@@ -84,7 +85,7 @@ export default function DrivingAnalyticsCharts({
                 </ResponsiveContainer>
             </div>
 
-            <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+            <div className={`p-6 ${SURFACE_CARD_CLASS}`}>
                 <h2 className="mb-6 text-lg font-semibold">Daily Energy Consumption</h2>
                 <ResponsiveContainer width="100%" height={250}>
                     <BarChart data={weeklyData}>
@@ -111,7 +112,7 @@ export default function DrivingAnalyticsCharts({
                 </ResponsiveContainer>
             </div>
 
-            <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+            <div className={`p-6 ${SURFACE_CARD_CLASS}`}>
                 <div className="mb-6">
                     <h2 className="text-lg font-semibold">Efficiency by Time of Day</h2>
                     <p className="mt-1 text-sm text-slate-400">
@@ -136,7 +137,7 @@ export default function DrivingAnalyticsCharts({
                 </ResponsiveContainer>
             </div>
 
-            <div className="rounded-2xl border border-slate-700/50 bg-slate-800/30 p-6">
+            <div className={`p-6 ${SURFACE_CARD_CLASS}`}>
                 <div className="mb-6">
                     <h2 className="flex items-center gap-2 text-lg font-semibold">
                         <ThermometerSnowflake className="h-5 w-5 text-blue-400" />
