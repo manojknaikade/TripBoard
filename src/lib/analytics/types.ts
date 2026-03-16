@@ -33,6 +33,7 @@ export interface DrivingAnalyticsData {
             energy: number;
             efficiency: number;
             drivingTime: number;
+            vampireDrain: number;
         };
     };
     weeklyData: WeeklyDatum[];

@@ -173,6 +173,7 @@ export default function DrivingAnalyticsClient({ initialData = null }: { initial
                     value={`${summary.vampireDrainKwh} kWh`}
                     helper="Estimated idle drain captured by telemetry."
                     tone="warning"
+                    aside={<TrendBadge change={summary.trends?.vampireDrain} />}
                 />
                 <DashboardStatCard
                     icon={<Gauge className="h-5 w-5" />}
@@ -277,7 +278,7 @@ function TrendBadge({ change, invertColor = false }: { change?: number; invertCo
     const isGood = invertColor ? !isPositive : isPositive;
 
     return (
-        <div className={`flex items-center gap-1 text-xs font-medium ${isGood ? 'text-green-400' : 'text-red-400'}`}>
+        <div className={`inline-flex items-center gap-1 text-xs font-medium ${isGood ? 'text-green-400' : 'text-red-400'}`}>
             {isPositive ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
             {Math.abs(change)}%
         </div>

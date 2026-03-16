@@ -287,6 +287,48 @@ function pctChange(curr: number, prev: number) {
     return Math.round(((curr - prev) / prev) * 100);
 }
 
+function computeVampireDrainKwh(trips: TripMetricSource[], chargeStartTimes: number[]) {
+    let vampireDrainKwh = 0;
+    let chargeIndex = 0;
+
+    for (let index = 1; index < trips.length; index += 1) {
+        const previousTrip = trips[index - 1];
+        const currentTrip = trips[index];
+
+        if (
+            previousTrip.end_battery_pct == null ||
+            currentTrip.start_battery_pct == null ||
+            !previousTrip.end_time
+        ) {
+            continue;
+        }
+
+        const batteryDrop = previousTrip.end_battery_pct - currentTrip.start_battery_pct;
+        if (batteryDrop <= 0.1 || batteryDrop >= 15) {
+            continue;
+        }
+
+        const prevEndMs = new Date(previousTrip.end_time).getTime();
+        const currStartMs = new Date(currentTrip.start_time).getTime();
+
+        if (!Number.isFinite(prevEndMs) || !Number.isFinite(currStartMs) || currStartMs <= prevEndMs) {
+            continue;
+        }
+
+        while (chargeIndex < chargeStartTimes.length && chargeStartTimes[chargeIndex] <= prevEndMs) {
+            chargeIndex += 1;
+        }
+
+        const hasChargingBetween = chargeIndex < chargeStartTimes.length && chargeStartTimes[chargeIndex] < currStartMs;
+
+        if (!hasChargingBetween) {
+            vampireDrainKwh += (batteryDrop / 100) * 75;
+        }
+    }
+
+    return vampireDrainKwh;
+}
+
 function formatTripForLeaderboard(trip: LeaderboardTrip | null, distanceMultiplier: number) {
     if (!trip) {
         return null;
@@ -440,7 +482,7 @@ export async function GET(request: NextRequest) {
         const prevToDate = new Date(fromDate.getTime() - 1);
         const prevFromDate = new Date(prevToDate.getTime() - periodMs);
 
-        const [tripsResult, chargeTimingResult, prevTripsResult, chargingSummaryResult, chargingDailyResult] = await Promise.all([
+        const [tripsResult, chargeTimingResult, prevTripsResult, prevChargeTimingResult, chargingSummaryResult, chargingDailyResult] = await Promise.all([
             includeDriving
                 ? supabase
                     .from('trips')
@@ -466,7 +508,17 @@ export async function GET(request: NextRequest) {
                     .eq('is_complete', true)
                     .gte('start_time', prevFromDate.toISOString())
                     .lte('start_time', prevToDate.toISOString())
+                    .order('start_time', { ascending: true })
                 : Promise.resolve({ data: [] as TripMetricSource[], error: null }),
+            includeDriving
+                ? supabase
+                    .from('charging_sessions')
+                    .select('start_time')
+                    .eq('is_complete', true)
+                    .gte('start_time', prevFromDate.toISOString())
+                    .lte('start_time', prevToDate.toISOString())
+                    .order('start_time', { ascending: true })
+                : Promise.resolve({ data: [] as ChargingSessionTimingRecord[], error: null }),
             includeCharging
                 ? supabase.rpc('get_charging_analytics_summary', {
                     p_from: periodStartIso,
@@ -493,6 +545,10 @@ export async function GET(request: NextRequest) {
             console.error('Error fetching previous-period trips for analytics trends:', prevTripsResult.error);
         }
 
+        if (prevChargeTimingResult.error) {
+            console.error('Error fetching previous-period charging session timing for analytics trends:', prevChargeTimingResult.error);
+        }
+
         if (chargingSummaryResult.error) {
             console.error('Error fetching charging summary rollup for analytics:', chargingSummaryResult.error);
         }
@@ -503,8 +559,12 @@ export async function GET(request: NextRequest) {
 
         const typedTrips = (tripsResult.data || []) as TripRecord[];
         const prevTrips = (prevTripsResult.data || []) as TripMetricSource[];
+        const prevChargeTimingRecords = (prevChargeTimingResult.data || []) as ChargingSessionTimingRecord[];
         const chargeTimingRecords = (chargeTimingResult.data || []) as ChargingSessionTimingRecord[];
         const chargeStartTimes = chargeTimingRecords
+            .map((sessionRecord) => new Date(sessionRecord.start_time).getTime())
+            .filter((value) => Number.isFinite(value));
+        const prevChargeStartTimes = prevChargeTimingRecords
             .map((sessionRecord) => new Date(sessionRecord.start_time).getTime())
             .filter((value) => Number.isFinite(value));
         const chargingSummaryRow = ((chargingSummaryResult.data || [])[0] ?? null) as ChargingSummaryRow | null;
@@ -574,41 +634,7 @@ export async function GET(request: NextRequest) {
                 ? Math.round((totalEnergy * 1000) / totalDistanceInUserUnits)
                 : 260;
 
-            let chargeIndex = 0;
-            for (let index = 1; index < typedTrips.length; index += 1) {
-                const previousTrip = typedTrips[index - 1];
-                const currentTrip = typedTrips[index];
-
-                if (
-                    previousTrip.end_battery_pct == null ||
-                    currentTrip.start_battery_pct == null ||
-                    !previousTrip.end_time
-                ) {
-                    continue;
-                }
-
-                const batteryDrop = previousTrip.end_battery_pct - currentTrip.start_battery_pct;
-                if (batteryDrop <= 0.1 || batteryDrop >= 15) {
-                    continue;
-                }
-
-                const prevEndMs = new Date(previousTrip.end_time).getTime();
-                const currStartMs = new Date(currentTrip.start_time).getTime();
-
-                if (!Number.isFinite(prevEndMs) || !Number.isFinite(currStartMs) || currStartMs <= prevEndMs) {
-                    continue;
-                }
-
-                while (chargeIndex < chargeStartTimes.length && chargeStartTimes[chargeIndex] <= prevEndMs) {
-                    chargeIndex += 1;
-                }
-
-                const hasChargingBetween = chargeIndex < chargeStartTimes.length && chargeStartTimes[chargeIndex] < currStartMs;
-
-                if (!hasChargingBetween) {
-                    vampireDrainKwh += (batteryDrop / 100) * 75;
-                }
-            }
+            vampireDrainKwh = computeVampireDrainKwh(typedTrips, chargeStartTimes);
         }
 
         let totalChargingBatteryEnergy = includeCharging ? Number(chargingSummaryRow?.total_battery_energy || 0) : 0;
@@ -691,6 +717,7 @@ export async function GET(request: NextRequest) {
         let prevDistance = 0;
         let prevEnergy = 0;
         let prevDrivingTime = 0;
+        let prevVampireDrainKwh = 0;
 
         if (includeDriving) {
             for (const trip of prevTrips) {
@@ -699,6 +726,8 @@ export async function GET(request: NextRequest) {
                 prevEnergy += metrics.energy;
                 prevDrivingTime += metrics.drivingTimeHours;
             }
+
+            prevVampireDrainKwh = computeVampireDrainKwh(prevTrips, prevChargeStartTimes);
         }
 
         const prevDistanceInUserUnits = prevDistance * distanceMultiplier;
@@ -709,12 +738,14 @@ export async function GET(request: NextRequest) {
                 energy: pctChange(totalEnergy, prevEnergy),
                 efficiency: pctChange(avgEfficiency, prevEfficiency),
                 drivingTime: pctChange(totalDrivingTime, prevDrivingTime),
+                vampireDrain: pctChange(vampireDrainKwh, prevVampireDrainKwh),
             }
             : {
                 distance: 0,
                 energy: 0,
                 efficiency: 0,
                 drivingTime: 0,
+                vampireDrain: 0,
             };
 
         const temperatureImpact = includeDriving && validTrips.length > 0

@@ -106,17 +106,19 @@ export function DashboardStatCard({
     iconClassName?: string;
 }) {
     return (
-        <div className={cx('flex h-full min-h-[10.75rem] flex-col p-5', SURFACE_CARD_CLASS)}>
+        <div className={cx('relative flex h-full min-h-[10.75rem] flex-col p-5', SURFACE_CARD_CLASS)}>
+            {aside ? (
+                <div className="absolute right-5 top-5">
+                    {aside}
+                </div>
+            ) : null}
             <div className={cx('mb-5 inline-flex h-11 w-11 items-center justify-center rounded-2xl border', iconClassName || toneClassMap[tone])}>
                 {icon}
             </div>
             <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">{label}</p>
             <div className="mt-3 min-h-[3.25rem]">
-                <div className="flex items-end justify-between gap-3">
-                    <div className={cx('text-3xl font-semibold tracking-tight text-white', valueClassName)}>
-                        {value}
-                    </div>
-                    {aside}
+                <div className={cx('text-3xl font-semibold tracking-tight text-white', valueClassName)}>
+                    {value}
                 </div>
             </div>
             {helper ? (
