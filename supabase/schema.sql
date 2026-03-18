@@ -399,31 +399,39 @@ CREATE OR REPLACE FUNCTION "public"."get_charging_analytics_daily"("p_from" time
     LANGUAGE "sql" SECURITY DEFINER
     SET "search_path" TO 'public'
     AS $$
-        with filtered as (
-            select
-                start_time::date as day,
-                greatest(coalesce(energy_added_kwh, 0), 0) as battery_energy,
-                greatest(coalesce(energy_delivered_kwh, energy_added_kwh, 0), 0) as delivered_energy,
-                greatest(
-                    coalesce(cost_user_entered, cost_estimate, coalesce(energy_delivered_kwh, energy_added_kwh, 0) * charger_price_per_kwh, 0),
-                    0
-                ) as total_cost
-            from public.charging_sessions
-            where is_complete = true
-              and start_time >= p_from
-              and start_time <= p_to
-        )
+    with filtered as (
         select
-            day,
-            coalesce(sum(battery_energy), 0) as battery_energy,
-            coalesce(sum(delivered_energy), 0) as delivered_energy,
-            coalesce(sum(greatest(delivered_energy - battery_energy, 0)), 0) as loss_energy,
-            coalesce(sum(total_cost), 0) as cost,
-            count(*) as sessions
-        from filtered
-        group by day
-        order by day asc;
-        $$;
+            charging_session.start_time::date as day,
+            greatest(coalesce(charging_session.energy_added_kwh, 0), 0) as battery_energy,
+            greatest(coalesce(charging_session.energy_delivered_kwh, charging_session.energy_added_kwh, 0), 0) as delivered_energy,
+            greatest(
+                coalesce(
+                    charging_session.cost_user_entered,
+                    charging_session.cost_estimate,
+                    coalesce(charging_session.energy_delivered_kwh, charging_session.energy_added_kwh, 0) * charging_session.charger_price_per_kwh,
+                    0
+                ),
+                0
+            ) as total_cost
+        from public.charging_sessions charging_session
+        join public.vehicles vehicle
+          on vehicle.id = charging_session.vehicle_id
+        where vehicle.user_id = auth.uid()
+          and charging_session.is_complete = true
+          and charging_session.start_time >= p_from
+          and charging_session.start_time <= p_to
+    )
+    select
+        day,
+        coalesce(sum(battery_energy), 0) as battery_energy,
+        coalesce(sum(delivered_energy), 0) as delivered_energy,
+        coalesce(sum(greatest(delivered_energy - battery_energy, 0)), 0) as loss_energy,
+        coalesce(sum(total_cost), 0) as cost,
+        count(*) as sessions
+    from filtered
+    group by day
+    order by day asc;
+$$;
 
 
 ALTER FUNCTION "public"."get_charging_analytics_daily"("p_from" timestamp with time zone, "p_to" timestamp with time zone) OWNER TO "postgres";
@@ -433,68 +441,76 @@ CREATE OR REPLACE FUNCTION "public"."get_charging_analytics_summary"("p_from" ti
     LANGUAGE "sql" SECURITY DEFINER
     SET "search_path" TO 'public'
     AS $$
-        with filtered as (
-            select
-                lower(coalesce(charger_type, 'other')) as charger_type_key,
-                greatest(coalesce(energy_added_kwh, 0), 0) as battery_energy,
-                greatest(coalesce(energy_delivered_kwh, energy_added_kwh, 0), 0) as delivered_energy,
-                greatest(
-                    coalesce(cost_user_entered, cost_estimate, coalesce(energy_delivered_kwh, energy_added_kwh, 0) * charger_price_per_kwh, 0),
-                    0
-                ) as total_cost
-            from public.charging_sessions
-            where is_complete = true
-              and start_time >= p_from
-              and start_time <= p_to
-        ),
-        normalized as (
-            select
-                case
-                    when charger_type_key like '%3rd_party_fast%' then 'third_party_fast'
-                    when charger_type_key like '%super%' then 'supercharger'
-                    when charger_type_key like '%home%' then 'home'
-                    when charger_type_key like '%dest%' then 'destination'
-                    else 'other'
-                end as source_key,
-                battery_energy,
-                delivered_energy,
-                greatest(delivered_energy - battery_energy, 0) as loss_energy,
-                total_cost
-            from filtered
-        ),
-        costed as (
-            select
-                source_key,
-                battery_energy,
-                delivered_energy,
-                loss_energy,
-                total_cost,
-                case
-                    when delivered_energy > 0 and total_cost > 0
-                        then total_cost * (loss_energy / delivered_energy)
-                    else 0
-                end as loss_cost
-            from normalized
-        )
+    with filtered as (
         select
-            count(*) as total_sessions,
-            coalesce(sum(battery_energy), 0) as total_battery_energy,
-            coalesce(sum(delivered_energy), 0) as total_delivered_energy,
-            coalesce(sum(loss_energy), 0) as total_loss_energy,
-            coalesce(sum(loss_cost), 0) as total_loss_cost,
-            coalesce(sum(total_cost), 0) as total_cost,
-            coalesce(sum(battery_energy) filter (where source_key = 'home'), 0) as home_energy,
-            coalesce(sum(battery_energy) filter (where source_key = 'supercharger'), 0) as supercharger_energy,
-            coalesce(sum(battery_energy) filter (where source_key = 'third_party_fast'), 0) as third_party_fast_energy,
-            coalesce(sum(battery_energy) filter (where source_key = 'destination'), 0) as destination_energy,
-            coalesce(sum(battery_energy) filter (where source_key = 'other'), 0) as other_energy,
-            coalesce(sum(total_cost) filter (where source_key = 'home'), 0) as home_cost,
-            coalesce(sum(total_cost) filter (where source_key = 'supercharger'), 0) as supercharger_cost,
-            coalesce(sum(total_cost) filter (where source_key = 'third_party_fast'), 0) as third_party_fast_cost,
-            coalesce(sum(total_cost) filter (where source_key = 'destination'), 0) as destination_cost,
-            coalesce(sum(total_cost) filter (where source_key = 'other'), 0) as other_cost
-        from costed;
-        $$;
+            lower(coalesce(charging_session.charger_type, 'other')) as charger_type_key,
+            greatest(coalesce(charging_session.energy_added_kwh, 0), 0) as battery_energy,
+            greatest(coalesce(charging_session.energy_delivered_kwh, charging_session.energy_added_kwh, 0), 0) as delivered_energy,
+            greatest(
+                coalesce(
+                    charging_session.cost_user_entered,
+                    charging_session.cost_estimate,
+                    coalesce(charging_session.energy_delivered_kwh, charging_session.energy_added_kwh, 0) * charging_session.charger_price_per_kwh,
+                    0
+                ),
+                0
+            ) as total_cost
+        from public.charging_sessions charging_session
+        join public.vehicles vehicle
+          on vehicle.id = charging_session.vehicle_id
+        where vehicle.user_id = auth.uid()
+          and charging_session.is_complete = true
+          and charging_session.start_time >= p_from
+          and charging_session.start_time <= p_to
+    ),
+    normalized as (
+        select
+            case
+                when charger_type_key like '%3rd_party_fast%' then 'third_party_fast'
+                when charger_type_key like '%super%' then 'supercharger'
+                when charger_type_key like '%home%' then 'home'
+                when charger_type_key like '%dest%' then 'destination'
+                else 'other'
+            end as source_key,
+            battery_energy,
+            delivered_energy,
+            greatest(delivered_energy - battery_energy, 0) as loss_energy,
+            total_cost
+        from filtered
+    ),
+    costed as (
+        select
+            source_key,
+            battery_energy,
+            delivered_energy,
+            loss_energy,
+            total_cost,
+            case
+                when delivered_energy > 0 and total_cost > 0
+                    then total_cost * (loss_energy / delivered_energy)
+                else 0
+            end as loss_cost
+        from normalized
+    )
+    select
+        count(*) as total_sessions,
+        coalesce(sum(battery_energy), 0) as total_battery_energy,
+        coalesce(sum(delivered_energy), 0) as total_delivered_energy,
+        coalesce(sum(loss_energy), 0) as total_loss_energy,
+        coalesce(sum(loss_cost), 0) as total_loss_cost,
+        coalesce(sum(total_cost), 0) as total_cost,
+        coalesce(sum(battery_energy) filter (where source_key = 'home'), 0) as home_energy,
+        coalesce(sum(battery_energy) filter (where source_key = 'supercharger'), 0) as supercharger_energy,
+        coalesce(sum(battery_energy) filter (where source_key = 'third_party_fast'), 0) as third_party_fast_energy,
+        coalesce(sum(battery_energy) filter (where source_key = 'destination'), 0) as destination_energy,
+        coalesce(sum(battery_energy) filter (where source_key = 'other'), 0) as other_energy,
+        coalesce(sum(total_cost) filter (where source_key = 'home'), 0) as home_cost,
+        coalesce(sum(total_cost) filter (where source_key = 'supercharger'), 0) as supercharger_cost,
+        coalesce(sum(total_cost) filter (where source_key = 'third_party_fast'), 0) as third_party_fast_cost,
+        coalesce(sum(total_cost) filter (where source_key = 'destination'), 0) as destination_cost,
+        coalesce(sum(total_cost) filter (where source_key = 'other'), 0) as other_cost
+    from costed;
+$$;
 
 
 ALTER FUNCTION "public"."get_charging_analytics_summary"("p_from" timestamp with time zone, "p_to" timestamp with time zone) OWNER TO "postgres";
@@ -506,22 +522,25 @@ CREATE OR REPLACE FUNCTION "public"."get_charging_list_summary"("p_from" timesta
     AS $$
 with filtered_sessions as (
     select
-        energy_added_kwh,
-        energy_delivered_kwh,
-        charge_rate_kw,
-        currency,
+        charging_session.energy_added_kwh,
+        charging_session.energy_delivered_kwh,
+        charging_session.charge_rate_kw,
+        charging_session.currency,
         case
-            when lower(coalesce(charger_type, '')) like '%supercharger%'
+            when lower(coalesce(charging_session.charger_type, '')) like '%supercharger%'
                 then case
-                    when cost_estimate is not null then cost_estimate
-                    else cost_user_entered
+                    when charging_session.cost_estimate is not null then charging_session.cost_estimate
+                    else charging_session.cost_user_entered
                 end
-            else coalesce(cost_user_entered, cost_estimate)
+            else coalesce(charging_session.cost_user_entered, charging_session.cost_estimate)
         end as display_cost
-    from public.charging_sessions
-    where (p_from is null or start_time >= p_from)
-      and (p_to is null or start_time <= p_to)
-      and (p_vehicle_id is null or vehicle_id = p_vehicle_id)
+    from public.charging_sessions charging_session
+    join public.vehicles vehicle
+      on vehicle.id = charging_session.vehicle_id
+    where vehicle.user_id = auth.uid()
+      and (p_from is null or charging_session.start_time >= p_from)
+      and (p_to is null or charging_session.start_time <= p_to)
+      and (p_vehicle_id is null or charging_session.vehicle_id = p_vehicle_id)
 )
 select
     count(*)::bigint as total_sessions,
@@ -553,72 +572,75 @@ CREATE OR REPLACE FUNCTION "public"."get_maintenance_summary"("p_from_date" "dat
     LANGUAGE "sql" SECURITY DEFINER
     SET "search_path" TO 'public'
     AS $$
-        with filtered_records as (
-            select
-                service_type,
-                cost_amount,
-                coalesce(cost_currency, 'CHF') as cost_currency
-            from public.maintenance_records
-            where (p_from_date is null or start_date >= p_from_date)
-              and (p_to_date is null or start_date <= p_to_date)
-        ),
-        summary as (
-            select
-                count(*) as total_records,
-                count(*) filter (where service_type in ('tyre_season', 'tyre_rotation')) as tyre_records,
-                count(*) filter (where cost_amount is not null) as paid_records,
-                coalesce(sum(cost_amount), 0) as total_spend,
-                count(*) filter (where service_type = 'tyre_season') as season_changes,
-                count(*) filter (where service_type = 'tyre_rotation') as rotations
-            from filtered_records
-        ),
-        currency_stats as (
-            select
-                count(distinct cost_currency) filter (where cost_amount is not null) as currency_count,
-                min(cost_currency) filter (where cost_amount is not null) as single_currency
-            from filtered_records
-        ),
-        latest_odometer as (
-            select odometer_km
-            from public.maintenance_records
-            where odometer_km is not null
-            order by odometer_km desc
-            limit 1
-        ),
-        active_tyre_sets as (
-            select count(*) as active_tyre_sets
-            from public.tyre_sets
-            where status = 'active'
-        )
+    with filtered_records as (
         select
-            summary.total_records,
-            summary.tyre_records,
-            greatest(summary.total_records - summary.tyre_records, 0) as other_records,
-            (select odometer_km from latest_odometer) as latest_logged_odometer_km,
-            summary.paid_records,
-            case
-                when coalesce(currency_stats.currency_count, 0) <= 1
-                    then round(summary.total_spend::numeric, 2)
-                else null
-            end as total_spend,
-            case
-                when coalesce(currency_stats.currency_count, 0) <= 1 and summary.paid_records > 0
-                    then round((summary.total_spend / summary.paid_records)::numeric, 2)
-                else null
-            end as average_paid_cost,
-            case
-                when coalesce(currency_stats.currency_count, 0) <= 1
-                    then currency_stats.single_currency
-                else null
-            end as spend_currency,
-            coalesce(currency_stats.currency_count, 0) > 1 as mixed_currencies,
-            summary.season_changes,
-            summary.rotations,
-            summary.season_changes + summary.rotations as tyre_work_records,
-            (select active_tyre_sets from active_tyre_sets) as active_tyre_sets
-        from summary
-        cross join currency_stats;
-        $$;
+            maintenance_record.service_type,
+            maintenance_record.cost_amount,
+            coalesce(maintenance_record.cost_currency, 'CHF') as cost_currency,
+            maintenance_record.odometer_km
+        from public.maintenance_records maintenance_record
+        where maintenance_record.user_id = auth.uid()
+          and (p_from_date is null or maintenance_record.start_date >= p_from_date)
+          and (p_to_date is null or maintenance_record.start_date <= p_to_date)
+    ),
+    summary as (
+        select
+            count(*) as total_records,
+            count(*) filter (where service_type in ('tyre_season', 'tyre_rotation')) as tyre_records,
+            count(*) filter (where cost_amount is not null) as paid_records,
+            coalesce(sum(cost_amount), 0) as total_spend,
+            count(*) filter (where service_type = 'tyre_season') as season_changes,
+            count(*) filter (where service_type = 'tyre_rotation') as rotations
+        from filtered_records
+    ),
+    currency_stats as (
+        select
+            count(distinct cost_currency) filter (where cost_amount is not null) as currency_count,
+            min(cost_currency) filter (where cost_amount is not null) as single_currency
+        from filtered_records
+    ),
+    latest_odometer as (
+        select odometer_km
+        from filtered_records
+        where odometer_km is not null
+        order by odometer_km desc
+        limit 1
+    ),
+    active_tyre_sets as (
+        select count(*) as active_tyre_sets
+        from public.tyre_sets
+        where user_id = auth.uid()
+          and status = 'active'
+    )
+    select
+        summary.total_records,
+        summary.tyre_records,
+        greatest(summary.total_records - summary.tyre_records, 0) as other_records,
+        (select odometer_km from latest_odometer) as latest_logged_odometer_km,
+        summary.paid_records,
+        case
+            when coalesce(currency_stats.currency_count, 0) <= 1
+                then round(summary.total_spend::numeric, 2)
+            else null
+        end as total_spend,
+        case
+            when coalesce(currency_stats.currency_count, 0) <= 1 and summary.paid_records > 0
+                then round((summary.total_spend / summary.paid_records)::numeric, 2)
+            else null
+        end as average_paid_cost,
+        case
+            when coalesce(currency_stats.currency_count, 0) <= 1
+                then currency_stats.single_currency
+            else null
+        end as spend_currency,
+        coalesce(currency_stats.currency_count, 0) > 1 as mixed_currencies,
+        summary.season_changes,
+        summary.rotations,
+        summary.season_changes + summary.rotations as tyre_work_records,
+        (select active_tyre_sets from active_tyre_sets) as active_tyre_sets
+    from summary
+    cross join currency_stats;
+$$;
 
 
 ALTER FUNCTION "public"."get_maintenance_summary"("p_from_date" "date", "p_to_date" "date") OWNER TO "postgres";
@@ -632,10 +654,10 @@ with filtered_trips as (
     select
         greatest(
             coalesce(
-                distance_miles,
+                trip.distance_miles,
                 case
-                    when start_odometer is not null and end_odometer is not null
-                        then end_odometer - start_odometer
+                    when trip.start_odometer is not null and trip.end_odometer is not null
+                        then trip.end_odometer - trip.start_odometer
                     else null
                 end,
                 0
@@ -643,17 +665,25 @@ with filtered_trips as (
             0
         ) as distance_miles,
         case
-            when energy_used_kwh is not null then energy_used_kwh
-            when start_battery_pct is not null
-                and end_battery_pct is not null
-                and start_battery_pct > end_battery_pct
-                then ((start_battery_pct - end_battery_pct) / 100.0) * 75
+            when trip.energy_used_kwh is not null then trip.energy_used_kwh
+            when trip.start_battery_pct is not null
+                and trip.end_battery_pct is not null
+                and trip.start_battery_pct > trip.end_battery_pct
+                then ((trip.start_battery_pct - trip.end_battery_pct) / 100.0) * 75
             else 0
         end as energy_kwh
-    from public.trips
-    where (p_from is null or start_time >= p_from)
-      and (p_to is null or start_time <= p_to)
-      and (p_vehicle_id is null or vehicle_id = p_vehicle_id)
+    from public.trips trip
+    join public.vehicles vehicle
+      on vehicle.user_id = auth.uid()
+     and (
+         vehicle.vin = replace(trip.vin, 'vehicle_device.', '')
+         or vehicle.vin = trip.vehicle_id
+         or vehicle.tesla_id = trip.vehicle_id
+         or vehicle.id::text = trip.vehicle_id
+     )
+    where (p_from is null or trip.start_time >= p_from)
+      and (p_to is null or trip.start_time <= p_to)
+      and (p_vehicle_id is null or trip.vehicle_id = p_vehicle_id)
 ),
 qualifying_trips as (
     select *
@@ -829,10 +859,12 @@ BEGIN
     WHERE vin = _vin;
 
     IF _home_lat IS NULL OR _home_lon IS NULL THEN
-        SELECT home_latitude, home_longitude
+        SELECT user_settings.home_latitude, user_settings.home_longitude
         INTO _home_lat, _home_lon
-        FROM public.app_settings
-        WHERE id = 'default'
+        FROM public.vehicles
+        LEFT JOIN public.user_settings
+            ON public.user_settings.user_id = public.vehicles.user_id
+        WHERE public.vehicles.id = _vehicle_uuid
         LIMIT 1;
     END IF;
 
@@ -1059,7 +1091,6 @@ BEGIN
         WHERE vin = _vin;
     END IF;
 
-    -- Trip detection (existing gear-based behavior retained)
     IF _gear IS NOT NULL THEN
         DECLARE
             _trip uuid;
@@ -1488,31 +1519,6 @@ $$;
 ALTER FUNCTION "public"."update_updated_at_column"() OWNER TO "postgres";
 
 
-CREATE TABLE IF NOT EXISTS "public"."app_settings" (
-    "id" "text" DEFAULT 'default'::"text" NOT NULL,
-    "region" "text" DEFAULT 'eu'::"text",
-    "units" "text" DEFAULT 'metric'::"text",
-    "notifications_enabled" boolean DEFAULT true,
-    "data_source" "text" DEFAULT 'telemetry'::"text",
-    "polling_driving" integer DEFAULT 30,
-    "polling_charging" integer DEFAULT 60,
-    "polling_parked" integer DEFAULT 300,
-    "polling_sleeping" integer DEFAULT 600,
-    "created_at" timestamp with time zone DEFAULT "now"(),
-    "updated_at" timestamp with time zone DEFAULT "now"(),
-    "home_latitude" double precision,
-    "home_longitude" double precision,
-    "home_address" "text",
-    "currency" "text" DEFAULT 'CHF'::"text",
-    "date_format" "text" DEFAULT 'DD/MM'::"text",
-    "map_style" "text" DEFAULT 'streets'::"text",
-    CONSTRAINT "app_settings_map_style_check" CHECK (("map_style" = ANY (ARRAY['streets'::"text", 'dark'::"text"])))
-);
-
-
-ALTER TABLE "public"."app_settings" OWNER TO "postgres";
-
-
 CREATE TABLE IF NOT EXISTS "public"."charging_sessions" (
     "id" "uuid" DEFAULT "extensions"."uuid_generate_v4"() NOT NULL,
     "vehicle_id" "uuid" NOT NULL,
@@ -1552,38 +1558,6 @@ COMMENT ON COLUMN "public"."charging_sessions"."tesla_charge_event_id" IS 'Tesla
 
 
 
-CREATE TABLE IF NOT EXISTS "public"."telemetry_raw" (
-    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
-    "created_at" timestamp with time zone DEFAULT "now"(),
-    "vin" "text" NOT NULL,
-    "timestamp" timestamp with time zone NOT NULL,
-    "payload" "jsonb" NOT NULL
-);
-
-
-ALTER TABLE "public"."telemetry_raw" OWNER TO "postgres";
-
-
-CREATE TABLE IF NOT EXISTS "public"."vehicles" (
-    "id" "uuid" DEFAULT "extensions"."uuid_generate_v4"() NOT NULL,
-    "user_id" "uuid" NOT NULL,
-    "tesla_id" "text" NOT NULL,
-    "vin" "text" NOT NULL,
-    "display_name" "text",
-    "access_token_encrypted" "text",
-    "refresh_token_encrypted" "text",
-    "token_expires_at" timestamp with time zone,
-    "region" "text" DEFAULT 'eu'::"text",
-    "is_active" boolean DEFAULT true,
-    "created_at" timestamp with time zone DEFAULT "now"(),
-    "updated_at" timestamp with time zone DEFAULT "now"(),
-    CONSTRAINT "vehicles_region_check" CHECK (("region" = ANY (ARRAY['na'::"text", 'eu'::"text", 'cn'::"text"])))
-);
-
-
-ALTER TABLE "public"."vehicles" OWNER TO "postgres";
-
-
 CREATE TABLE IF NOT EXISTS "public"."maintenance_records" (
     "id" "uuid" DEFAULT "extensions"."uuid_generate_v4"() NOT NULL,
     "source_key" "text",
@@ -1602,6 +1576,7 @@ CREATE TABLE IF NOT EXISTS "public"."maintenance_records" (
     "end_odometer_km" integer,
     "cost_amount" numeric,
     "cost_currency" "text",
+    "user_id" "uuid",
     CONSTRAINT "maintenance_records_cost_amount_check" CHECK ((("cost_amount" IS NULL) OR ("cost_amount" >= (0)::numeric))),
     CONSTRAINT "maintenance_records_end_odometer_km_check" CHECK ((("end_odometer_km" IS NULL) OR ("end_odometer_km" >= 0))),
     CONSTRAINT "maintenance_records_odometer_km_check" CHECK ((("odometer_km" IS NULL) OR ("odometer_km" >= 0))),
@@ -1630,21 +1605,6 @@ CREATE TABLE IF NOT EXISTS "public"."notifications" (
 ALTER TABLE "public"."notifications" OWNER TO "postgres";
 
 
-CREATE TABLE IF NOT EXISTS "public"."polling_settings" (
-    "id" "uuid" DEFAULT "extensions"."uuid_generate_v4"() NOT NULL,
-    "vehicle_id" "uuid" NOT NULL,
-    "driving_interval_sec" integer DEFAULT 30,
-    "charging_interval_sec" integer DEFAULT 300,
-    "parked_interval_sec" integer DEFAULT 1800,
-    "sleeping_interval_sec" integer DEFAULT 3600,
-    "created_at" timestamp with time zone DEFAULT "now"(),
-    "updated_at" timestamp with time zone DEFAULT "now"()
-);
-
-
-ALTER TABLE "public"."polling_settings" OWNER TO "postgres";
-
-
 CREATE TABLE IF NOT EXISTS "public"."profiles" (
     "id" "uuid" NOT NULL,
     "email" "text",
@@ -1663,45 +1623,16 @@ CREATE TABLE IF NOT EXISTS "public"."profiles" (
 ALTER TABLE "public"."profiles" OWNER TO "postgres";
 
 
-CREATE TABLE IF NOT EXISTS "public"."telemetry_events" (
+CREATE TABLE IF NOT EXISTS "public"."telemetry_raw" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
-    "vehicle_id" "text" NOT NULL,
-    "trip_id" "uuid",
-    "event_type" "text" NOT NULL,
-    "event_data" "jsonb",
-    "latitude" numeric(10,6),
-    "longitude" numeric(10,6),
-    "speed" numeric(10,2),
-    "battery_level" integer,
-    "created_at" timestamp with time zone DEFAULT "now"()
-);
-
-
-ALTER TABLE "public"."telemetry_events" OWNER TO "postgres";
-
-
-CREATE TABLE IF NOT EXISTS "public"."temp_charging_sessions" (
-    "id" "uuid" DEFAULT "extensions"."uuid_generate_v4"() NOT NULL,
-    "vehicle_id" "uuid" NOT NULL,
-    "start_time" timestamp with time zone NOT NULL,
-    "end_time" timestamp with time zone,
-    "start_battery_pct" double precision,
-    "end_battery_pct" double precision,
-    "energy_added_kwh" double precision,
-    "charge_rate_kw" double precision,
-    "latitude" double precision,
-    "longitude" double precision,
-    "location_name" "text",
-    "charger_type" "text",
-    "cost_estimate" double precision,
-    "is_complete" boolean DEFAULT false,
     "created_at" timestamp with time zone DEFAULT "now"(),
-    "cost_user_entered" double precision,
-    "currency" "text" DEFAULT 'CHF'::"text"
+    "vin" "text" NOT NULL,
+    "timestamp" timestamp with time zone NOT NULL,
+    "payload" "jsonb" NOT NULL
 );
 
 
-ALTER TABLE "public"."temp_charging_sessions" OWNER TO "postgres";
+ALTER TABLE "public"."telemetry_raw" OWNER TO "postgres";
 
 
 CREATE TABLE IF NOT EXISTS "public"."tesla_sessions" (
@@ -1714,7 +1645,7 @@ CREATE TABLE IF NOT EXISTS "public"."tesla_sessions" (
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "last_used_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "user_id" "uuid",
+    "user_id" "uuid" NOT NULL,
     CONSTRAINT "tesla_sessions_region_check" CHECK (("region" = ANY (ARRAY['na'::"text", 'eu'::"text", 'cn'::"text"])))
 );
 
@@ -1779,6 +1710,7 @@ CREATE TABLE IF NOT EXISTS "public"."tyre_sets" (
     "notes" "text",
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "user_id" "uuid",
     CONSTRAINT "tyre_sets_purchase_odometer_km_check" CHECK ((("purchase_odometer_km" IS NULL) OR ("purchase_odometer_km" >= 0))),
     CONSTRAINT "tyre_sets_season_check" CHECK (("season" = ANY (ARRAY['summer'::"text", 'winter'::"text", 'all_season'::"text"]))),
     CONSTRAINT "tyre_sets_status_check" CHECK (("status" = ANY (ARRAY['active'::"text", 'retired'::"text"])))
@@ -1801,7 +1733,13 @@ CREATE TABLE IF NOT EXISTS "public"."user_settings" (
     "created_at" timestamp with time zone DEFAULT "now"(),
     "updated_at" timestamp with time zone DEFAULT "now"(),
     "map_style" "text" DEFAULT 'streets'::"text",
+    "currency" "text" DEFAULT 'CHF'::"text",
+    "date_format" "text" DEFAULT 'DD/MM'::"text",
+    "home_latitude" double precision,
+    "home_longitude" double precision,
+    "home_address" "text",
     CONSTRAINT "user_settings_data_source_check" CHECK (("data_source" = ANY (ARRAY['polling'::"text", 'telemetry'::"text"]))),
+    CONSTRAINT "user_settings_date_format_check" CHECK (("date_format" = ANY (ARRAY['DD/MM'::"text", 'MM/DD'::"text"]))),
     CONSTRAINT "user_settings_map_style_check" CHECK (("map_style" = ANY (ARRAY['streets'::"text", 'dark'::"text"]))),
     CONSTRAINT "user_settings_region_check" CHECK (("region" = ANY (ARRAY['na'::"text", 'eu'::"text", 'cn'::"text"]))),
     CONSTRAINT "user_settings_units_check" CHECK (("units" = ANY (ARRAY['imperial'::"text", 'metric'::"text"])))
@@ -1809,29 +1747,6 @@ CREATE TABLE IF NOT EXISTS "public"."user_settings" (
 
 
 ALTER TABLE "public"."user_settings" OWNER TO "postgres";
-
-
-CREATE TABLE IF NOT EXISTS "public"."vehicle_snapshots" (
-    "id" "uuid" DEFAULT "extensions"."uuid_generate_v4"() NOT NULL,
-    "vehicle_id" "uuid" NOT NULL,
-    "timestamp" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "state" "text",
-    "battery_level" integer,
-    "battery_range" double precision,
-    "charging_state" "text",
-    "charge_limit_soc" integer,
-    "latitude" double precision,
-    "longitude" double precision,
-    "odometer" double precision,
-    "inside_temp" double precision,
-    "outside_temp" double precision,
-    "is_climate_on" boolean,
-    "shift_state" "text",
-    "speed" double precision
-);
-
-
-ALTER TABLE "public"."vehicle_snapshots" OWNER TO "postgres";
 
 
 CREATE TABLE IF NOT EXISTS "public"."vehicle_status" (
@@ -1885,9 +1800,24 @@ CREATE TABLE IF NOT EXISTS "public"."vehicle_status" (
 ALTER TABLE "public"."vehicle_status" OWNER TO "postgres";
 
 
-ALTER TABLE ONLY "public"."app_settings"
-    ADD CONSTRAINT "app_settings_pkey" PRIMARY KEY ("id");
+CREATE TABLE IF NOT EXISTS "public"."vehicles" (
+    "id" "uuid" DEFAULT "extensions"."uuid_generate_v4"() NOT NULL,
+    "user_id" "uuid" NOT NULL,
+    "tesla_id" "text" NOT NULL,
+    "vin" "text" NOT NULL,
+    "display_name" "text",
+    "access_token_encrypted" "text",
+    "refresh_token_encrypted" "text",
+    "token_expires_at" timestamp with time zone,
+    "region" "text" DEFAULT 'eu'::"text",
+    "is_active" boolean DEFAULT true,
+    "created_at" timestamp with time zone DEFAULT "now"(),
+    "updated_at" timestamp with time zone DEFAULT "now"(),
+    CONSTRAINT "vehicles_region_check" CHECK (("region" = ANY (ARRAY['na'::"text", 'eu'::"text", 'cn'::"text"])))
+);
 
+
+ALTER TABLE "public"."vehicles" OWNER TO "postgres";
 
 
 ALTER TABLE ONLY "public"."charging_session_tesla_sync_jobs"
@@ -1920,33 +1850,13 @@ ALTER TABLE ONLY "public"."notifications"
 
 
 
-ALTER TABLE ONLY "public"."polling_settings"
-    ADD CONSTRAINT "polling_settings_pkey" PRIMARY KEY ("id");
-
-
-
-ALTER TABLE ONLY "public"."polling_settings"
-    ADD CONSTRAINT "polling_settings_vehicle_id_key" UNIQUE ("vehicle_id");
-
-
-
 ALTER TABLE ONLY "public"."profiles"
     ADD CONSTRAINT "profiles_pkey" PRIMARY KEY ("id");
 
 
 
-ALTER TABLE ONLY "public"."telemetry_events"
-    ADD CONSTRAINT "telemetry_events_pkey" PRIMARY KEY ("id");
-
-
-
 ALTER TABLE ONLY "public"."telemetry_raw"
     ADD CONSTRAINT "telemetry_raw_pkey" PRIMARY KEY ("id");
-
-
-
-ALTER TABLE ONLY "public"."temp_charging_sessions"
-    ADD CONSTRAINT "temp_charging_sessions_pkey" PRIMARY KEY ("id");
 
 
 
@@ -1957,6 +1867,11 @@ ALTER TABLE ONLY "public"."tesla_sessions"
 
 ALTER TABLE ONLY "public"."tesla_sessions"
     ADD CONSTRAINT "tesla_sessions_session_token_hash_key" UNIQUE ("session_token_hash");
+
+
+
+ALTER TABLE ONLY "public"."tesla_sessions"
+    ADD CONSTRAINT "tesla_sessions_user_id_key" UNIQUE ("user_id");
 
 
 
@@ -1982,11 +1897,6 @@ ALTER TABLE ONLY "public"."tyre_sets"
 
 ALTER TABLE ONLY "public"."user_settings"
     ADD CONSTRAINT "user_settings_pkey" PRIMARY KEY ("user_id");
-
-
-
-ALTER TABLE ONLY "public"."vehicle_snapshots"
-    ADD CONSTRAINT "vehicle_snapshots_pkey" PRIMARY KEY ("id");
 
 
 
@@ -2029,19 +1939,15 @@ CREATE INDEX "idx_maintenance_records_tyre_set_id" ON "public"."maintenance_reco
 
 
 
+CREATE INDEX "idx_maintenance_records_user_id_start_date" ON "public"."maintenance_records" USING "btree" ("user_id", "start_date" DESC) WHERE ("user_id" IS NOT NULL);
+
+
+
 CREATE INDEX "idx_notifications_type" ON "public"."notifications" USING "btree" ("type", "created_at" DESC);
 
 
 
 CREATE INDEX "idx_notifications_unread" ON "public"."notifications" USING "btree" ("vehicle_id", "is_read", "created_at" DESC);
-
-
-
-CREATE INDEX "idx_telemetry_trip" ON "public"."telemetry_events" USING "btree" ("trip_id", "created_at");
-
-
-
-CREATE INDEX "idx_telemetry_vehicle_time" ON "public"."telemetry_events" USING "btree" ("vehicle_id", "created_at" DESC);
 
 
 
@@ -2069,15 +1975,11 @@ CREATE INDEX "idx_tyre_sets_status" ON "public"."tyre_sets" USING "btree" ("stat
 
 
 
-CREATE INDEX "idx_vehicle_snapshots_vehicle_id_timestamp" ON "public"."vehicle_snapshots" USING "btree" ("vehicle_id", "timestamp" DESC);
+CREATE INDEX "idx_tyre_sets_user_id_created_at" ON "public"."tyre_sets" USING "btree" ("user_id", "created_at" DESC) WHERE ("user_id" IS NOT NULL);
 
 
 
 CREATE INDEX "idx_vehicles_user_id" ON "public"."vehicles" USING "btree" ("user_id");
-
-
-
-CREATE INDEX "temp_charging_sessions_vehicle_id_idx" ON "public"."temp_charging_sessions" USING "btree" ("vehicle_id");
 
 
 
@@ -2110,10 +2012,6 @@ CREATE OR REPLACE TRIGGER "update_charging_session_tesla_sync_jobs_updated_at" B
 
 
 CREATE OR REPLACE TRIGGER "update_maintenance_records_updated_at" BEFORE UPDATE ON "public"."maintenance_records" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at_column"();
-
-
-
-CREATE OR REPLACE TRIGGER "update_polling_settings_updated_at" BEFORE UPDATE ON "public"."polling_settings" FOR EACH ROW EXECUTE FUNCTION "public"."update_updated_at_column"();
 
 
 
@@ -2153,13 +2051,13 @@ ALTER TABLE ONLY "public"."maintenance_records"
 
 
 
+ALTER TABLE ONLY "public"."maintenance_records"
+    ADD CONSTRAINT "maintenance_records_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."profiles"("id") ON DELETE CASCADE;
+
+
+
 ALTER TABLE ONLY "public"."notifications"
     ADD CONSTRAINT "notifications_vehicle_id_fkey" FOREIGN KEY ("vehicle_id") REFERENCES "public"."vehicles"("id") ON DELETE CASCADE;
-
-
-
-ALTER TABLE ONLY "public"."polling_settings"
-    ADD CONSTRAINT "polling_settings_vehicle_id_fkey" FOREIGN KEY ("vehicle_id") REFERENCES "public"."vehicles"("id") ON DELETE CASCADE;
 
 
 
@@ -2173,30 +2071,18 @@ ALTER TABLE ONLY "public"."tesla_sessions"
 
 
 
+ALTER TABLE ONLY "public"."tyre_sets"
+    ADD CONSTRAINT "tyre_sets_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."profiles"("id") ON DELETE CASCADE;
+
+
+
 ALTER TABLE ONLY "public"."user_settings"
     ADD CONSTRAINT "user_settings_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "auth"."users"("id") ON DELETE CASCADE;
 
 
 
-ALTER TABLE ONLY "public"."vehicle_snapshots"
-    ADD CONSTRAINT "vehicle_snapshots_vehicle_id_fkey" FOREIGN KEY ("vehicle_id") REFERENCES "public"."vehicles"("id") ON DELETE CASCADE;
-
-
-
 ALTER TABLE ONLY "public"."vehicles"
     ADD CONSTRAINT "vehicles_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."profiles"("id") ON DELETE CASCADE;
-
-
-
-CREATE POLICY "Anyone can view telemetry" ON "public"."telemetry_events" FOR SELECT USING (true);
-
-
-
-CREATE POLICY "Service role can insert telemetry" ON "public"."telemetry_events" FOR INSERT TO "service_role" WITH CHECK (true);
-
-
-
-CREATE POLICY "Service role can manage app settings" ON "public"."app_settings" TO "service_role" USING (true) WITH CHECK (true);
 
 
 
@@ -2213,10 +2099,6 @@ CREATE POLICY "Service role can manage notifications" ON "public"."notifications
 
 
 CREATE POLICY "Service role can manage telemetry raw" ON "public"."telemetry_raw" TO "service_role" USING (true) WITH CHECK (true);
-
-
-
-CREATE POLICY "Service role can manage temp charging sessions" ON "public"."temp_charging_sessions" TO "service_role" USING (true) WITH CHECK (true);
 
 
 
@@ -2258,15 +2140,19 @@ CREATE POLICY "Users can manage own charging sessions" ON "public"."charging_ses
 
 
 
-CREATE POLICY "Users can manage own polling settings" ON "public"."polling_settings" USING ((EXISTS ( SELECT 1
+CREATE POLICY "Users can manage own maintenance records" ON "public"."maintenance_records" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+
+CREATE POLICY "Users can manage own trips" ON "public"."trips" TO "authenticated" USING ((EXISTS ( SELECT 1
    FROM "public"."vehicles"
-  WHERE (("vehicles"."id" = "polling_settings"."vehicle_id") AND ("vehicles"."user_id" = "auth"."uid"())))));
-
-
-
-CREATE POLICY "Users can manage own snapshots" ON "public"."vehicle_snapshots" USING ((EXISTS ( SELECT 1
+  WHERE (("vehicles"."user_id" = "auth"."uid"()) AND (("vehicles"."vin" = "replace"("trips"."vin", 'vehicle_device.'::"text", ''::"text")) OR ("vehicles"."vin" = "trips"."vehicle_id") OR ("vehicles"."tesla_id" = "trips"."vehicle_id") OR (("vehicles"."id")::"text" = "trips"."vehicle_id")))))) WITH CHECK ((EXISTS ( SELECT 1
    FROM "public"."vehicles"
-  WHERE (("vehicles"."id" = "vehicle_snapshots"."vehicle_id") AND ("vehicles"."user_id" = "auth"."uid"())))));
+  WHERE (("vehicles"."user_id" = "auth"."uid"()) AND (("vehicles"."vin" = "replace"("trips"."vin", 'vehicle_device.'::"text", ''::"text")) OR ("vehicles"."vin" = "trips"."vehicle_id") OR ("vehicles"."tesla_id" = "trips"."vehicle_id") OR (("vehicles"."id")::"text" = "trips"."vehicle_id"))))));
+
+
+
+CREATE POLICY "Users can manage own tyre sets" ON "public"."tyre_sets" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
 
 
 
@@ -2277,6 +2163,14 @@ CREATE POLICY "Users can manage own waypoints" ON "public"."trip_waypoints" TO "
    FROM ("public"."trips"
      JOIN "public"."vehicles" ON (("trips"."vehicle_id" = ("vehicles"."id")::"text")))
   WHERE (("trips"."id" = "trip_waypoints"."trip_id") AND ("vehicles"."user_id" = "auth"."uid"())))));
+
+
+
+CREATE POLICY "Users can update own notifications" ON "public"."notifications" FOR UPDATE TO "authenticated" USING ((EXISTS ( SELECT 1
+   FROM "public"."vehicles"
+  WHERE (("vehicles"."id" = "notifications"."vehicle_id") AND ("vehicles"."user_id" = "auth"."uid"()))))) WITH CHECK ((EXISTS ( SELECT 1
+   FROM "public"."vehicles"
+  WHERE (("vehicles"."id" = "notifications"."vehicle_id") AND ("vehicles"."user_id" = "auth"."uid"())))));
 
 
 
@@ -2304,29 +2198,11 @@ CREATE POLICY "Users can view own notifications" ON "public"."notifications" FOR
 
 
 
-CREATE POLICY "Users can view own polling settings" ON "public"."polling_settings" FOR SELECT USING ((EXISTS ( SELECT 1
-   FROM "public"."vehicles"
-  WHERE (("vehicles"."id" = "polling_settings"."vehicle_id") AND ("vehicles"."user_id" = "auth"."uid"())))));
-
-
-
 CREATE POLICY "Users can view own profile" ON "public"."profiles" FOR SELECT USING (("auth"."uid"() = "id"));
 
 
 
 CREATE POLICY "Users can view own settings" ON "public"."user_settings" FOR SELECT USING (("auth"."uid"() = "user_id"));
-
-
-
-CREATE POLICY "Users can view own snapshots" ON "public"."vehicle_snapshots" FOR SELECT USING ((EXISTS ( SELECT 1
-   FROM "public"."vehicles"
-  WHERE (("vehicles"."id" = "vehicle_snapshots"."vehicle_id") AND ("vehicles"."user_id" = "auth"."uid"())))));
-
-
-
-CREATE POLICY "Users can view own temp charging sessions" ON "public"."temp_charging_sessions" FOR SELECT TO "authenticated" USING ((EXISTS ( SELECT 1
-   FROM "public"."vehicles" "vehicles"
-  WHERE (("vehicles"."id" = "temp_charging_sessions"."vehicle_id") AND ("vehicles"."user_id" = "auth"."uid"())))));
 
 
 
@@ -2353,9 +2229,6 @@ CREATE POLICY "Users can view own waypoints" ON "public"."trip_waypoints" FOR SE
 
 
 
-ALTER TABLE "public"."app_settings" ENABLE ROW LEVEL SECURITY;
-
-
 ALTER TABLE "public"."charging_session_tesla_sync_jobs" ENABLE ROW LEVEL SECURITY;
 
 
@@ -2368,19 +2241,10 @@ ALTER TABLE "public"."maintenance_records" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."notifications" ENABLE ROW LEVEL SECURITY;
 
 
-ALTER TABLE "public"."polling_settings" ENABLE ROW LEVEL SECURITY;
-
-
 ALTER TABLE "public"."profiles" ENABLE ROW LEVEL SECURITY;
 
 
-ALTER TABLE "public"."telemetry_events" ENABLE ROW LEVEL SECURITY;
-
-
 ALTER TABLE "public"."telemetry_raw" ENABLE ROW LEVEL SECURITY;
-
-
-ALTER TABLE "public"."temp_charging_sessions" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."tesla_sessions" ENABLE ROW LEVEL SECURITY;
@@ -2396,9 +2260,6 @@ ALTER TABLE "public"."tyre_sets" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."user_settings" ENABLE ROW LEVEL SECURITY;
-
-
-ALTER TABLE "public"."vehicle_snapshots" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."vehicle_status" ENABLE ROW LEVEL SECURITY;
@@ -2528,27 +2389,9 @@ GRANT ALL ON FUNCTION "public"."update_updated_at_column"() TO "service_role";
 
 
 
-GRANT ALL ON TABLE "public"."app_settings" TO "anon";
-GRANT ALL ON TABLE "public"."app_settings" TO "authenticated";
-GRANT ALL ON TABLE "public"."app_settings" TO "service_role";
-
-
-
 GRANT ALL ON TABLE "public"."charging_sessions" TO "anon";
 GRANT ALL ON TABLE "public"."charging_sessions" TO "authenticated";
 GRANT ALL ON TABLE "public"."charging_sessions" TO "service_role";
-
-
-
-GRANT ALL ON TABLE "public"."telemetry_raw" TO "anon";
-GRANT ALL ON TABLE "public"."telemetry_raw" TO "authenticated";
-GRANT ALL ON TABLE "public"."telemetry_raw" TO "service_role";
-
-
-
-GRANT ALL ON TABLE "public"."vehicles" TO "anon";
-GRANT ALL ON TABLE "public"."vehicles" TO "authenticated";
-GRANT ALL ON TABLE "public"."vehicles" TO "service_role";
 
 
 
@@ -2564,27 +2407,15 @@ GRANT ALL ON TABLE "public"."notifications" TO "service_role";
 
 
 
-GRANT ALL ON TABLE "public"."polling_settings" TO "anon";
-GRANT ALL ON TABLE "public"."polling_settings" TO "authenticated";
-GRANT ALL ON TABLE "public"."polling_settings" TO "service_role";
-
-
-
 GRANT ALL ON TABLE "public"."profiles" TO "anon";
 GRANT ALL ON TABLE "public"."profiles" TO "authenticated";
 GRANT ALL ON TABLE "public"."profiles" TO "service_role";
 
 
 
-GRANT ALL ON TABLE "public"."telemetry_events" TO "anon";
-GRANT ALL ON TABLE "public"."telemetry_events" TO "authenticated";
-GRANT ALL ON TABLE "public"."telemetry_events" TO "service_role";
-
-
-
-GRANT ALL ON TABLE "public"."temp_charging_sessions" TO "anon";
-GRANT ALL ON TABLE "public"."temp_charging_sessions" TO "authenticated";
-GRANT ALL ON TABLE "public"."temp_charging_sessions" TO "service_role";
+GRANT ALL ON TABLE "public"."telemetry_raw" TO "anon";
+GRANT ALL ON TABLE "public"."telemetry_raw" TO "authenticated";
+GRANT ALL ON TABLE "public"."telemetry_raw" TO "service_role";
 
 
 
@@ -2618,15 +2449,15 @@ GRANT ALL ON TABLE "public"."user_settings" TO "service_role";
 
 
 
-GRANT ALL ON TABLE "public"."vehicle_snapshots" TO "anon";
-GRANT ALL ON TABLE "public"."vehicle_snapshots" TO "authenticated";
-GRANT ALL ON TABLE "public"."vehicle_snapshots" TO "service_role";
-
-
-
 GRANT ALL ON TABLE "public"."vehicle_status" TO "anon";
 GRANT ALL ON TABLE "public"."vehicle_status" TO "authenticated";
 GRANT ALL ON TABLE "public"."vehicle_status" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."vehicles" TO "anon";
+GRANT ALL ON TABLE "public"."vehicles" TO "authenticated";
+GRANT ALL ON TABLE "public"."vehicles" TO "service_role";
 
 
 
@@ -2654,6 +2485,7 @@ ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TAB
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "anon";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "authenticated";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "service_role";
+
 
 
 

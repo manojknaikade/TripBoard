@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createAdminClient } from '@/lib/supabase/admin';
+import { getAuthenticatedUser } from '@/lib/supabase/auth';
+import { createClient } from '@/lib/supabase/server';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
 import {
     ROTATION_STATUS_OPTIONS,
@@ -58,7 +59,7 @@ export async function GET(request: NextRequest) {
         ? Math.trunc(offsetParam)
         : 0;
 
-    const supabase = createAdminClient();
+    const supabase = await createClient();
     let query = supabase
         .from('maintenance_records')
         .select('*')
@@ -249,7 +250,11 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Select a tyre set for tyre-related records' }, { status: 400 });
         }
 
-        const supabase = createAdminClient();
+        const user = await getAuthenticatedUser();
+        if (!user) {
+            return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+        }
+        const supabase = await createClient();
 
         let tyreSetSeason: TyreSeason | null = null;
 
@@ -279,6 +284,7 @@ export async function POST(request: NextRequest) {
         const tyreEndOdometer = endOdometerKm ?? odometerKm;
 
         const payload = {
+            user_id: user.id,
             tyre_set_id: isTyreLinkedRecord(serviceType) ? tyreSetId : null,
             service_type: serviceType,
             title,

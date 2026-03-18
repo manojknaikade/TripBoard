@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createAdminClient } from '@/lib/supabase/admin';
+import { createClient } from '@/lib/supabase/server';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
 
 export const dynamic = 'force-dynamic';
@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
     const countOnly = searchParams.get('count_only') === 'true';
     const limit = parseInt(searchParams.get('limit') || '50');
 
-    const supabase = createAdminClient();
+    const supabase = await createClient();
 
     const unreadCountPromise = supabase
         .from('notifications')
@@ -73,7 +73,7 @@ export async function PATCH(request: NextRequest) {
         const body = await request.json();
         const { ids, mark_all } = body;
 
-        const supabase = createAdminClient();
+        const supabase = await createClient();
 
         if (mark_all) {
             const { error } = await supabase

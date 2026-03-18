@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createAdminClient } from '@/lib/supabase/admin';
+import { getAuthenticatedUser } from '@/lib/supabase/auth';
+import { createClient } from '@/lib/supabase/server';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
 import {
     TYRE_SEASON_OPTIONS,
@@ -28,7 +29,7 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
-    const supabase = createAdminClient();
+    const supabase = await createClient();
     const { data, error } = await supabase
         .from('tyre_sets')
         .select('*')
@@ -85,10 +86,15 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Invalid tyre set status' }, { status: 400 });
         }
 
-        const supabase = createAdminClient();
+        const user = await getAuthenticatedUser();
+        if (!user) {
+            return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+        }
+        const supabase = await createClient();
         const { data, error } = await supabase
             .from('tyre_sets')
             .insert({
+                user_id: user.id,
                 name,
                 season,
                 purchase_date: purchaseDate || null,

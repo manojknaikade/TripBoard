@@ -1,4 +1,4 @@
-import { createAdminClient } from '@/lib/supabase/admin'
+import { createClient } from '@/lib/supabase/server'
 import { getTeslaSession } from '@/lib/tesla/auth-server'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
     }
 
-    const supabase = createAdminClient()
+    const supabase = await createClient()
 
     // Query the vehicle_status table - get the real car (not simulated)
     // Real VIN format: vehicle_device.XP7YGCES0RB433079

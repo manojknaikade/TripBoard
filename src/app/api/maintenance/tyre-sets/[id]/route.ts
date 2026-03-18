@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createAdminClient } from '@/lib/supabase/admin';
+import { createClient } from '@/lib/supabase/server';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
 
 export const dynamic = 'force-dynamic';
@@ -20,7 +20,7 @@ export async function DELETE(
         return NextResponse.json({ error: 'Tyre set id is required' }, { status: 400 });
     }
 
-    const supabase = createAdminClient();
+    const supabase = await createClient();
     const { error } = await supabase
         .from('tyre_sets')
         .delete()

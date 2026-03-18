@@ -1,4 +1,4 @@
-import { createAdminClient } from '@/lib/supabase/admin'
+import { createClient } from '@/lib/supabase/server'
 import { getTeslaSession } from '@/lib/tesla/auth-server'
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -8,7 +8,7 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
     }
 
-    const supabase = createAdminClient()
+    const supabase = await createClient()
     const requestedFields = request.nextUrl.searchParams.get('fields')
     const selectClause = requestedFields === 'odometer'
         ? 'odometer'
@@ -16,16 +16,18 @@ export async function GET(request: NextRequest) {
             ? 'lat, lon, speed, battery_level'
             : '*'
 
-    const { data, error } = await supabase
+    const { data: rows, error } = await supabase
         .from('vehicle_status')
         .select(selectClause)
-        .maybeSingle()
+        .order('updated_at', { ascending: false })
+        .limit(1)
+
+    const data = rows?.[0];
 
     if (error) {
         return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
-    // If no data yet (brand new car setup), return empty object or sensible default
     if (!data) {
         return NextResponse.json({ status: "waiting_for_telemetry" })
     }

@@ -1,16 +1,46 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Key, ArrowLeft, Loader2, Info } from 'lucide-react';
+import { createClient } from '@/lib/supabase/client';
 
 export default function ApiKeyPage() {
     const router = useRouter();
+    const [checkingSession, setCheckingSession] = useState(true);
     const [accessToken, setAccessToken] = useState('');
     const [refreshToken, setRefreshToken] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        let active = true;
+        const supabase = createClient();
+
+        supabase.auth.getUser()
+            .then(({ data: { user } }) => {
+                if (!active) {
+                    return;
+                }
+
+                if (!user) {
+                    router.replace('/auth/login?next=%2Fauth%2Fapi-key');
+                    return;
+                }
+
+                setCheckingSession(false);
+            })
+            .catch(() => {
+                if (active) {
+                    router.replace('/auth/login?next=%2Fauth%2Fapi-key');
+                }
+            });
+
+        return () => {
+            active = false;
+        };
+    }, [router]);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -26,7 +56,8 @@ export default function ApiKeyPage() {
             });
 
             if (!response.ok) {
-                throw new Error('Invalid token or API error');
+                const payload = await response.json().catch(() => null);
+                throw new Error(payload?.error || 'Invalid token or API error');
             }
 
             router.push('/dashboard');
@@ -35,6 +66,14 @@ export default function ApiKeyPage() {
             setLoading(false);
         }
     };
+
+    if (checkingSession) {
+        return (
+            <main className="flex min-h-screen items-center justify-center">
+                <Loader2 className="h-8 w-8 animate-spin text-red-500" />
+            </main>
+        );
+    }
 
     return (
         <main className="flex min-h-screen items-center justify-center px-4">
@@ -62,8 +101,8 @@ export default function ApiKeyPage() {
                             <Key className="h-5 w-5 text-white" />
                         </div>
                         <div>
-                            <h1 className="text-xl font-bold">Use API Key</h1>
-                            <p className="text-sm text-slate-400">Enter your Tesla API token</p>
+                            <h1 className="text-xl font-bold">Connect with Tesla Tokens</h1>
+                            <p className="text-sm text-slate-400">Store Tesla tokens on your signed-in TripBoard account</p>
                         </div>
                     </div>
 
@@ -144,9 +183,9 @@ export default function ApiKeyPage() {
 
                     {/* Login link */}
                     <p className="mt-6 text-center text-sm text-slate-400">
-                        Prefer email login?{' '}
-                        <Link href="/auth/login" className="text-red-400 hover:text-red-300">
-                            Sign in with email
+                        Prefer Tesla OAuth?{' '}
+                        <Link href="/api/auth/tesla" className="text-red-400 hover:text-red-300">
+                            Connect with Tesla
                         </Link>
                     </p>
                 </div>

@@ -498,18 +498,20 @@ async function persistTeslaSessionRecord(supabase, row, session) {
 }
 
 async function getStoredTeslaSessionForVehicle(supabase, vehicle) {
+    if (!vehicle.user_id) {
+        return null;
+    }
+
     const preferredRegion = normalizeTeslaRegion(vehicle.region);
 
-    const runQuery = async (userId, region) => {
+    const runQuery = async (region) => {
         let query = supabase
             .from('tesla_sessions')
             .select('id,user_id,session_token_hash,access_token_encrypted,refresh_token_encrypted,token_expires_at,region')
             .order('last_used_at', { ascending: false })
+            .eq('user_id', vehicle.user_id)
             .limit(1);
 
-        if (userId) {
-            query = query.eq('user_id', userId);
-        }
         if (region) {
             query = query.eq('region', region);
         }
@@ -521,18 +523,9 @@ async function getStoredTeslaSessionForVehicle(supabase, vehicle) {
         return data;
     };
 
-    let row = null;
-    if (vehicle.user_id) {
-        row = await runQuery(vehicle.user_id, preferredRegion);
-        if (!row) {
-            row = await runQuery(vehicle.user_id, null);
-        }
-    }
-    if (!row && preferredRegion) {
-        row = await runQuery(null, preferredRegion);
-    }
+    let row = await runQuery(preferredRegion);
     if (!row) {
-        row = await runQuery(null, null);
+        row = await runQuery(null);
     }
     if (!row) {
         return null;

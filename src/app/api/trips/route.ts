@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { createClient } from '@/lib/supabase/server';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
 import {
     dedupeRoutePoints,
@@ -9,6 +10,10 @@ import {
 } from '@/lib/trips/routePoints';
 
 async function getSupabase() {
+    return createClient();
+}
+
+async function getTelemetrySupabase() {
     return createAdminClient();
 }
 
@@ -358,12 +363,14 @@ async function loadStoredThumbnailRoutePoints(
 }
 
 async function loadThumbnailRoutePointsFromTelemetry(
-    supabase: Awaited<ReturnType<typeof getSupabase>>,
+    supabase: ReturnType<typeof createAdminClient>,
     tripId: string,
     vin: string | null,
     startTime: string,
     endTime: string | null
 ) {
+    void tripId;
+
     if (!vin) {
         return [];
     }
@@ -497,10 +504,11 @@ export async function GET(request: NextRequest) {
     // detail-rich recent views still work, but avoid turning large history ranges
     // into one telemetry query per trip.
     if (missingStoredRoutes.length > 0 && filteredTrips.length <= MAX_TELEMETRY_THUMBNAIL_FALLBACK_TRIPS) {
+        const telemetrySupabase = await getTelemetrySupabase();
         await Promise.all(missingStoredRoutes.map(async (trip) => {
             try {
                 const points = await loadThumbnailRoutePointsFromTelemetry(
-                    supabase,
+                    telemetrySupabase,
                     trip.id,
                     vinByTripId.get(trip.id) || null,
                     trip.start_time,

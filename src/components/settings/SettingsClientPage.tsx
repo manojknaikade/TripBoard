@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import {
     Clock,
     Bell,
@@ -11,9 +12,11 @@ import {
     MapPin,
     Banknote,
     Map,
+    ShieldCheck,
 } from 'lucide-react';
 import { useSettingsStore } from '@/stores/settingsStore';
 import Header from '@/components/Header';
+import PasswordUpdateForm from '@/components/auth/PasswordUpdateForm';
 import ViewportGate from '@/components/ViewportGate';
 import { fetchCachedJson, invalidateCachedJson, readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
 import type { AppSettingsSnapshot, HomeLocationSnapshot } from '@/lib/settings/appSettings';
@@ -590,6 +593,33 @@ export default function SettingsClientPage({
                     </SettingsSection>
 
                     {/* Data Export */}
+                    <SettingsSection
+                        icon={<ShieldCheck className="h-5 w-5" />}
+                        title="Account Security"
+                        description="Manage how you sign in to TripBoard and rotate your password when needed."
+                    >
+                        <div className="mb-6 rounded-2xl border border-slate-700/50 bg-slate-900/25 p-4 text-sm text-slate-300">
+                            <p>
+                                Password sign-in and magic links are both available for your Supabase account.
+                                Tesla stays linked separately after you authenticate with TripBoard.
+                            </p>
+                            <div className="mt-3">
+                                <Link
+                                    href="/auth/forgot-password"
+                                    className="text-red-400 transition-colors hover:text-red-300"
+                                >
+                                    Need a recovery email instead?
+                                </Link>
+                            </div>
+                        </div>
+
+                        <PasswordUpdateForm
+                            mode="change"
+                            successRedirectTo="/dashboard/settings"
+                            successMessage="Password updated successfully."
+                        />
+                    </SettingsSection>
+
                     <SettingsSection
                         icon={<Download className="h-5 w-5" />}
                         title="Data Export"

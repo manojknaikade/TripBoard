@@ -10,7 +10,7 @@ function readFirstParam(value?: string | string[]) {
     return Array.isArray(value) ? value[0] : value;
 }
 
-export default async function LoginPage({
+export default async function SignupPage({
     searchParams,
 }: {
     searchParams: AuthSearchParams;
@@ -19,7 +19,7 @@ export default async function LoginPage({
 
     return (
         <EmailAuthPage
-            mode="login"
+            mode="signup"
             nextPath={readFirstParam(params.next) || '/dashboard'}
             initialError={readFirstParam(params.error) || null}
             initialMessage={readFirstParam(params.message) || null}

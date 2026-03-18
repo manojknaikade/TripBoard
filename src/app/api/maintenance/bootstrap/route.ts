@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createAdminClient } from '@/lib/supabase/admin';
+import { createClient } from '@/lib/supabase/server';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
 
 export const dynamic = 'force-dynamic';
@@ -31,7 +31,7 @@ export async function GET(request: NextRequest) {
         : HISTORY_PAGE_SIZE_DEFAULT;
 
     try {
-        const supabase = createAdminClient();
+        const supabase = await createClient();
 
         const [
             linkedRecordsResult,
@@ -64,7 +64,8 @@ export async function GET(request: NextRequest) {
             supabase
                 .from('vehicle_status')
                 .select('odometer')
-                .maybeSingle(),
+                .order('updated_at', { ascending: false })
+                .limit(1),
         ]);
 
         if (linkedRecordsResult.error) {
@@ -136,7 +137,7 @@ export async function GET(request: NextRequest) {
             };
         }
 
-        const rawOdometer = vehicleStatusResult.data?.odometer;
+        const rawOdometer = vehicleStatusResult.data?.[0]?.odometer;
         const parsedOdometer = typeof rawOdometer === 'number'
             ? rawOdometer
             : typeof rawOdometer === 'string'

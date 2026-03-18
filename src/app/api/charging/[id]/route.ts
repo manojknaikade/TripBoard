@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createAdminClient } from '@/lib/supabase/admin';
+import { createClient } from '@/lib/supabase/server';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
 
 export const dynamic = 'force-dynamic';
@@ -22,7 +22,7 @@ export async function GET(
     }
 
     try {
-        const supabase = createAdminClient();
+        const supabase = await createClient();
 
         const { data: chargingSession, error } = await supabase
             .from('charging_sessions')

@@ -1,14 +1,13 @@
 import crypto from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getAuthenticatedUser } from '@/lib/supabase/auth';
 import { normalizeTeslaRegion, type TeslaRegion } from '@/lib/tesla/api';
 
 const TESLA_TOKEN_URL = 'https://auth.tesla.com/oauth2/v3/token';
 const TESLA_CLIENT_ID = process.env.TESLA_CLIENT_ID!;
 const TESLA_CLIENT_SECRET = process.env.TESLA_CLIENT_SECRET!;
 const TESLA_SESSION_COOKIE = 'tesla_session';
-const TESLA_SESSION_MAX_AGE = 30 * 24 * 60 * 60;
 const TOKEN_REFRESH_WINDOW_MS = 5 * 60 * 1000;
 
 type TeslaSessionInput = {
@@ -28,7 +27,6 @@ type TeslaSessionRow = {
 };
 
 export type TeslaSession = TeslaSessionInput & {
-    sessionToken: string;
     tokenExpiresAt: string | null;
 };
 
@@ -93,17 +91,6 @@ function hashSessionToken(sessionToken: string) {
     return crypto.createHash('sha256').update(sessionToken).digest('hex');
 }
 
-function getTeslaSessionCookieOptions(request: NextRequest) {
-    const isLocalhost = request.nextUrl.hostname === 'localhost';
-
-    return {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production' && !isLocalhost,
-        sameSite: 'lax' as const,
-        maxAge: TESLA_SESSION_MAX_AGE,
-    };
-}
-
 function getTokenExpiry(accessToken: string) {
     try {
         const payload = JSON.parse(
@@ -133,33 +120,30 @@ function toStoredTeslaSession(row: TeslaSessionRow): StoredTeslaSession {
 }
 
 async function persistTeslaSessionRecord(params: {
-    sessionTokenHash: string;
     session: TeslaSessionInput;
-    userId?: string | null;
+    userId: string;
+    sessionTokenHash?: string | null;
 }) {
     const supabase = createAdminClient();
     const tokenExpiresAt = getTokenExpiry(params.session.accessToken);
     const payload: Record<string, string | null> = {
-        session_token_hash: params.sessionTokenHash,
+        session_token_hash: params.sessionTokenHash ?? hashSessionToken(crypto.randomUUID()),
         access_token_encrypted: encryptValue(params.session.accessToken),
         refresh_token_encrypted: params.session.refreshToken
             ? encryptValue(params.session.refreshToken)
             : null,
         token_expires_at: tokenExpiresAt,
         region: params.session.region,
+        user_id: params.userId,
         updated_at: new Date().toISOString(),
         last_used_at: new Date().toISOString(),
     };
-
-    if (params.userId !== undefined) {
-        payload.user_id = params.userId;
-    }
 
     const { error } = await supabase
         .from('tesla_sessions')
         .upsert(
             payload,
-            { onConflict: 'session_token_hash' }
+            { onConflict: 'user_id' }
         );
 
     if (error) {
@@ -169,12 +153,12 @@ async function persistTeslaSessionRecord(params: {
     return tokenExpiresAt;
 }
 
-async function getTeslaSessionRow(sessionToken: string) {
+async function getTeslaSessionRowForUser(userId: string) {
     const supabase = createAdminClient();
     const { data, error } = await supabase
         .from('tesla_sessions')
         .select('id, user_id, session_token_hash, access_token_encrypted, refresh_token_encrypted, token_expires_at, region')
-        .eq('session_token_hash', hashSessionToken(sessionToken))
+        .eq('user_id', userId)
         .maybeSingle<TeslaSessionRow>();
 
     if (error) {
@@ -199,7 +183,7 @@ async function touchTeslaSessionRecord(sessionTokenHash: string) {
     }
 }
 
-async function deleteTeslaSessionRecord(sessionToken: string) {
+async function deleteTeslaSessionRecordByToken(sessionToken: string) {
     const supabase = createAdminClient();
     const { error } = await supabase
         .from('tesla_sessions')
@@ -211,11 +195,19 @@ async function deleteTeslaSessionRecord(sessionToken: string) {
     }
 }
 
-async function refreshStoredTeslaSession(
-    sessionToken: string,
-    session: TeslaSession,
-    row: TeslaSessionRow,
-) {
+async function deleteTeslaSessionRecordByUser(userId: string) {
+    const supabase = createAdminClient();
+    const { error } = await supabase
+        .from('tesla_sessions')
+        .delete()
+        .eq('user_id', userId);
+
+    if (error) {
+        throw new Error(`Failed to delete Tesla session: ${error.message}`);
+    }
+}
+
+async function refreshStoredTeslaSession(session: TeslaSession, row: TeslaSessionRow) {
     const refreshedStoredSession = await ensureFreshStoredTeslaSession({
         ...toStoredTeslaSession(row),
         accessToken: session.accessToken,
@@ -229,7 +221,6 @@ async function refreshStoredTeslaSession(
     }
 
     return {
-        sessionToken,
         accessToken: refreshedStoredSession.accessToken,
         refreshToken: refreshedStoredSession.refreshToken,
         region: refreshedStoredSession.region,
@@ -242,48 +233,42 @@ export async function setTeslaSession(
     response: NextResponse,
     session: TeslaSessionInput,
     options?: {
-        userId?: string | null;
+        userId?: string;
     }
 ) {
-    const sessionToken =
-        request.cookies.get(TESLA_SESSION_COOKIE)?.value ||
-        crypto.randomBytes(32).toString('base64url');
+    void request;
+
+    if (!options?.userId) {
+        throw new Error('Supabase authentication is required before connecting Tesla');
+    }
 
     await persistTeslaSessionRecord({
-        sessionTokenHash: hashSessionToken(sessionToken),
         session,
-        userId: options?.userId,
+        userId: options.userId,
     });
 
-    response.cookies.set(
-        TESLA_SESSION_COOKIE,
-        sessionToken,
-        getTeslaSessionCookieOptions(request)
-    );
-
+    response.cookies.delete(TESLA_SESSION_COOKIE);
     response.cookies.delete('tesla_access_token');
     response.cookies.delete('tesla_refresh_token');
 }
 
-export async function getTeslaSession(request: NextRequest): Promise<TeslaSession | null> {
-    const sessionToken = request.cookies.get(TESLA_SESSION_COOKIE)?.value;
-
-    if (!sessionToken) {
+async function getTeslaSessionForAuthenticatedUser(): Promise<TeslaSession | null> {
+    const user = await getAuthenticatedUser();
+    if (!user) {
         return null;
     }
 
-    return getTeslaSessionFromToken(sessionToken);
+    return getTeslaSessionForUserId(user.id);
 }
 
-async function getTeslaSessionFromToken(sessionToken: string): Promise<TeslaSession | null> {
-    const row = await getTeslaSessionRow(sessionToken);
+async function getTeslaSessionForUserId(userId: string): Promise<TeslaSession | null> {
+    const row = await getTeslaSessionRowForUser(userId);
     if (!row) {
         return null;
     }
 
     try {
         const session: TeslaSession = {
-            sessionToken,
             accessToken: decryptValue(row.access_token_encrypted),
             refreshToken: row.refresh_token_encrypted
                 ? decryptValue(row.refresh_token_encrypted)
@@ -295,9 +280,9 @@ async function getTeslaSessionFromToken(sessionToken: string): Promise<TeslaSess
         if (!session.tokenExpiresAt) {
             session.tokenExpiresAt = getTokenExpiry(session.accessToken);
             await persistTeslaSessionRecord({
-                sessionTokenHash: row.session_token_hash,
                 session,
-                userId: row.user_id,
+                sessionTokenHash: row.session_token_hash,
+                userId,
             });
         }
 
@@ -305,17 +290,13 @@ async function getTeslaSessionFromToken(sessionToken: string): Promise<TeslaSess
             const msUntilExpiry = new Date(session.tokenExpiresAt).getTime() - Date.now();
 
             if (msUntilExpiry < TOKEN_REFRESH_WINDOW_MS) {
-                const refreshedSession = await refreshStoredTeslaSession(
-                    sessionToken,
-                    session,
-                    row,
-                );
+                const refreshedSession = await refreshStoredTeslaSession(session, row);
                 if (refreshedSession) {
                     return refreshedSession;
                 }
 
                 if (msUntilExpiry <= 0) {
-                    await deleteTeslaSessionRecord(sessionToken);
+                    await deleteTeslaSessionRecordByUser(userId);
                     return null;
                 }
             }
@@ -329,30 +310,35 @@ async function getTeslaSessionFromToken(sessionToken: string): Promise<TeslaSess
         return session;
     } catch (error) {
         console.error('Failed to decrypt Tesla session:', error);
-        await deleteTeslaSessionRecord(sessionToken);
+        await deleteTeslaSessionRecordByUser(userId);
         return null;
     }
+}
+
+export async function getTeslaSession(_request: NextRequest): Promise<TeslaSession | null> {
+    void _request;
+    return getTeslaSessionForAuthenticatedUser();
 }
 
 export async function getTeslaSessionFromServerCookies(): Promise<TeslaSession | null> {
-    const cookieStore = await cookies();
-    const sessionToken = cookieStore.get(TESLA_SESSION_COOKIE)?.value;
-
-    if (!sessionToken) {
-        return null;
-    }
-
-    return getTeslaSessionFromToken(sessionToken);
+    return getTeslaSessionForAuthenticatedUser();
 }
 
 export async function clearTeslaSession(request: NextRequest, response: NextResponse) {
+    const user = await getAuthenticatedUser().catch(() => null);
     const sessionToken = request.cookies.get(TESLA_SESSION_COOKIE)?.value;
 
-    if (sessionToken) {
+    if (user?.id) {
         try {
-            await deleteTeslaSessionRecord(sessionToken);
+            await deleteTeslaSessionRecordByUser(user.id);
         } catch (error) {
             console.error('Failed to delete Tesla session during sign-out:', error);
+        }
+    } else if (sessionToken) {
+        try {
+            await deleteTeslaSessionRecordByToken(sessionToken);
+        } catch (error) {
+            console.error('Failed to delete legacy Tesla session during sign-out:', error);
         }
     }
 
@@ -393,22 +379,19 @@ export async function refreshTeslaTokenRaw(refreshToken: string) {
 }
 
 async function getLatestTeslaSessionRow(params: {
-    userId?: string | null;
+    userId: string;
     preferredRegion?: string | null;
 }) {
     const supabase = createAdminClient();
     const preferredRegion = normalizeTeslaRegion(params.preferredRegion);
 
-    const runQuery = async (userId?: string | null, region?: TeslaRegion | null) => {
+    const runQuery = async (region?: TeslaRegion | null) => {
         let query = supabase
             .from('tesla_sessions')
             .select('id, user_id, session_token_hash, access_token_encrypted, refresh_token_encrypted, token_expires_at, region')
             .order('last_used_at', { ascending: false })
+            .eq('user_id', params.userId)
             .limit(1);
-
-        if (userId) {
-            query = query.eq('user_id', userId);
-        }
 
         if (region) {
             query = query.eq('region', region);
@@ -423,32 +406,22 @@ async function getLatestTeslaSessionRow(params: {
         return data;
     };
 
-    if (params.userId) {
-        const exactUserMatch = await runQuery(params.userId, preferredRegion);
-        if (exactUserMatch) {
-            return exactUserMatch;
-        }
-
-        const userFallback = await runQuery(params.userId, null);
-        if (userFallback) {
-            return userFallback;
-        }
+    const exactUserMatch = await runQuery(preferredRegion);
+    if (exactUserMatch) {
+        return exactUserMatch;
     }
 
-    if (preferredRegion) {
-        const exactRegionMatch = await runQuery(null, preferredRegion);
-        if (exactRegionMatch) {
-            return exactRegionMatch;
-        }
-    }
-
-    return runQuery(null, null);
+    return runQuery(null);
 }
 
 export async function getStoredTeslaSessionForUser(
     userId?: string | null,
     preferredRegion?: string | null,
 ): Promise<StoredTeslaSession | null> {
+    if (!userId) {
+        return null;
+    }
+
     const row = await getLatestTeslaSessionRow({
         userId,
         preferredRegion,
@@ -464,16 +437,20 @@ export async function getStoredTeslaSessionForUser(
 export async function ensureFreshStoredTeslaSession(
     session: StoredTeslaSession,
 ): Promise<StoredTeslaSession | null> {
+    if (!session.userId) {
+        return null;
+    }
+
     if (!session.tokenExpiresAt) {
         const tokenExpiresAt = getTokenExpiry(session.accessToken);
 
         await persistTeslaSessionRecord({
-            sessionTokenHash: session.sessionTokenHash,
             session: {
                 accessToken: session.accessToken,
                 refreshToken: session.refreshToken,
                 region: session.region,
             },
+            sessionTokenHash: session.sessionTokenHash,
             userId: session.userId,
         });
 
@@ -504,8 +481,8 @@ export async function ensureFreshStoredTeslaSession(
     };
 
     const tokenExpiresAt = await persistTeslaSessionRecord({
-        sessionTokenHash: session.sessionTokenHash,
         session: refreshedSession,
+        sessionTokenHash: session.sessionTokenHash,
         userId: session.userId,
     });
 

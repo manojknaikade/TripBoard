@@ -1,4 +1,4 @@
-import { createAdminClient } from '@/lib/supabase/admin';
+import { createClient } from '@/lib/supabase/server';
 import { NextRequest, NextResponse } from 'next/server';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
 import {
@@ -384,7 +384,7 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
         }
 
-        const supabase = createAdminClient();
+        const supabase = await createClient();
         const { searchParams } = new URL(request.url);
         const scope = normalizeScope(searchParams.get('scope'));
         const includeDriving = scope !== 'charging';
@@ -395,10 +395,9 @@ export async function GET(request: NextRequest) {
 
         try {
             const { data: settings } = await supabase
-                .from('app_settings')
+                .from('user_settings')
                 .select('units, date_format')
-                .eq('id', 'default')
-                .single();
+                .maybeSingle();
 
             if (settings?.units) {
                 userUnits = settings.units as UserUnits;
