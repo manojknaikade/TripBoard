@@ -94,6 +94,12 @@ type TripListSummaryRpcRow = {
     avg_efficiency: NumericLike;
 };
 
+type VehicleLookupRow = {
+    id: string;
+    vin: string | null;
+    tesla_id: string | null;
+};
+
 function parseNumericLike(value: NumericLike): number {
     if (typeof value === 'number') {
         return Number.isFinite(value) ? value : 0;
@@ -142,6 +148,65 @@ const TRIP_SUMMARY_SELECT = [
     'start_battery_pct',
     'end_battery_pct',
 ].join(', ');
+
+function normalizeTelemetryVin(value: string | null): string | null {
+    if (!value) {
+        return null;
+    }
+
+    return value.replace(/^vehicle_device\./, '');
+}
+
+function isUuid(value: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+async function loadAccessibleVehicles(
+    supabase: Awaited<ReturnType<typeof getSupabase>>
+) {
+    const { data, error } = await supabase
+        .from('vehicles')
+        .select('id, vin, tesla_id')
+        .order('created_at', { ascending: true });
+
+    if (error) {
+        throw error;
+    }
+
+    return ((data || []) as unknown) as VehicleLookupRow[];
+}
+
+function resolveVehicleFromLookup(
+    vehicles: VehicleLookupRow[],
+    vehicleIdentifier: string | null
+): VehicleLookupRow | null {
+    if (!vehicleIdentifier) {
+        return null;
+    }
+
+    const normalizedVin = normalizeTelemetryVin(vehicleIdentifier);
+
+    if (isUuid(vehicleIdentifier)) {
+        const uuidMatch = vehicles.find((vehicle) => vehicle.id === vehicleIdentifier);
+        if (uuidMatch) {
+            return uuidMatch;
+        }
+    }
+
+    const teslaIdMatch = vehicles.find((vehicle) => vehicle.tesla_id === vehicleIdentifier);
+    if (teslaIdMatch) {
+        return teslaIdMatch;
+    }
+
+    if (normalizedVin) {
+        const vinMatch = vehicles.find((vehicle) => vehicle.vin === normalizedVin);
+        if (vinMatch) {
+            return vinMatch;
+        }
+    }
+
+    return null;
+}
 
 function getTripDistance(trip: TripSummaryRow): number {
     if (trip.distance_miles != null) {
@@ -263,43 +328,31 @@ async function loadTripSummary(
 }
 
 async function resolveTripsWithVin(
-    supabase: Awaited<ReturnType<typeof getSupabase>>,
+    vehicles: VehicleLookupRow[],
     trips: TripForVinResolution[]
 ) {
-    const vehicleIds = Array.from(
-        new Set(
-            trips
-                .map((trip) => trip.vehicle_id)
-                .filter((vehicleId): vehicleId is string =>
-                    typeof vehicleId === 'string' && !vehicleId.startsWith('vehicle_device.')
-                )
-        )
-    );
-
     const vehicleVinMap = new Map<string, string>();
 
-    if (vehicleIds.length > 0) {
-        const { data: vehicles, error } = await supabase
-            .from('vehicles')
-            .select('id, vin')
-            .in('id', vehicleIds);
-
-        if (error) {
-            throw error;
+    for (const vehicle of vehicles) {
+        if (!vehicle.vin) {
+            continue;
         }
 
-        for (const vehicle of vehicles || []) {
-            if (vehicle.id && vehicle.vin) {
-                vehicleVinMap.set(vehicle.id, vehicle.vin);
-            }
+        vehicleVinMap.set(vehicle.id, vehicle.vin);
+
+        if (vehicle.tesla_id) {
+            vehicleVinMap.set(vehicle.tesla_id, vehicle.vin);
         }
+
+        vehicleVinMap.set(vehicle.vin, vehicle.vin);
     }
 
     return trips.flatMap((trip) => {
         const resolvedVin =
-            trip.vin
-            || (trip.vehicle_id?.startsWith('vehicle_device.') ? trip.vehicle_id : null)
-            || (trip.vehicle_id ? vehicleVinMap.get(trip.vehicle_id) || null : null);
+            normalizeTelemetryVin(trip.vin)
+            || (trip.vehicle_id
+                ? vehicleVinMap.get(normalizeTelemetryVin(trip.vehicle_id) || trip.vehicle_id) || null
+                : null);
 
         if (!resolvedVin) {
             return [];
@@ -418,6 +471,27 @@ export async function GET(request: NextRequest) {
     const to = searchParams.get('to');
 
     const supabase = await getSupabase();
+    const vehicles = await loadAccessibleVehicles(supabase);
+    const selectedVehicle = resolveVehicleFromLookup(vehicles, vehicleId);
+
+    if (vehicleId && !selectedVehicle) {
+        return NextResponse.json({
+            success: true,
+            trips: [],
+            limit,
+            offset,
+            hasMore: false,
+            nextOffset: null,
+            summary: includeSummary
+                ? {
+                    totalTrips: 0,
+                    totalDistance: 0,
+                    totalEnergy: 0,
+                    avgEfficiency: 0,
+                }
+                : null,
+        });
+    }
 
     // Query trips - using the original schema structure
     let query = supabase
@@ -431,8 +505,8 @@ export async function GET(request: NextRequest) {
     if (to) {
         query = query.lte('start_time', to);
     }
-    if (vehicleId) {
-        query = query.eq('vehicle_id', vehicleId);
+    if (selectedVehicle) {
+        query = query.eq('vehicle_id', selectedVehicle.id);
     }
 
     query = query.range(offset, offset + limit);
@@ -440,7 +514,11 @@ export async function GET(request: NextRequest) {
     const [listResult, summary] = await Promise.all([
         query,
         includeSummary
-            ? loadTripSummary(supabase, { from, to, vehicleId })
+            ? loadTripSummary(supabase, {
+                from,
+                to,
+                vehicleId: selectedVehicle?.id || null,
+            })
             : Promise.resolve(null),
     ]);
 
@@ -474,7 +552,7 @@ export async function GET(request: NextRequest) {
 
     try {
         tripsWithResolvedVin = await resolveTripsWithVin(
-            supabase,
+            vehicles,
             filteredTrips.map((trip) => ({
                 id: trip.id,
                 vin: typeof trip?.vin === 'string' ? trip.vin : null,
@@ -604,16 +682,25 @@ export async function POST(request: NextRequest) {
             address,
             outsideTemp,
         } = body;
+        const vehicleIdentifier = typeof vehicleId === 'number' ? String(vehicleId) : vehicleId;
 
-        if (!vehicleId) {
+        if (!vehicleIdentifier || typeof vehicleIdentifier !== 'string') {
             return NextResponse.json({ error: 'Vehicle ID required' }, { status: 400 });
         }
 
         const supabase = await getSupabase();
+        const vehicles = await loadAccessibleVehicles(supabase);
+        const resolvedVehicle = resolveVehicleFromLookup(vehicles, vehicleIdentifier);
+
+        if (!resolvedVehicle) {
+            return NextResponse.json({ error: 'Vehicle not found' }, { status: 404 });
+        }
+
         const { data: trip, error } = await supabase
             .from('trips')
             .insert({
-                vehicle_id: vehicleId,
+                vin: resolvedVehicle.vin || normalizeTelemetryVin(vehicleIdentifier) || vehicleIdentifier,
+                vehicle_id: resolvedVehicle.id,
                 start_time: new Date().toISOString(),
                 start_latitude: latitude,
                 start_longitude: longitude,

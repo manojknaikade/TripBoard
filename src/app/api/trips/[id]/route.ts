@@ -57,6 +57,34 @@ type TelemetryRawRow = {
     } | null;
 };
 
+type VehicleLookupRow = {
+    id: string;
+    vin: string | null;
+};
+
+function normalizeTelemetryVin(value: string | null): string | null {
+    if (!value) {
+        return null;
+    }
+
+    return value.replace(/^vehicle_device\./, '');
+}
+
+async function loadAccessibleVehicles(
+    supabase: Awaited<ReturnType<typeof createClient>>
+) {
+    const { data, error } = await supabase
+        .from('vehicles')
+        .select('id, vin')
+        .order('created_at', { ascending: true });
+
+    if (error) {
+        throw error;
+    }
+
+    return ((data || []) as unknown) as VehicleLookupRow[];
+}
+
 function formatTrip(trip: TripRow) {
     let distance = trip.distance_miles;
     if (!distance && trip.start_odometer && trip.end_odometer) {
@@ -103,30 +131,28 @@ function formatTrip(trip: TripRow) {
     };
 }
 
-async function resolveTripVin(
-    supabase: Awaited<ReturnType<typeof createClient>>,
-    trip: TripRow
-): Promise<string | null> {
-    if (trip.vin) {
-        return trip.vin;
+function resolveTripVin(
+    trip: TripRow,
+    vehicles: VehicleLookupRow[]
+): string | null {
+    const directVin = normalizeTelemetryVin(trip.vin);
+    if (directVin) {
+        return directVin;
     }
 
     if (!trip.vehicle_id) {
         return null;
     }
 
-    const { data: vehicle } = await supabase
-        .from('vehicles')
-        .select('vin')
-        .eq('id', trip.vehicle_id)
-        .maybeSingle<{ vin: string | null }>();
+    const vehicle = vehicles.find((candidate) => candidate.id === trip.vehicle_id);
 
     return vehicle?.vin ?? null;
 }
 
 async function loadRoutePoints(
     supabase: Awaited<ReturnType<typeof createClient>>,
-    trip: TripRow
+    trip: TripRow,
+    vehicles: VehicleLookupRow[]
 ): Promise<TripRoutePoint[]> {
     const { data: storedWaypoints, error: waypointError } = await supabase
         .from('trip_waypoints')
@@ -142,7 +168,7 @@ async function loadRoutePoints(
         return dedupeRoutePoints(storedWaypoints as TripWaypointRow[]);
     }
 
-    const vin = await resolveTripVin(supabase, trip);
+    const vin = resolveTripVin(trip, vehicles);
     if (!vin) {
         return [];
     }
@@ -213,7 +239,8 @@ export async function GET(
     }
 
     try {
-        const routePoints = await loadRoutePoints(supabase, trip);
+        const vehicles = await loadAccessibleVehicles(supabase);
+        const routePoints = await loadRoutePoints(supabase, trip, vehicles);
         const responseRoutePoints = isThumbnailRequest
             ? sampleRoutePoints(routePoints, THUMBNAIL_ROUTE_POINTS_MAX)
             : routePoints;

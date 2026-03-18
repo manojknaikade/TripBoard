@@ -332,12 +332,7 @@ BEGIN
             coalesce(sum(trips.energy_used_kwh), 0) AS total_energy
         FROM public.trips
         JOIN public.vehicles
-          ON (
-              public.vehicles.vin = REPLACE(public.trips.vin, 'vehicle_device.', '')
-              OR public.vehicles.vin = public.trips.vehicle_id
-              OR public.vehicles.tesla_id = public.trips.vehicle_id
-              OR public.vehicles.id::text = public.trips.vehicle_id
-          )
+          ON public.vehicles.id = public.trips.vehicle_id
         LEFT JOIN public.user_settings
           ON public.user_settings.user_id = public.vehicles.user_id
         WHERE public.trips.start_time >= v_yesterday_start
@@ -646,64 +641,59 @@ $$;
 ALTER FUNCTION "public"."get_maintenance_summary"("p_from_date" "date", "p_to_date" "date") OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."get_trip_list_summary"("p_from" timestamp with time zone DEFAULT NULL::timestamp with time zone, "p_to" timestamp with time zone DEFAULT NULL::timestamp with time zone, "p_vehicle_id" "text" DEFAULT NULL::"text") RETURNS TABLE("total_trips" bigint, "total_distance" numeric, "total_energy" numeric, "avg_efficiency" numeric)
+CREATE OR REPLACE FUNCTION "public"."get_trip_list_summary"("p_from" timestamp with time zone DEFAULT NULL::timestamp with time zone, "p_to" timestamp with time zone DEFAULT NULL::timestamp with time zone, "p_vehicle_id" "uuid" DEFAULT NULL::"uuid") RETURNS TABLE("total_trips" bigint, "total_distance" numeric, "total_energy" numeric, "avg_efficiency" numeric)
     LANGUAGE "sql" SECURITY DEFINER
     SET "search_path" TO 'public'
     AS $$
-with filtered_trips as (
-    select
-        greatest(
-            coalesce(
+WITH filtered_trips AS (
+    SELECT
+        GREATEST(
+            COALESCE(
                 trip.distance_miles,
-                case
-                    when trip.start_odometer is not null and trip.end_odometer is not null
-                        then trip.end_odometer - trip.start_odometer
-                    else null
-                end,
+                CASE
+                    WHEN trip.start_odometer IS NOT NULL AND trip.end_odometer IS NOT NULL
+                        THEN trip.end_odometer - trip.start_odometer
+                    ELSE NULL
+                END,
                 0
             ),
             0
-        ) as distance_miles,
-        case
-            when trip.energy_used_kwh is not null then trip.energy_used_kwh
-            when trip.start_battery_pct is not null
-                and trip.end_battery_pct is not null
-                and trip.start_battery_pct > trip.end_battery_pct
-                then ((trip.start_battery_pct - trip.end_battery_pct) / 100.0) * 75
-            else 0
-        end as energy_kwh
-    from public.trips trip
-    join public.vehicles vehicle
-      on vehicle.user_id = auth.uid()
-     and (
-         vehicle.vin = replace(trip.vin, 'vehicle_device.', '')
-         or vehicle.vin = trip.vehicle_id
-         or vehicle.tesla_id = trip.vehicle_id
-         or vehicle.id::text = trip.vehicle_id
-     )
-    where (p_from is null or trip.start_time >= p_from)
-      and (p_to is null or trip.start_time <= p_to)
-      and (p_vehicle_id is null or trip.vehicle_id = p_vehicle_id)
+        ) AS distance_miles,
+        CASE
+            WHEN trip.energy_used_kwh IS NOT NULL THEN trip.energy_used_kwh
+            WHEN trip.start_battery_pct IS NOT NULL
+                AND trip.end_battery_pct IS NOT NULL
+                AND trip.start_battery_pct > trip.end_battery_pct
+                THEN ((trip.start_battery_pct - trip.end_battery_pct) / 100.0) * 75
+            ELSE 0
+        END AS energy_kwh
+    FROM public.trips AS trip
+    JOIN public.vehicles AS vehicle
+      ON vehicle.id = trip.vehicle_id
+     AND vehicle.user_id = auth.uid()
+    WHERE (p_from IS NULL OR trip.start_time >= p_from)
+      AND (p_to IS NULL OR trip.start_time <= p_to)
+      AND (p_vehicle_id IS NULL OR trip.vehicle_id = p_vehicle_id)
 ),
-qualifying_trips as (
-    select *
-    from filtered_trips
-    where distance_miles >= 0.3
+qualifying_trips AS (
+    SELECT *
+    FROM filtered_trips
+    WHERE distance_miles >= 0.3
 )
-select
-    count(*)::bigint as total_trips,
-    round(coalesce(sum(distance_miles), 0)::numeric, 3) as total_distance,
-    round(coalesce(sum(energy_kwh), 0)::numeric, 3) as total_energy,
-    case
-        when coalesce(sum(distance_miles), 0) > 0
-            then round((sum(energy_kwh) * 1000 / sum(distance_miles))::numeric, 2)
-        else 0
-    end as avg_efficiency
-from qualifying_trips;
+SELECT
+    COUNT(*)::bigint AS total_trips,
+    ROUND(COALESCE(SUM(distance_miles), 0)::numeric, 3) AS total_distance,
+    ROUND(COALESCE(SUM(energy_kwh), 0)::numeric, 3) AS total_energy,
+    CASE
+        WHEN COALESCE(SUM(distance_miles), 0) > 0
+            THEN ROUND((SUM(energy_kwh) * 1000 / SUM(distance_miles))::numeric, 2)
+        ELSE 0
+    END AS avg_efficiency
+FROM qualifying_trips;
 $$;
 
 
-ALTER FUNCTION "public"."get_trip_list_summary"("p_from" timestamp with time zone, "p_to" timestamp with time zone, "p_vehicle_id" "text") OWNER TO "postgres";
+ALTER FUNCTION "public"."get_trip_list_summary"("p_from" timestamp with time zone, "p_to" timestamp with time zone, "p_vehicle_id" "uuid") OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."get_trip_speed_metrics"("p_trip_id" "uuid") RETURNS TABLE("max_speed_mph" numeric, "avg_speed_mph" numeric)
@@ -1103,7 +1093,7 @@ BEGIN
             FROM public.vehicle_status
             WHERE vin = _vin;
 
-            IF (_gear IN ('D', 'R')) AND _trip IS NULL THEN
+            IF (_gear IN ('D', 'R')) AND _trip IS NULL AND _vehicle_uuid IS NOT NULL THEN
                 INSERT INTO public.trips (
                     vin,
                     vehicle_id,
@@ -1118,7 +1108,7 @@ BEGIN
                 )
                 VALUES (
                     _vin,
-                    _vin,
+                    _vehicle_uuid,
                     _event_time,
                     _odo,
                     _lat,
@@ -1672,7 +1662,6 @@ ALTER TABLE "public"."trip_waypoints" OWNER TO "postgres";
 CREATE TABLE IF NOT EXISTS "public"."trips" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "vin" "text" NOT NULL,
-    "vehicle_id" "text",
     "start_time" timestamp with time zone DEFAULT "now"() NOT NULL,
     "end_time" timestamp with time zone,
     "is_complete" boolean DEFAULT false,
@@ -1692,7 +1681,8 @@ CREATE TABLE IF NOT EXISTS "public"."trips" (
     "avg_speed_mph" numeric,
     "min_outside_temp" numeric,
     "max_outside_temp" numeric,
-    "avg_outside_temp" numeric
+    "avg_outside_temp" numeric,
+    "vehicle_id" "uuid" NOT NULL
 );
 
 
@@ -1971,6 +1961,10 @@ CREATE INDEX "idx_trips_complete_start_time" ON "public"."trips" USING "btree" (
 
 
 
+CREATE INDEX "idx_trips_vehicle_id_start_time" ON "public"."trips" USING "btree" ("vehicle_id", "start_time" DESC);
+
+
+
 CREATE INDEX "idx_tyre_sets_status" ON "public"."tyre_sets" USING "btree" ("status", "season", "created_at" DESC);
 
 
@@ -2071,6 +2065,11 @@ ALTER TABLE ONLY "public"."tesla_sessions"
 
 
 
+ALTER TABLE ONLY "public"."trips"
+    ADD CONSTRAINT "trips_vehicle_id_fkey" FOREIGN KEY ("vehicle_id") REFERENCES "public"."vehicles"("id");
+
+
+
 ALTER TABLE ONLY "public"."tyre_sets"
     ADD CONSTRAINT "tyre_sets_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."profiles"("id") ON DELETE CASCADE;
 
@@ -2146,9 +2145,9 @@ CREATE POLICY "Users can manage own maintenance records" ON "public"."maintenanc
 
 CREATE POLICY "Users can manage own trips" ON "public"."trips" TO "authenticated" USING ((EXISTS ( SELECT 1
    FROM "public"."vehicles"
-  WHERE (("vehicles"."user_id" = "auth"."uid"()) AND (("vehicles"."vin" = "replace"("trips"."vin", 'vehicle_device.'::"text", ''::"text")) OR ("vehicles"."vin" = "trips"."vehicle_id") OR ("vehicles"."tesla_id" = "trips"."vehicle_id") OR (("vehicles"."id")::"text" = "trips"."vehicle_id")))))) WITH CHECK ((EXISTS ( SELECT 1
+  WHERE (("vehicles"."id" = "trips"."vehicle_id") AND ("vehicles"."user_id" = "auth"."uid"()))))) WITH CHECK ((EXISTS ( SELECT 1
    FROM "public"."vehicles"
-  WHERE (("vehicles"."user_id" = "auth"."uid"()) AND (("vehicles"."vin" = "replace"("trips"."vin", 'vehicle_device.'::"text", ''::"text")) OR ("vehicles"."vin" = "trips"."vehicle_id") OR ("vehicles"."tesla_id" = "trips"."vehicle_id") OR (("vehicles"."id")::"text" = "trips"."vehicle_id"))))));
+  WHERE (("vehicles"."id" = "trips"."vehicle_id") AND ("vehicles"."user_id" = "auth"."uid"())))));
 
 
 
@@ -2158,11 +2157,11 @@ CREATE POLICY "Users can manage own tyre sets" ON "public"."tyre_sets" TO "authe
 
 CREATE POLICY "Users can manage own waypoints" ON "public"."trip_waypoints" TO "authenticated" USING ((EXISTS ( SELECT 1
    FROM ("public"."trips"
-     JOIN "public"."vehicles" ON (("trips"."vehicle_id" = ("vehicles"."id")::"text")))
-  WHERE (("trips"."id" = "trip_waypoints"."trip_id") AND ("vehicles"."user_id" = "auth"."uid"()))))) WITH CHECK ((EXISTS ( SELECT 1
+     JOIN "public"."vehicles" ON ((("vehicles"."id" = "trips"."vehicle_id") AND ("vehicles"."user_id" = "auth"."uid"()))))
+  WHERE ("trips"."id" = "trip_waypoints"."trip_id")))) WITH CHECK ((EXISTS ( SELECT 1
    FROM ("public"."trips"
-     JOIN "public"."vehicles" ON (("trips"."vehicle_id" = ("vehicles"."id")::"text")))
-  WHERE (("trips"."id" = "trip_waypoints"."trip_id") AND ("vehicles"."user_id" = "auth"."uid"())))));
+     JOIN "public"."vehicles" ON ((("vehicles"."id" = "trips"."vehicle_id") AND ("vehicles"."user_id" = "auth"."uid"()))))
+  WHERE ("trips"."id" = "trip_waypoints"."trip_id"))));
 
 
 
@@ -2208,7 +2207,7 @@ CREATE POLICY "Users can view own settings" ON "public"."user_settings" FOR SELE
 
 CREATE POLICY "Users can view own trips" ON "public"."trips" FOR SELECT TO "authenticated" USING ((EXISTS ( SELECT 1
    FROM "public"."vehicles" "vehicles"
-  WHERE (("vehicles"."user_id" = "auth"."uid"()) AND (("vehicles"."vin" = "replace"("trips"."vin", 'vehicle_device.'::"text", ''::"text")) OR ("vehicles"."vin" = "trips"."vehicle_id") OR ("vehicles"."tesla_id" = "trips"."vehicle_id") OR (("vehicles"."id")::"text" = "trips"."vehicle_id"))))));
+  WHERE (("vehicles"."id" = "trips"."vehicle_id") AND ("vehicles"."user_id" = "auth"."uid"())))));
 
 
 
@@ -2224,8 +2223,8 @@ CREATE POLICY "Users can view own vehicles" ON "public"."vehicles" FOR SELECT US
 
 CREATE POLICY "Users can view own waypoints" ON "public"."trip_waypoints" FOR SELECT TO "authenticated" USING ((EXISTS ( SELECT 1
    FROM ("public"."trips"
-     JOIN "public"."vehicles" ON (("trips"."vehicle_id" = ("vehicles"."id")::"text")))
-  WHERE (("trips"."id" = "trip_waypoints"."trip_id") AND ("vehicles"."user_id" = "auth"."uid"())))));
+     JOIN "public"."vehicles" ON ((("vehicles"."id" = "trips"."vehicle_id") AND ("vehicles"."user_id" = "auth"."uid"()))))
+  WHERE ("trips"."id" = "trip_waypoints"."trip_id"))));
 
 
 
@@ -2335,9 +2334,9 @@ GRANT ALL ON FUNCTION "public"."get_maintenance_summary"("p_from_date" "date", "
 
 
 
-GRANT ALL ON FUNCTION "public"."get_trip_list_summary"("p_from" timestamp with time zone, "p_to" timestamp with time zone, "p_vehicle_id" "text") TO "anon";
-GRANT ALL ON FUNCTION "public"."get_trip_list_summary"("p_from" timestamp with time zone, "p_to" timestamp with time zone, "p_vehicle_id" "text") TO "authenticated";
-GRANT ALL ON FUNCTION "public"."get_trip_list_summary"("p_from" timestamp with time zone, "p_to" timestamp with time zone, "p_vehicle_id" "text") TO "service_role";
+GRANT ALL ON FUNCTION "public"."get_trip_list_summary"("p_from" timestamp with time zone, "p_to" timestamp with time zone, "p_vehicle_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."get_trip_list_summary"("p_from" timestamp with time zone, "p_to" timestamp with time zone, "p_vehicle_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."get_trip_list_summary"("p_from" timestamp with time zone, "p_to" timestamp with time zone, "p_vehicle_id" "uuid") TO "service_role";
 
 
 
