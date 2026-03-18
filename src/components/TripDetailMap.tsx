@@ -66,7 +66,6 @@ export default function TripDetailMap({
 
         return () => {
             if (mapRef.current) {
-                mapRef.current.stop();
                 mapRef.current.remove();
                 mapRef.current = null;
             }
@@ -134,7 +133,6 @@ export default function TripDetailMap({
                 return;
             }
 
-            map.stop();
             map.invalidateSize(false);
 
             if (routeLinePoints.length >= 2) {
@@ -172,7 +170,6 @@ export default function TripDetailMap({
 
         return () => {
             window.cancelAnimationFrame(frameId);
-            map.stop();
         };
     }, [startLat, startLng, endLat, endLng, routePoints]);
 

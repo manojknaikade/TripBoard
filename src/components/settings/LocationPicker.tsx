@@ -44,7 +44,6 @@ function LocationMarker({ lat, lon, onDragEnd }: { lat: number; lon: number; onD
             return;
         }
 
-        map.stop();
         map.setView([lat, lon], map.getZoom(), { animate: false });
     }, [lat, lon, map]);
 

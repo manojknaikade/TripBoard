@@ -46,7 +46,6 @@ function Recenter({ lat, lon }: { lat: number; lon: number }) {
             return;
         }
 
-        map.stop();
         map.setView([lat, lon], map.getZoom(), { animate: false });
     }, [lat, lon, map]);
     return null;

@@ -51,7 +51,6 @@ function FitBounds({ bounds }: { bounds: L.LatLngBoundsExpression }) {
                 return;
             }
 
-            map.stop();
             map.invalidateSize(false);
             map.fitBounds(bounds, {
                 padding: [20, 20],
@@ -62,7 +61,6 @@ function FitBounds({ bounds }: { bounds: L.LatLngBoundsExpression }) {
 
         return () => {
             window.cancelAnimationFrame(frameId);
-            map.stop();
         };
     }, [bounds, map]);
 
