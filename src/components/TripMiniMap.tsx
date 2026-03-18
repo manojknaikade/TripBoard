@@ -38,9 +38,32 @@ function FitBounds({ bounds }: { bounds: L.LatLngBoundsExpression }) {
     const map = useMap();
 
     useEffect(() => {
-        if (bounds) {
-            map.fitBounds(bounds, { padding: [20, 20], maxZoom: 14 });
+        if (!bounds) {
+            return;
         }
+
+        let frameId = 0;
+
+        frameId = window.requestAnimationFrame(() => {
+            const container = map.getContainer();
+
+            if (!container || !container.isConnected) {
+                return;
+            }
+
+            map.stop();
+            map.invalidateSize(false);
+            map.fitBounds(bounds, {
+                padding: [20, 20],
+                maxZoom: 14,
+                animate: false,
+            });
+        });
+
+        return () => {
+            window.cancelAnimationFrame(frameId);
+            map.stop();
+        };
     }, [bounds, map]);
 
     return null;
@@ -126,6 +149,9 @@ export default function TripMiniMap({
                     touchZoom={false}
                     attributionControl={false}
                     preferCanvas
+                    zoomAnimation={false}
+                    fadeAnimation={false}
+                    markerZoomAnimation={false}
                 >
                     <TileLayer
                         attribution={tileConfig.attribution}

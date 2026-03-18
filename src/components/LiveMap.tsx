@@ -40,7 +40,14 @@ const defaultIcon = L.icon({
 function Recenter({ lat, lon }: { lat: number; lon: number }) {
     const map = useMap();
     useEffect(() => {
-        map.setView([lat, lon], map.getZoom());
+        const container = map.getContainer();
+
+        if (!container || !container.isConnected) {
+            return;
+        }
+
+        map.stop();
+        map.setView([lat, lon], map.getZoom(), { animate: false });
     }, [lat, lon, map]);
     return null;
 }
@@ -96,6 +103,9 @@ export default function LiveMap() {
             center={[vehicle.lat, vehicle.lon]}
             zoom={15}
             style={{ height: '100%', width: '100%' }}
+            zoomAnimation={false}
+            fadeAnimation={false}
+            markerZoomAnimation={false}
         >
             <TileLayer
                 attribution={tileConfig.attribution}

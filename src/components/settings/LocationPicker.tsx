@@ -38,7 +38,14 @@ function LocationMarker({ lat, lon, onDragEnd }: { lat: number; lon: number; onD
     const markerRef = useRef<L.Marker | null>(null);
 
     useEffect(() => {
-        map.flyTo([lat, lon], map.getZoom());
+        const container = map.getContainer();
+
+        if (!container || !container.isConnected) {
+            return;
+        }
+
+        map.stop();
+        map.setView([lat, lon], map.getZoom(), { animate: false });
     }, [lat, lon, map]);
 
     const eventHandlers = {
@@ -192,6 +199,9 @@ export default function LocationPicker({ latitude, longitude, address, onLocatio
                     center={[currentLat, currentLon]}
                     zoom={13}
                     style={{ height: '100%', width: '100%' }}
+                    zoomAnimation={false}
+                    fadeAnimation={false}
+                    markerZoomAnimation={false}
                 >
                     <TileLayer
                         attribution={tileConfig.attribution}

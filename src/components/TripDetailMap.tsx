@@ -57,12 +57,16 @@ export default function TripDetailMap({
             zoom: 13,
             zoomControl: true,
             attributionControl: true,
+            zoomAnimation: false,
+            fadeAnimation: false,
+            markerZoomAnimation: false,
         });
 
         routeLayerRef.current = L.layerGroup().addTo(mapRef.current);
 
         return () => {
             if (mapRef.current) {
+                mapRef.current.stop();
                 mapRef.current.remove();
                 mapRef.current = null;
             }
@@ -115,36 +119,61 @@ export default function TripDetailMap({
             .bindPopup(`Start: ${startLat.toFixed(4)}, ${startLng.toFixed(4)}`);
         routeLayer.addLayer(startMarker);
 
-        if (routeLinePoints.length >= 2) {
-            const routeLine = L.polyline(routeLinePoints, {
-                color: '#38bdf8',
-                weight: 4,
-                opacity: 0.85,
-                lineJoin: 'round',
-            });
-            routeLayer.addLayer(routeLine);
-
-            const routeBounds = L.latLngBounds(routeLinePoints);
-            map.fitBounds(routeBounds, { padding: [36, 36] });
-        } else if (fallbackEndPoint && !isSinglePoint) {
-            const fallbackLine = L.polyline([startPoint, fallbackEndPoint], {
-                color: '#60a5fa',
-                weight: 3,
-                opacity: 0.75,
-                dashArray: '10, 10',
-            });
-            routeLayer.addLayer(fallbackLine);
-
-            map.fitBounds(L.latLngBounds([startPoint, fallbackEndPoint]), { padding: [36, 36] });
-        } else {
-            map.setView(startPoint, 14);
-        }
-
         if (fallbackEndPoint && !isSinglePoint) {
             const endMarker = L.marker(fallbackEndPoint, { icon: buildMarkerIcon('#ef4444') })
                 .bindPopup(`End: ${fallbackEndPoint[0].toFixed(4)}, ${fallbackEndPoint[1].toFixed(4)}`);
             routeLayer.addLayer(endMarker);
         }
+
+        let frameId = 0;
+
+        frameId = window.requestAnimationFrame(() => {
+            const container = map.getContainer();
+
+            if (!container || !container.isConnected) {
+                return;
+            }
+
+            map.stop();
+            map.invalidateSize(false);
+
+            if (routeLinePoints.length >= 2) {
+                const routeLine = L.polyline(routeLinePoints, {
+                    color: '#38bdf8',
+                    weight: 4,
+                    opacity: 0.85,
+                    lineJoin: 'round',
+                });
+                routeLayer.addLayer(routeLine);
+
+                const routeBounds = L.latLngBounds(routeLinePoints);
+                map.fitBounds(routeBounds, { padding: [36, 36], animate: false });
+                return;
+            }
+
+            if (fallbackEndPoint && !isSinglePoint) {
+                const fallbackLine = L.polyline([startPoint, fallbackEndPoint], {
+                    color: '#60a5fa',
+                    weight: 3,
+                    opacity: 0.75,
+                    dashArray: '10, 10',
+                });
+                routeLayer.addLayer(fallbackLine);
+
+                map.fitBounds(L.latLngBounds([startPoint, fallbackEndPoint]), {
+                    padding: [36, 36],
+                    animate: false,
+                });
+                return;
+            }
+
+            map.setView(startPoint, 14, { animate: false });
+        });
+
+        return () => {
+            window.cancelAnimationFrame(frameId);
+            map.stop();
+        };
     }, [startLat, startLng, endLat, endLng, routePoints]);
 
     return (
