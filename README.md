@@ -146,6 +146,8 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
    - `supabase/migrations/20260318130000_multi_tenant_auth_hardening.sql` — Moves settings to `user_settings`, adds ownership to maintenance/tyre data, and hardens summary SQL/functions around `auth.uid()`
    - `supabase/migrations/20260318140000_telemetry_home_settings_per_user.sql` — Updates `process_telemetry()` so home-charging detection prefers the linked user’s `user_settings` home coordinates before falling back to the global bootstrap row
    - `supabase/migrations/20260318150000_prune_legacy_tables_and_tesla_session_fallbacks.sql` — Removes obsolete singleton/legacy telemetry tables, deletes anonymous Tesla sessions, and requires owned Tesla sessions only
+   - `supabase/migrations/20260318160000_trips_vehicle_uuid_phase1.sql` — Adds nullable `trips.vehicle_uuid`, backfills historical trips to local `vehicles.id`, and switches trip reads/new writes to prefer the UUID path while keeping legacy `vehicle_id` text compatibility during validation
+   - `supabase/migrations/20260318170000_trips_vehicle_uuid_cutover.sql` — Finalizes the trip vehicle migration by renaming the UUID column back to canonical `trips.vehicle_id`, dropping the legacy text field, and simplifying trip RLS/functions to UUID-only ownership
 
 5. **Run the Development Server**
 
@@ -201,6 +203,7 @@ TripBoard uses a **database-level trigger** (`process_telemetry`) on the `teleme
 
 The Go telemetry server on the VPS ingests raw Tesla Fleet Telemetry and inserts into `telemetry_raw`. All trip/charging logic runs as PL/pgSQL triggers in Supabase.
 Home-charging classification in `process_telemetry()` resolves home coordinates from the linked vehicle owner’s `user_settings` row, with Tesla’s `LocatedAtHome` signal still acting as an input when available.
+Trip ownership now resolves through `trips.vehicle_id -> vehicles.id` as a strict UUID foreign-key path. The temporary mixed text/UUID compatibility layer has been removed after the historical backfill was validated.
 Telemetry-backed dashboard views also depend on the Fleet Telemetry config including `ChargeLimitSoc`; after deploying the migration, re-send telemetry field definitions from Settings so future telemetry updates populate `vehicle_status.charge_limit_soc`.
 Completed Supercharger sessions are queued in Supabase and can be processed either by calling `GET /api/internal/charging/tesla-sync` from a server-side cron with `Authorization: Bearer $CHARGING_SYNC_SECRET` (or `CRON_SECRET`), or by running `scripts/process-charging-sync.js` as a standalone worker on the VPS.
 Historical trip routes can be backfilled from `telemetry_raw` into `trip_waypoints` by applying `supabase/migrations/20260313080000_add_trip_route_waypoints.sql`.
