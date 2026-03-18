@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createAdminClient } from '@/lib/supabase/admin';
+import { createClient } from '@/lib/supabase/server';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
 import { getChargingDisplayCost, getEffectiveChargingEnergyKwh } from '@/lib/charging/energy';
 
@@ -240,8 +240,7 @@ export async function GET(request: NextRequest) {
         );
     }
 
-    // Use admin client to ensure we bypass RLS and get all data for the export
-    const supabase = createAdminClient();
+    const supabase = await createClient();
 
     // Fetch trips
     const { data: trips, error: tripsError } = await supabase

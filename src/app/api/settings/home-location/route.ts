@@ -1,13 +1,14 @@
-import { createAdminClient } from '@/lib/supabase/admin'
+import { getAuthenticatedUser } from '@/lib/supabase/auth';
+import { createClient } from '@/lib/supabase/server';
 import { getHomeLocationSnapshot } from '@/lib/settings/appSettings';
-import { getTeslaSession } from '@/lib/tesla/auth-server'
 import { NextRequest, NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
-    const session = await getTeslaSession(request)
-    if (!session) {
+    const user = await getAuthenticatedUser().catch(() => null);
+    void request;
+    if (!user) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
     }
 
@@ -26,12 +27,12 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-    const session = await getTeslaSession(request)
-    if (!session) {
+    const user = await getAuthenticatedUser().catch(() => null);
+    if (!user) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
     }
 
-    const supabase = createAdminClient()
+    const supabase = await createClient()
 
     try {
         const { latitude, longitude, address } = await request.json()
@@ -41,14 +42,14 @@ export async function POST(request: NextRequest) {
         }
 
         const { error } = await supabase
-            .from('app_settings')
-            .update({
+            .from('user_settings')
+            .upsert({
+                user_id: user.id,
                 home_latitude: latitude,
                 home_longitude: longitude,
                 home_address: address,
                 updated_at: new Date().toISOString(),
-            })
-            .eq('id', 'default')
+            }, { onConflict: 'user_id' })
 
         if (error) {
             return NextResponse.json({ error: error.message }, { status: 500 })

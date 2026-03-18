@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createAdminClient } from '@/lib/supabase/admin';
+import { createClient } from '@/lib/supabase/server';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
 import {
     getChargingBatteryEnergyKwh,
@@ -78,7 +78,7 @@ function parseNumericLike(value: NumericLike): number {
 }
 
 async function loadChargingSummaryFallback(
-    supabase: ReturnType<typeof createAdminClient>,
+    supabase: Awaited<ReturnType<typeof createClient>>,
     options: {
         from: string | null;
         to: string | null;
@@ -136,7 +136,7 @@ async function loadChargingSummaryFallback(
 }
 
 async function loadChargingSummary(
-    supabase: ReturnType<typeof createAdminClient>,
+    supabase: Awaited<ReturnType<typeof createClient>>,
     options: {
         from: string | null;
         to: string | null;
@@ -197,7 +197,7 @@ export async function GET(request: NextRequest) {
     const from = searchParams.get('from');
     const to = searchParams.get('to');
 
-    const supabase = createAdminClient();
+    const supabase = await createClient();
 
     let query = supabase
         .from('charging_sessions')

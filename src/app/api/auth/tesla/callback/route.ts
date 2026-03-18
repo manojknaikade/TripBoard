@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { discoverTeslaVehicles } from '@/lib/tesla/api';
+import { reconcileTeslaAccountOwnership } from '@/lib/tesla/accountLinking';
 import { setTeslaSession } from '@/lib/tesla/auth-server';
-import { createClient } from '@/lib/supabase/server';
+import { getAuthenticatedUser } from '@/lib/supabase/auth';
+import { extractTeslaVehicleSummaries } from '@/lib/tesla/vehicleSummaries';
 
 const TESLA_TOKEN_URL = 'https://auth.tesla.com/oauth2/v3/token';
 const TESLA_CLIENT_ID = process.env.TESLA_CLIENT_ID!;
@@ -92,8 +94,13 @@ export async function GET(request: NextRequest) {
             new URL('/dashboard?tesla_connected=true', request.url)
         );
 
-        const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
+        const user = await getAuthenticatedUser();
+
+        if (!user) {
+            return NextResponse.redirect(
+                new URL('/auth/login?error=Sign in before connecting Tesla', request.url)
+            );
+        }
 
         response.cookies.delete('tesla_oauth_state');
         response.cookies.delete('tesla_code_verifier');
@@ -103,7 +110,13 @@ export async function GET(request: NextRequest) {
             refreshToken: tokens.refresh_token,
             region: discovery.region,
         }, {
-            userId: user?.id ?? null,
+            userId: user.id,
+        });
+
+        await reconcileTeslaAccountOwnership({
+            currentUserId: user.id,
+            region: discovery.region,
+            vehicles: extractTeslaVehicleSummaries(discovery.data),
         });
 
         return response;

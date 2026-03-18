@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createAdminClient } from '@/lib/supabase/admin';
+import { createClient } from '@/lib/supabase/server';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
 import {
     ROTATION_STATUS_OPTIONS,
@@ -134,7 +134,7 @@ export async function PUT(
             return NextResponse.json({ error: 'Select a tyre set for tyre-related records' }, { status: 400 });
         }
 
-        const supabase = createAdminClient();
+        const supabase = await createClient();
         let tyreSetSeason: TyreSeason | null = null;
 
         if (tyreSetId) {

@@ -45,12 +45,14 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
   - Maintenance analytics uses `This Year`, `Last Year`, and `All Time` filters for service reporting
 
 - **User Preferences & Security**
-  - Seamless authentication via **Tesla OAuth** or direct Tesla API token entry
-  - Same-device sessions persist for up to 30 days via an **HttpOnly** session cookie
-  - Tesla access and refresh tokens are stored **server-side in Supabase** and encrypted with `TOKEN_ENCRYPTION_KEY`
+  - App sign-in and sign-up use **Supabase native authentication** with either email/password or email magic links
+  - Tesla OAuth and direct Tesla token entry are now **account-linking** steps after the user signs in
+  - Tesla access and refresh tokens are stored **server-side in Supabase**, encrypted with `TOKEN_ENCRYPTION_KEY`, and linked to the active Supabase user
+  - One linked Tesla account can expose **multiple vehicles** under the same TripBoard user session
+  - Forgot-password and in-app password rotation now use Supabase Auth recovery/update flows
   - Toggle between **Metric** (km, kWh) and **Imperial** (mi, kWh) units
   - Set home address with interactive map picker
-  - Settings persisted to **Supabase** (survives browser clears)
+  - Settings and home location are persisted **per Supabase user** in `user_settings`
   - Selectable map style across dashboard, trip, charging, and settings maps
   - Customizable polling intervals
 
@@ -140,6 +142,10 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
    - `supabase/migrations/20260316014830_add_vehicle_status_charge_limit_soc.sql` — Stores `ChargeLimitSoc` from Fleet Telemetry in `vehicle_status` so telemetry mode can show the real dashboard charge limit without Tesla API polling
    - `supabase/migrations/20260316021448_add_vehicle_status_state.sql` — Stores a canonical telemetry-derived `state` in `vehicle_status` so dashboard status does not depend on route-side derivation alone
    - `supabase/migrations/20260316022700_backfill_trip_speed_metrics.sql` — Recomputes historical and future trip `max_speed_mph` / `avg_speed_mph` from Fleet Telemetry `VehicleSpeed`
+   - `supabase/migrations/20260318120000_bind_tesla_sessions_to_users.sql` — Deduplicates legacy Tesla sessions and enforces one encrypted Tesla token set per Supabase user
+   - `supabase/migrations/20260318130000_multi_tenant_auth_hardening.sql` — Moves settings to `user_settings`, adds ownership to maintenance/tyre data, and hardens summary SQL/functions around `auth.uid()`
+   - `supabase/migrations/20260318140000_telemetry_home_settings_per_user.sql` — Updates `process_telemetry()` so home-charging detection prefers the linked user’s `user_settings` home coordinates before falling back to the global bootstrap row
+   - `supabase/migrations/20260318150000_prune_legacy_tables_and_tesla_session_fallbacks.sql` — Removes obsolete singleton/legacy telemetry tables, deletes anonymous Tesla sessions, and requires owned Tesla sessions only
 
 5. **Run the Development Server**
 
@@ -174,7 +180,6 @@ src/
 ├── stores/               # Zustand state stores
 └── types/                # TypeScript type definitions
 scripts/
-├── telemetry-server.js   # Legacy/local Node telemetry prototype
 ├── process-charging-sync.js # Standalone worker that enriches completed Supercharger sessions with Tesla billing data
 supabase/
 ├── schema.sql            # Canonical bootstrap schema for fresh projects
@@ -195,11 +200,12 @@ TripBoard uses a **database-level trigger** (`process_telemetry`) on the `teleme
 - Queue completed Supercharger sessions for one-time Tesla billing enrichment
 
 The Go telemetry server on the VPS ingests raw Tesla Fleet Telemetry and inserts into `telemetry_raw`. All trip/charging logic runs as PL/pgSQL triggers in Supabase.
+Home-charging classification in `process_telemetry()` resolves home coordinates from the linked vehicle owner’s `user_settings` row, with Tesla’s `LocatedAtHome` signal still acting as an input when available.
 Telemetry-backed dashboard views also depend on the Fleet Telemetry config including `ChargeLimitSoc`; after deploying the migration, re-send telemetry field definitions from Settings so future telemetry updates populate `vehicle_status.charge_limit_soc`.
 Completed Supercharger sessions are queued in Supabase and can be processed either by calling `GET /api/internal/charging/tesla-sync` from a server-side cron with `Authorization: Bearer $CHARGING_SYNC_SECRET` (or `CRON_SECRET`), or by running `scripts/process-charging-sync.js` as a standalone worker on the VPS.
 Historical trip routes can be backfilled from `telemetry_raw` into `trip_waypoints` by applying `supabase/migrations/20260313080000_add_trip_route_waypoints.sql`.
-The legacy `scripts/vps-telemetry-server.js` charging detector is no longer part of the intended production path.
-After applying the charging-detection migration in Supabase, stop any still-running legacy Node detector on the VPS to avoid duplicate `charging_sessions` writes.
+The legacy Node telemetry/charging detector has been removed from the repo and is not part of the production path.
+If you still have an older Node detector running on the VPS, stop it to avoid duplicate `charging_sessions` writes.
 The production `tesla-ingester.service` now loads its Supabase credentials from `/home/ubuntu/.env` via `EnvironmentFile=` instead of hardcoding secrets in the unit file. The Go binary expects `SUPABASE_KEY`, and that value should be the Supabase service role key.
 The current production charging-billing enrichment runs as a separate `systemd` timer on the VPS using `scripts/process-charging-sync.js`, so completed Supercharger sessions are typically enriched within 30 seconds of being closed in Supabase.
 
@@ -235,10 +241,15 @@ The current production charging-billing enrichment runs as a separate `systemd` 
 ## Security Notes
 
 - Tesla access and refresh tokens are never stored in `localStorage`.
-- The browser only keeps an opaque `HttpOnly` session cookie named `tesla_session`.
-- Tesla credentials live in the `tesla_sessions` table in Supabase and are encrypted at rest using `TOKEN_ENCRYPTION_KEY`.
+- The browser session is managed by Supabase Auth. Tesla credentials stay server-side and are never written back to browser storage.
+- Supabase password sign-in, reset-password email recovery, and in-app password change are supported alongside magic links.
+- Tesla credentials live in the `tesla_sessions` table in Supabase, are encrypted at rest using `TOKEN_ENCRYPTION_KEY`, and are keyed by the authenticated Supabase user.
+- Legacy anonymous Tesla sessions are no longer supported; every stored Tesla token must belong to an authenticated Supabase user.
 - Rotating `TOKEN_ENCRYPTION_KEY` invalidates existing Tesla sessions until users reconnect.
-- Public tables exposed through PostgREST should have RLS enabled. This repo now hardens `app_settings`, `telemetry_raw`, `notifications`, `vehicle_status`, and related tables through `supabase/migrations/20260312010000_harden_public_table_rls.sql`.
+- Tesla OAuth is no longer the TripBoard login. Users sign in first, then link Tesla, and that linked account can power multiple vehicles in the same dashboard.
+- Re-linking the same Tesla account under a new Supabase user now reclaims the matching local `vehicles` rows and transfers Tesla-owned maintenance history to the newly authenticated user, so historical trips/charging data remain visible after an auth-account migration.
+- User-facing trips, charging, maintenance, notifications, and settings routes now rely on authenticated Supabase access or explicit `auth.uid()` filtering instead of a global Tesla-cookie-only gate.
+- Public tables exposed through PostgREST should have RLS enabled. This repo hardens active public tables such as `telemetry_raw`, `notifications`, `vehicle_status`, and user-owned records through the tracked Supabase migrations.
 - Routes that use the Supabase service role key are additionally gated server-side in Next.js, because service-role access bypasses RLS by design.
 - The production telemetry ingester should load secrets from `/home/ubuntu/.env` through systemd `EnvironmentFile=`. Avoid embedding Supabase keys directly in `/etc/systemd/system/tesla-ingester.service`.
 

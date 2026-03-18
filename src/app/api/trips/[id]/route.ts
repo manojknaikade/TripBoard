@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { createClient } from '@/lib/supabase/server';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
 import {
     dedupeRoutePoints,
@@ -103,7 +104,7 @@ function formatTrip(trip: TripRow) {
 }
 
 async function resolveTripVin(
-    supabase: ReturnType<typeof createAdminClient>,
+    supabase: Awaited<ReturnType<typeof createClient>>,
     trip: TripRow
 ): Promise<string | null> {
     if (trip.vin) {
@@ -124,7 +125,7 @@ async function resolveTripVin(
 }
 
 async function loadRoutePoints(
-    supabase: ReturnType<typeof createAdminClient>,
+    supabase: Awaited<ReturnType<typeof createClient>>,
     trip: TripRow
 ): Promise<TripRoutePoint[]> {
     const { data: storedWaypoints, error: waypointError } = await supabase
@@ -153,7 +154,8 @@ async function loadRoutePoints(
             : Date.now()
     ).toISOString();
 
-    const { data: telemetryRows, error: telemetryError } = await supabase
+    const telemetrySupabase = createAdminClient();
+    const { data: telemetryRows, error: telemetryError } = await telemetrySupabase
         .from('telemetry_raw')
         .select('timestamp, payload')
         .eq('vin', vin)
@@ -186,7 +188,7 @@ export async function GET(
     const isThumbnailRequest = searchParams.get('thumbnail') === '1';
     const includeRoute = isThumbnailRequest || searchParams.get('includeRoute') === '1';
     const { id } = await context.params;
-    const supabase = createAdminClient();
+    const supabase = await createClient();
 
     const { data: trip, error } = await supabase
         .from('trips')

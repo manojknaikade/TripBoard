@@ -29,17 +29,17 @@ export default function Home() {
                 {/* CTA Buttons */}
                 <div className="flex flex-col gap-4 sm:flex-row">
                     <Link
-                        href="/auth/login"
+                        href="/auth/signup"
                         className="group relative overflow-hidden rounded-xl bg-gradient-to-r from-red-500 to-red-600 px-8 py-3.5 font-semibold text-white shadow-lg shadow-red-500/25 transition-all hover:shadow-xl hover:shadow-red-500/30"
                     >
-                        <span className="relative z-10">Get Started</span>
+                        <span className="relative z-10">Create Account</span>
                         <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-red-600 to-red-700 transition-transform group-hover:translate-x-0" />
                     </Link>
                     <Link
-                        href="/auth/api-key"
+                        href="/auth/login"
                         className="rounded-xl border border-slate-600 bg-slate-800/50 px-8 py-3.5 font-semibold text-slate-300 backdrop-blur-sm transition-all hover:border-slate-500 hover:bg-slate-700/50"
                     >
-                        Use API Key
+                        Sign In
                     </Link>
                 </div>
 

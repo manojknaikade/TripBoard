@@ -1,5 +1,6 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
+import { getAuthenticatedUser } from '@/lib/supabase/auth';
 
 // Tesla OAuth configuration
 const TESLA_AUTH_URL = 'https://auth.tesla.com/oauth2/v3/authorize';
@@ -17,7 +18,16 @@ const SCOPES = [
     'vehicle_charging_cmds',
 ].join(' ');
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+    const user = await getAuthenticatedUser();
+
+    if (!user) {
+        const loginUrl = new URL('/auth/login', request.url);
+        loginUrl.searchParams.set('next', '/dashboard');
+        loginUrl.searchParams.set('error', 'Sign in before connecting Tesla');
+        return NextResponse.redirect(loginUrl);
+    }
+
     // Generate state and code verifier for PKCE
     const state = crypto.randomBytes(16).toString('hex');
     const codeVerifier = crypto.randomBytes(32).toString('base64url');

@@ -715,10 +715,10 @@ export default function DashboardClient({
         <AlertCircle className="h-12 w-12 text-red-500" />
         <p className="text-lg text-slate-400">{error}</p>
         <Link
-          href="/auth/login"
+          href="/api/auth/tesla"
           className="rounded-xl bg-red-500 px-6 py-3 font-semibold text-white"
         >
-          Connect Tesla
+          Connect Tesla Account
         </Link>
       </div>
     );

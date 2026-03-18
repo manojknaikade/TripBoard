@@ -5,8 +5,10 @@ import {
     getAppSettingsSnapshot,
     getHomeLocationSnapshot,
 } from '@/lib/settings/appSettings';
+import { reconcileTeslaAccountOwnership } from '@/lib/tesla/accountLinking';
 import { getTeslaSessionFromServerCookies } from '@/lib/tesla/auth-server';
 import { fetchTeslaVehicleSummaries } from '@/lib/tesla/vehicleSummaries';
+import { getAuthenticatedUser } from '@/lib/supabase/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,6 +17,7 @@ export default async function SettingsPage() {
         getAppSettingsSnapshot().catch(() => DEFAULT_APP_SETTINGS),
         getHomeLocationSnapshot().catch(() => DEFAULT_HOME_LOCATION),
     ]);
+    const user = await getAuthenticatedUser().catch(() => null);
 
     let initialVehicles = [] as Awaited<ReturnType<typeof fetchTeslaVehicleSummaries>>;
 
@@ -27,6 +30,14 @@ export default async function SettingsPage() {
                     session.accessToken,
                     initialSettings.region ?? session.region
                 );
+
+                if (user && initialVehicles.length > 0) {
+                    await reconcileTeslaAccountOwnership({
+                        currentUserId: user.id,
+                        region: initialSettings.region ?? session.region,
+                        vehicles: initialVehicles,
+                    });
+                }
             }
         } catch (error) {
             console.warn('Failed to prefetch telemetry vehicles for settings:', error);

@@ -5,8 +5,10 @@ import {
     normalizeTeslaRegion,
     type TeslaRegion,
 } from '@/lib/tesla/api';
+import { reconcileTeslaAccountOwnership } from '@/lib/tesla/accountLinking';
 import { getTeslaSession, setTeslaSession } from '@/lib/tesla/auth-server';
-import { createClient } from '@/lib/supabase/server';
+import { getAuthenticatedUser } from '@/lib/supabase/auth';
+import { extractTeslaVehicleSummaries } from '@/lib/tesla/vehicleSummaries';
 
 type VehicleSummary = {
     id: number;
@@ -79,6 +81,15 @@ function writeVehicleListCache(cacheKey: string, payload: VehicleListCacheEntry[
 
 export async function POST(request: NextRequest) {
     try {
+        const user = await getAuthenticatedUser();
+
+        if (!user) {
+            return NextResponse.json(
+                { error: 'Supabase authentication is required before storing Tesla tokens' },
+                { status: 401 }
+            );
+        }
+
         const { accessToken, refreshToken, region } = await request.json();
 
         if (!accessToken) {
@@ -97,15 +108,19 @@ export async function POST(request: NextRequest) {
         }
 
         const appResponse = NextResponse.json(discovery.data);
-        const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
 
         await setTeslaSession(request, appResponse, {
             accessToken,
             refreshToken,
             region: discovery.region,
         }, {
-            userId: user?.id ?? null,
+            userId: user.id,
+        });
+
+        await reconcileTeslaAccountOwnership({
+            currentUserId: user.id,
+            region: discovery.region,
+            vehicles: extractTeslaVehicleSummaries(discovery.data),
         });
 
         return appResponse;
@@ -162,6 +177,8 @@ export async function GET(request: NextRequest) {
             );
         }
 
+        const user = await getAuthenticatedUser();
+
         const region = requestedRegion ?? session.region;
         const cacheKey = getVehicleListCacheKey(session.accessToken, region);
 
@@ -179,6 +196,14 @@ export async function GET(request: NextRequest) {
                 { error: (data as { error?: string })?.error || 'Failed to fetch vehicles' },
                 { status: response.status }
             );
+        }
+
+        if (user) {
+            await reconcileTeslaAccountOwnership({
+                currentUserId: user.id,
+                region,
+                vehicles: extractTeslaVehicleSummaries(data),
+            });
         }
 
         if (wantsSummary) {

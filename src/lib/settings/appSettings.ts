@@ -1,4 +1,5 @@
-import { createAdminClient } from '@/lib/supabase/admin';
+import { getAuthenticatedUser } from '@/lib/supabase/auth';
+import { createClient } from '@/lib/supabase/server';
 import type { MapStyle } from '@/lib/maps/style';
 
 export type Region = 'na' | 'eu' | 'cn';
@@ -51,13 +52,32 @@ export const DEFAULT_HOME_LOCATION: HomeLocationSnapshot = {
     address: '',
 };
 
+async function ensureUserSettingsRow(userId: string) {
+    const supabase = await createClient();
+    const { error } = await supabase
+        .from('user_settings')
+        .upsert({ user_id: userId }, { onConflict: 'user_id' });
+
+    if (error) {
+        throw new Error(`Failed to ensure user settings: ${error.message}`);
+    }
+
+    return supabase;
+}
+
 export async function getAppSettingsSnapshot(): Promise<AppSettingsSnapshot> {
-    const supabase = createAdminClient();
+    const user = await getAuthenticatedUser().catch(() => null);
+
+    if (!user) {
+        return DEFAULT_APP_SETTINGS;
+    }
+
+    const supabase = await ensureUserSettingsRow(user.id);
     const { data, error } = await supabase
-        .from('app_settings')
+        .from('user_settings')
         .select('polling_driving, polling_charging, polling_parked, polling_sleeping, region, units, currency, date_format, notifications_enabled, data_source, map_style')
-        .eq('id', 'default')
-        .single();
+        .eq('user_id', user.id)
+        .maybeSingle();
 
     if (error?.code === 'PGRST116' || !data) {
         return DEFAULT_APP_SETTINGS;
@@ -85,12 +105,18 @@ export async function getAppSettingsSnapshot(): Promise<AppSettingsSnapshot> {
 }
 
 export async function getHomeLocationSnapshot(): Promise<HomeLocationSnapshot> {
-    const supabase = createAdminClient();
+    const user = await getAuthenticatedUser().catch(() => null);
+
+    if (!user) {
+        return DEFAULT_HOME_LOCATION;
+    }
+
+    const supabase = await ensureUserSettingsRow(user.id);
     const { data, error } = await supabase
-        .from('app_settings')
+        .from('user_settings')
         .select('home_latitude, home_longitude, home_address')
-        .eq('id', 'default')
-        .single();
+        .eq('user_id', user.id)
+        .maybeSingle();
 
     if (error?.code === 'PGRST116' || !data) {
         return DEFAULT_HOME_LOCATION;

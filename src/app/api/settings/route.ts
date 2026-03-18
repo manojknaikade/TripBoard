@@ -1,14 +1,15 @@
-import { createAdminClient } from '@/lib/supabase/admin'
+import { getAuthenticatedUser } from '@/lib/supabase/auth';
+import { createClient } from '@/lib/supabase/server';
 import { getAppSettingsSnapshot } from '@/lib/settings/appSettings';
-import { getTeslaSession } from '@/lib/tesla/auth-server'
 import { NextRequest, NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
-    const session = await getTeslaSession(request);
+    const user = await getAuthenticatedUser().catch(() => null);
+    void request;
 
-    if (!session) {
+    if (!user) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
@@ -27,9 +28,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-    const session = await getTeslaSession(request);
+    const user = await getAuthenticatedUser().catch(() => null);
 
-    if (!session) {
+    if (!user) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
@@ -37,11 +38,12 @@ export async function POST(request: NextRequest) {
         const body = await request.json()
         const { pollingConfig, region, units, currency, dateFormat, notifications, dataSource, mapStyle } = body
 
-        const supabase = createAdminClient();
+        const supabase = await createClient();
 
         const { error } = await supabase
-            .from('app_settings')
-            .update({
+            .from('user_settings')
+            .upsert({
+                user_id: user.id,
                 polling_driving: pollingConfig?.driving,
                 polling_charging: pollingConfig?.charging,
                 polling_parked: pollingConfig?.parked,
@@ -54,8 +56,7 @@ export async function POST(request: NextRequest) {
                 data_source: dataSource,
                 map_style: mapStyle,
                 updated_at: new Date().toISOString(),
-            })
-            .eq('id', 'default')
+            }, { onConflict: 'user_id' })
 
         if (error) {
             return NextResponse.json({ error: error.message }, { status: 500 })

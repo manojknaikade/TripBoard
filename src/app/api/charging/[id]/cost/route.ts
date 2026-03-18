@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createAdminClient } from '@/lib/supabase/admin';
+import { createClient } from '@/lib/supabase/server';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
 import { canUseManualChargingCost } from '@/lib/charging/energy';
 
@@ -26,7 +26,7 @@ export async function PUT(
         const body = await request.json();
         const { cost, currency } = body;
 
-        const supabase = createAdminClient();
+        const supabase = await createClient();
 
         const { data: existingSession, error: fetchError } = await supabase
             .from('charging_sessions')

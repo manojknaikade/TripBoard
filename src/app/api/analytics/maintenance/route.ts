@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createAdminClient } from '@/lib/supabase/admin';
+import { createClient } from '@/lib/supabase/server';
 import { getTeslaSession } from '@/lib/tesla/auth-server';
 import { type MaintenanceServiceType, type TyreSeason } from '@/lib/maintenance';
 
@@ -160,7 +160,7 @@ export async function GET(request: NextRequest) {
     }
 
     try {
-        const supabase = createAdminClient();
+        const supabase = await createClient();
         const { searchParams } = new URL(request.url);
         const { timeframe, fromDate, toDate } = getTimeframeRange(searchParams);
         const fromDateKey = fromDate.toISOString().slice(0, 10);
@@ -198,7 +198,8 @@ export async function GET(request: NextRequest) {
             supabase
                 .from('vehicle_status')
                 .select('odometer')
-                .maybeSingle(),
+                .order('updated_at', { ascending: false })
+                .limit(1),
             supabase
                 .from('maintenance_records')
                 .select('odometer_km')
@@ -250,11 +251,12 @@ export async function GET(request: NextRequest) {
         const costByCurrency = new Map<string, number>();
         const tyreSetMileageById = new Map<string, number>();
         const latestLoggedOdometer = (latestLoggedOdometerRecord as LatestOdometerRow | null)?.odometer_km ?? null;
+        const vehicleStatusRow = vehicleStatus?.[0] ?? null;
         const rawVehicleOdometer =
-            typeof vehicleStatus?.odometer === 'number'
-                ? vehicleStatus.odometer
-                : typeof vehicleStatus?.odometer === 'string'
-                    ? Number(vehicleStatus.odometer)
+            typeof vehicleStatusRow?.odometer === 'number'
+                ? vehicleStatusRow.odometer
+                : typeof vehicleStatusRow?.odometer === 'string'
+                    ? Number(vehicleStatusRow.odometer)
                     : null;
         const currentVehicleOdometerKm = rawVehicleOdometer != null && Number.isFinite(rawVehicleOdometer)
             ? Math.round(rawVehicleOdometer * MILES_TO_KM)
