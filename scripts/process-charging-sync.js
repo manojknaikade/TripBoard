@@ -14,6 +14,7 @@ const TESLA_CHARGING_HISTORY_FAILED_MARKER = 'sync:failed';
 
 const MINIMUM_DELIVERED_ENERGY_KWH = 0.1;
 const MAX_TIME_DELTA_MS = 6 * 60 * 60 * 1000;
+const TESLA_CHARGING_HISTORY_RETRY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function getRequiredEnv(name) {
     const value = process.env[name];
@@ -470,6 +471,24 @@ function buildTeslaChargingHistoryFailedUpdate() {
     };
 }
 
+function shouldRetryTeslaChargingHistoryLookup(session) {
+    if (!isSupercharger(session) || session.is_complete !== true) {
+        return false;
+    }
+
+    const referenceTime = session.end_time || session.start_time;
+    if (!referenceTime) {
+        return false;
+    }
+
+    const completedAtMs = Date.parse(referenceTime);
+    if (!Number.isFinite(completedAtMs)) {
+        return false;
+    }
+
+    return Date.now() - completedAtMs < TESLA_CHARGING_HISTORY_RETRY_WINDOW_MS;
+}
+
 async function persistTeslaSessionRecord(supabase, row, session) {
     const tokenExpiresAt = getTokenExpiry(session.accessToken);
     const payload = {
@@ -488,7 +507,7 @@ async function persistTeslaSessionRecord(supabase, row, session) {
 
     const { error } = await supabase
         .from('tesla_sessions')
-        .upsert(payload, { onConflict: 'session_token_hash' });
+        .upsert(payload, { onConflict: 'user_id' });
 
     if (error) {
         throw new Error(`Failed to persist Tesla session: ${error.message}`);
@@ -497,20 +516,18 @@ async function persistTeslaSessionRecord(supabase, row, session) {
     return tokenExpiresAt;
 }
 
-async function getStoredTeslaSessionForVehicle(supabase, vehicle) {
-    if (!vehicle.user_id) {
+async function getStoredTeslaSessionForUser(supabase, userId, preferredRegion) {
+    if (!userId) {
         return null;
     }
 
-    const preferredRegion = normalizeTeslaRegion(vehicle.region);
+    const normalizedPreferredRegion = normalizeTeslaRegion(preferredRegion);
 
     const runQuery = async (region) => {
         let query = supabase
             .from('tesla_sessions')
             .select('id,user_id,session_token_hash,access_token_encrypted,refresh_token_encrypted,token_expires_at,region')
-            .order('last_used_at', { ascending: false })
-            .eq('user_id', vehicle.user_id)
-            .limit(1);
+            .eq('user_id', userId);
 
         if (region) {
             query = query.eq('region', region);
@@ -523,7 +540,7 @@ async function getStoredTeslaSessionForVehicle(supabase, vehicle) {
         return data;
     };
 
-    let row = await runQuery(preferredRegion);
+    let row = await runQuery(normalizedPreferredRegion);
     if (!row) {
         row = await runQuery(null);
     }
@@ -715,7 +732,11 @@ async function processJob(supabase, job) {
         return 'failed';
     }
 
-    const storedTeslaSession = await getStoredTeslaSessionForVehicle(supabase, vehicle);
+    const storedTeslaSession = await getStoredTeslaSessionForUser(
+        supabase,
+        vehicle.user_id,
+        vehicle.region,
+    );
     if (!storedTeslaSession) {
         await updateChargingSession(supabase, session.id, buildTeslaChargingHistoryFailedUpdate());
         await updateJobState(supabase, job.id, {
@@ -744,6 +765,17 @@ async function processJob(supabase, job) {
         freshTeslaSession.region,
         session,
     );
+
+    if (!update && !hasStoredTeslaChargingHistoryData(session) && shouldRetryTeslaChargingHistoryLookup(session)) {
+        await updateJobState(supabase, job.id, {
+            status: 'processing',
+            processing_started_at: new Date().toISOString(),
+            processed_at: null,
+            last_error: 'Waiting for Tesla charging history',
+        });
+
+        return 'deferred';
+    }
 
     const sessionUpdate =
         update || hasStoredTeslaChargingHistoryData(session)
@@ -794,6 +826,8 @@ async function main() {
                 summary.synced += 1;
             } else if (result === 'unavailable') {
                 summary.unavailable += 1;
+            } else if (result === 'deferred') {
+                continue;
             } else {
                 summary.failed += 1;
             }

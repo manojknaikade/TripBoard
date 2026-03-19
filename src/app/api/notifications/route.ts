@@ -1,14 +1,39 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { getTeslaSession } from '@/lib/tesla/auth-server';
+import { getAuthenticatedUserId } from '@/lib/supabase/auth';
+import { jsonWithMetrics, type RouteMetric } from '@/lib/server/responseMetrics';
 
 export const dynamic = 'force-dynamic';
 
 // GET - Fetch notifications
 export async function GET(request: NextRequest) {
-    const session = await getTeslaSession(request);
-    if (!session) {
-        return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+    const requestStartedAt = performance.now();
+    const metrics: RouteMetric[] = [];
+
+    const authStartedAt = performance.now();
+    const userId = await getAuthenticatedUserId().catch(() => null);
+    metrics.push({
+        name: 'auth',
+        durationMs: performance.now() - authStartedAt,
+        description: 'Authenticated user lookup',
+    });
+
+    if (!userId) {
+        metrics.push({
+            name: 'total',
+            durationMs: performance.now() - requestStartedAt,
+            description: 'Total route time',
+        });
+        return jsonWithMetrics(
+            { error: 'Not authenticated' },
+            { status: 401 },
+            {
+                metrics,
+                headers: {
+                    'X-TripBoard-Notifications-Mode': 'auth-missing',
+                },
+            }
+        );
     }
 
     const { searchParams } = new URL(request.url);
@@ -18,18 +43,58 @@ export async function GET(request: NextRequest) {
 
     const supabase = await createClient();
 
+    const unreadCountStartedAt = performance.now();
     const unreadCountPromise = supabase
         .from('notifications')
         .select('id', { count: 'exact', head: true })
         .eq('is_read', false);
 
     if (countOnly) {
-        const { count } = await unreadCountPromise;
-        return NextResponse.json({
+        const { count, error } = await unreadCountPromise;
+        metrics.push({
+            name: 'count_query',
+            durationMs: performance.now() - unreadCountStartedAt,
+            description: 'Unread notifications count query',
+        });
+
+        if (error) {
+            metrics.push({
+                name: 'total',
+                durationMs: performance.now() - requestStartedAt,
+                description: 'Total route time',
+            });
+            return jsonWithMetrics(
+                { error: error.message },
+                { status: 500 },
+                {
+                    metrics,
+                    headers: {
+                        'X-TripBoard-Notifications-Mode': 'count_only',
+                    },
+                }
+            );
+        }
+
+        const responseBody = {
             success: true,
             notifications: [],
             unread_count: count || 0,
+        };
+        metrics.push({
+            name: 'total',
+            durationMs: performance.now() - requestStartedAt,
+            description: 'Total route time',
         });
+        return jsonWithMetrics(
+            responseBody,
+            undefined,
+            {
+                metrics,
+                headers: {
+                    'X-TripBoard-Notifications-Mode': 'count_only',
+                },
+            }
+        );
     }
 
     let query = supabase
@@ -42,6 +107,7 @@ export async function GET(request: NextRequest) {
         query = query.eq('is_read', false);
     }
 
+    const queriesStartedAt = performance.now();
     const [
         { data: notifications, error },
         { count },
@@ -49,23 +115,57 @@ export async function GET(request: NextRequest) {
         query,
         unreadCountPromise,
     ]);
+    metrics.push({
+        name: 'queries',
+        durationMs: performance.now() - queriesStartedAt,
+        description: 'Notification list + unread count queries',
+    });
 
     if (error) {
         console.error('Notifications fetch error:', error);
-        return NextResponse.json({ error: error.message }, { status: 500 });
+        metrics.push({
+            name: 'total',
+            durationMs: performance.now() - requestStartedAt,
+            description: 'Total route time',
+        });
+        return jsonWithMetrics(
+            { error: error.message },
+            { status: 500 },
+            {
+                metrics,
+                headers: {
+                    'X-TripBoard-Notifications-Mode': unreadOnly ? 'unread_only' : 'all',
+                },
+            }
+        );
     }
 
-    return NextResponse.json({
+    const responseBody = {
         success: true,
         notifications: notifications || [],
         unread_count: count || 0,
+    };
+    metrics.push({
+        name: 'total',
+        durationMs: performance.now() - requestStartedAt,
+        description: 'Total route time',
     });
+    return jsonWithMetrics(
+        responseBody,
+        undefined,
+        {
+            metrics,
+            headers: {
+                'X-TripBoard-Notifications-Mode': unreadOnly ? 'unread_only' : 'all',
+            },
+        }
+    );
 }
 
 // PATCH - Mark notifications as read
 export async function PATCH(request: NextRequest) {
-    const session = await getTeslaSession(request);
-    if (!session) {
+    const userId = await getAuthenticatedUserId().catch(() => null);
+    if (!userId) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 

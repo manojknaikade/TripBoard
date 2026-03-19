@@ -51,7 +51,10 @@ type QueueProcessingSummary = {
     synced: number;
     unavailable: number;
     failed: number;
+    deferred: number;
 };
+
+const TESLA_CHARGING_HISTORY_RETRY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 async function markJobState(
     jobId: string,
@@ -133,7 +136,27 @@ function getCompletedJobStatus(session: ChargingSessionRow): 'completed' | 'unav
     return 'failed';
 }
 
-async function processClaimedJob(job: TeslaChargingSyncJob): Promise<'completed' | 'unavailable' | 'failed'> {
+function shouldRetryTeslaChargingHistoryLookup(session: ChargingSessionRow) {
+    const syncStatus = getTeslaChargingSyncStatus(session);
+
+    if (syncStatus !== 'pending') {
+        return false;
+    }
+
+    const referenceTime = session.end_time ?? session.start_time;
+    if (!referenceTime) {
+        return false;
+    }
+
+    const completedAtMs = Date.parse(referenceTime);
+    if (!Number.isFinite(completedAtMs)) {
+        return false;
+    }
+
+    return Date.now() - completedAtMs < TESLA_CHARGING_HISTORY_RETRY_WINDOW_MS;
+}
+
+async function processClaimedJob(job: TeslaChargingSyncJob): Promise<'completed' | 'unavailable' | 'failed' | 'deferred'> {
     const chargingSession = await loadChargingSession(job.charging_session_id);
 
     if (!chargingSession) {
@@ -204,6 +227,17 @@ async function processClaimedJob(job: TeslaChargingSyncJob): Promise<'completed'
         session: chargingSession,
     });
 
+    if (!update && !hasStoredTeslaChargingHistoryData(chargingSession) && shouldRetryTeslaChargingHistoryLookup(chargingSession)) {
+        await markJobState(job.id, {
+            status: 'processing',
+            processed_at: null,
+            processing_started_at: new Date().toISOString(),
+            last_error: 'Waiting for Tesla charging history',
+        });
+
+        return 'deferred';
+    }
+
     const sessionUpdate =
         update || hasStoredTeslaChargingHistoryData(chargingSession)
             ? buildTeslaChargingHistorySuccessUpdate(chargingSession, update)
@@ -238,6 +272,7 @@ export async function processPendingTeslaChargingSyncJobs(limit = 10): Promise<Q
         synced: 0,
         unavailable: 0,
         failed: 0,
+        deferred: 0,
     };
 
     for (const job of jobs) {
@@ -248,6 +283,8 @@ export async function processPendingTeslaChargingSyncJobs(limit = 10): Promise<Q
                 summary.synced += 1;
             } else if (result === 'unavailable') {
                 summary.unavailable += 1;
+            } else if (result === 'deferred') {
+                summary.deferred += 1;
             } else {
                 summary.failed += 1;
             }

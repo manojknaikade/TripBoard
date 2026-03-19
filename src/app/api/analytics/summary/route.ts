@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server';
-import { NextRequest, NextResponse } from 'next/server';
-import { getTeslaSession } from '@/lib/tesla/auth-server';
+import { NextRequest } from 'next/server';
+import { getAuthenticatedUserId } from '@/lib/supabase/auth';
+import { jsonWithMetrics, type RouteMetric } from '@/lib/server/responseMetrics';
 import {
     getChargingBatteryEnergyKwh,
     getChargingDeliveredEnergyKwh,
@@ -109,6 +110,8 @@ type ChargingBucketDatum = {
     sessions: number;
 };
 
+type BucketMode = 'weekday' | 'day' | 'week' | 'month';
+
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const TIME_SLOTS = [
     { bucket: 0, label: '00' }, { bucket: 2, label: '02' },
@@ -128,6 +131,40 @@ function normalizeScope(value: string | null): AnalyticsScope {
     return 'all';
 }
 
+function startOfDay(date: Date) {
+    const nextDate = new Date(date);
+    nextDate.setHours(0, 0, 0, 0);
+    return nextDate;
+}
+
+function addDays(date: Date, days: number) {
+    const nextDate = new Date(date);
+    nextDate.setDate(nextDate.getDate() + days);
+    return nextDate;
+}
+
+function formatShortDate(date: Date, userDateFormat: UserDateFormat) {
+    const month = date.getMonth() + 1;
+    const day = date.getDate();
+
+    return userDateFormat === 'MM/DD' ? `${month}/${day}` : `${day}/${month}`;
+}
+
+function formatRangeTooltipLabel(startDate: Date, endDate: Date) {
+    const startLabel = startDate.toLocaleDateString('en-GB', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+    });
+    const endLabel = endDate.toLocaleDateString('en-GB', {
+        day: 'numeric',
+        month: 'short',
+        year: startDate.getFullYear() !== endDate.getFullYear() ? 'numeric' : undefined,
+    });
+
+    return startLabel === endLabel ? startLabel : `${startLabel} - ${endLabel}`;
+}
+
 function buildBuckets(
     fromDate: Date,
     toDate: Date,
@@ -137,12 +174,66 @@ function buildBuckets(
     if (timeframe === 'week') {
         const weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
         return {
-            mode: 'weekday' as const,
+            mode: 'weekday' as const satisfies BucketMode,
             buckets: weekDays.map((day) => ({ key: day, label: day, axisLabel: day, tooltipLabel: day })),
         };
     }
 
     const rangeDays = Math.ceil((toDate.getTime() - fromDate.getTime()) / MS_PER_DAY) + 1;
+
+    if (rangeDays > 366) {
+        const includeYear = rangeDays > 366 || timeframe === 'alltime';
+        const buckets: Array<{ key: string; label: string; axisLabel: string; tooltipLabel: string }> = [];
+        const cursor = new Date(fromDate.getFullYear(), fromDate.getMonth(), 1);
+        const endCursor = new Date(toDate.getFullYear(), toDate.getMonth(), 1);
+
+        while (cursor <= endCursor) {
+            const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}`;
+            const axisLabel = cursor.toLocaleDateString('en-GB', includeYear
+                ? { month: 'short', year: '2-digit' }
+                : { month: 'short' });
+
+            buckets.push({
+                key,
+                label: axisLabel,
+                axisLabel,
+                tooltipLabel: cursor.toLocaleDateString('en-GB', {
+                    month: 'long',
+                    year: 'numeric',
+                }),
+            });
+
+            cursor.setMonth(cursor.getMonth() + 1);
+        }
+
+        return { mode: 'month' as const satisfies BucketMode, buckets };
+    }
+
+    if (rangeDays > 92) {
+        const buckets: Array<{ key: string; label: string; axisLabel: string; tooltipLabel: string }> = [];
+        let cursor = startOfDay(fromDate);
+
+        while (cursor <= toDate) {
+            const bucketStart = startOfDay(cursor);
+            const bucketEnd = startOfDay(new Date(Math.min(addDays(bucketStart, 6).getTime(), toDate.getTime())));
+            const key = bucketStart.toISOString().slice(0, 10);
+            const axisLabel = rangeDays > 90
+                ? bucketStart.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+                : formatShortDate(bucketStart, userDateFormat);
+
+            buckets.push({
+                key,
+                label: axisLabel,
+                axisLabel,
+                tooltipLabel: formatRangeTooltipLabel(bucketStart, bucketEnd),
+            });
+
+            cursor = addDays(bucketStart, 7);
+        }
+
+        return { mode: 'week' as const satisfies BucketMode, buckets };
+    }
+
     const buckets: Array<{ key: string; label: string; axisLabel: string; tooltipLabel: string }> = [];
     const cursor = new Date(fromDate);
     let dayIndex = 0;
@@ -185,14 +276,26 @@ function buildBuckets(
         dayIndex += 1;
     }
 
-    return { mode: 'day' as const, buckets };
+    return { mode: 'day' as const satisfies BucketMode, buckets };
 }
 
-function getBucketKey(timestamp: string, mode: 'weekday' | 'day') {
+function getBucketKey(timestamp: string, mode: BucketMode, rangeStartDate: Date) {
     const date = new Date(timestamp);
 
     if (mode === 'weekday') {
         return date.toLocaleDateString('en-US', { weekday: 'short' });
+    }
+
+    if (mode === 'month') {
+        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    }
+
+    if (mode === 'week') {
+        const normalizedRangeStart = startOfDay(rangeStartDate);
+        const normalizedDate = startOfDay(date);
+        const diffDays = Math.max(0, Math.floor((normalizedDate.getTime() - normalizedRangeStart.getTime()) / MS_PER_DAY));
+        const bucketStart = addDays(normalizedRangeStart, Math.floor(diffDays / 7) * 7);
+        return bucketStart.toISOString().slice(0, 10);
     }
 
     return date.toISOString().slice(0, 10);
@@ -377,11 +480,31 @@ function buildFallbackTemperatureImpact(validTrips: LeaderboardTrip[]) {
 }
 
 export async function GET(request: NextRequest) {
-    try {
-        const session = await getTeslaSession(request);
+    const requestStartedAt = performance.now();
+    const metrics: RouteMetric[] = [];
 
-        if (!session) {
-            return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+    try {
+        const userId = await getAuthenticatedUserId().catch((error) => {
+            console.warn('Failed to resolve analytics auth session:', error);
+            return null;
+        });
+
+        if (!userId) {
+            metrics.push({
+                name: 'total',
+                durationMs: performance.now() - requestStartedAt,
+                description: 'Total route time',
+            });
+            return jsonWithMetrics(
+                { error: 'Not authenticated' },
+                { status: 401 },
+                {
+                    metrics,
+                    headers: {
+                        'X-TripBoard-Analytics-Auth': 'missing',
+                    },
+                }
+            );
         }
 
         const supabase = await createClient();
@@ -394,10 +517,16 @@ export async function GET(request: NextRequest) {
         let userDateFormat: UserDateFormat = 'DD/MM';
 
         try {
+            const settingsStartedAt = performance.now();
             const { data: settings } = await supabase
                 .from('user_settings')
                 .select('units, date_format')
                 .maybeSingle();
+            metrics.push({
+                name: 'settings',
+                durationMs: performance.now() - settingsStartedAt,
+                description: 'User settings query',
+            });
 
             if (settings?.units) {
                 userUnits = settings.units as UserUnits;
@@ -413,6 +542,7 @@ export async function GET(request: NextRequest) {
         const { timeframe, fromDate, toDate } = getTimeframeRange(searchParams);
 
         if (timeframe === 'alltime') {
+            const rangeAnchorStartedAt = performance.now();
             const [firstTripResult, firstChargeResult] = await Promise.all([
                 includeDriving
                     ? supabase
@@ -433,6 +563,11 @@ export async function GET(request: NextRequest) {
                         .maybeSingle()
                     : Promise.resolve({ data: null, error: null }),
             ]);
+            metrics.push({
+                name: 'range_anchor',
+                durationMs: performance.now() - rangeAnchorStartedAt,
+                description: 'All-time first-record lookup',
+            });
 
             const candidateTimes = [firstTripResult.data?.start_time, firstChargeResult.data?.start_time]
                 .filter((value): value is string => Boolean(value))
@@ -481,6 +616,7 @@ export async function GET(request: NextRequest) {
         const prevToDate = new Date(fromDate.getTime() - 1);
         const prevFromDate = new Date(prevToDate.getTime() - periodMs);
 
+        const primaryQueriesStartedAt = performance.now();
         const [tripsResult, chargeTimingResult, prevTripsResult, prevChargeTimingResult, chargingSummaryResult, chargingDailyResult] = await Promise.all([
             includeDriving
                 ? supabase
@@ -531,9 +667,23 @@ export async function GET(request: NextRequest) {
                 })
                 : Promise.resolve({ data: [] as ChargingDailyRow[], error: null }),
         ]);
+        metrics.push({
+            name: 'queries',
+            durationMs: performance.now() - primaryQueriesStartedAt,
+            description: 'Primary analytics queries',
+        });
 
         if (tripsResult.error) {
-            return NextResponse.json({ error: tripsResult.error.message }, { status: 500 });
+            metrics.push({
+                name: 'total',
+                durationMs: performance.now() - requestStartedAt,
+                description: 'Total route time',
+            });
+            return jsonWithMetrics(
+                { error: tripsResult.error.message },
+                { status: 500 },
+                { metrics }
+            );
         }
 
         if (chargeTimingResult.error) {
@@ -571,6 +721,7 @@ export async function GET(request: NextRequest) {
         let fallbackChargingSessions: ChargingSessionRecord[] = [];
 
         if (includeCharging && (chargingSummaryResult.error || chargingDailyResult.error)) {
+            const fallbackQueriesStartedAt = performance.now();
             const { data, error } = await supabase
                 .from('charging_sessions')
                 .select('id, energy_added_kwh, energy_delivered_kwh, charger_type, cost_user_entered, cost_estimate, charger_price_per_kwh, currency, start_time, tesla_charge_event_id, is_complete')
@@ -584,8 +735,15 @@ export async function GET(request: NextRequest) {
             } else {
                 fallbackChargingSessions = (data || []) as ChargingSessionRecord[];
             }
+
+            metrics.push({
+                name: 'fallback_queries',
+                durationMs: performance.now() - fallbackQueriesStartedAt,
+                description: 'Charging fallback query',
+            });
         }
 
+        const aggregationStartedAt = performance.now();
         let totalDistance = 0;
         let totalEnergy = 0;
         let totalDrivingTime = 0;
@@ -602,7 +760,7 @@ export async function GET(request: NextRequest) {
                 totalEnergy += metrics.energy;
                 totalDrivingTime += metrics.drivingTimeHours;
 
-                const tripBucket = tripBucketData.get(getBucketKey(trip.start_time, bucketMode));
+                const tripBucket = tripBucketData.get(getBucketKey(trip.start_time, bucketMode, fromDate));
                 if (tripBucket) {
                     tripBucket.distance += metrics.distance;
                     tripBucket.energy += metrics.energy;
@@ -658,7 +816,7 @@ export async function GET(request: NextRequest) {
 
         if (includeCharging && fallbackChargingSessions.length === 0) {
             for (const row of chargingDailyRows) {
-                const chargingBucket = chargingBucketData.get(getBucketKey(row.day, bucketMode));
+                const chargingBucket = chargingBucketData.get(getBucketKey(row.day, bucketMode, fromDate));
                 if (!chargingBucket) {
                     continue;
                 }
@@ -702,7 +860,7 @@ export async function GET(request: NextRequest) {
                 chargingByType[normalizedKey] += batteryEnergy;
                 costByType[normalizedKey] += cost;
 
-                const chargingBucket = chargingBucketData.get(getBucketKey(sessionRecord.start_time, bucketMode));
+                const chargingBucket = chargingBucketData.get(getBucketKey(sessionRecord.start_time, bucketMode, fromDate));
                 if (chargingBucket) {
                     chargingBucket.batteryEnergy += batteryEnergy;
                     chargingBucket.deliveredEnergy += deliveredEnergy;
@@ -844,7 +1002,18 @@ export async function GET(request: NextRequest) {
             ? (fallbackChargingSessions.length > 0 ? fallbackChargingSessions.length : Number(chargingSummaryRow?.total_sessions || 0))
             : chargeStartTimes.length;
 
-        return NextResponse.json({
+        metrics.push({
+            name: 'aggregate',
+            durationMs: performance.now() - aggregationStartedAt,
+            description: 'Analytics aggregation and shaping',
+        });
+        metrics.push({
+            name: 'total',
+            durationMs: performance.now() - requestStartedAt,
+            description: 'Total route time',
+        });
+
+        return jsonWithMetrics({
             success: true,
             scope,
             timeframe,
@@ -879,12 +1048,27 @@ export async function GET(request: NextRequest) {
             },
             temperatureImpact,
             costBySource,
+        }, undefined, {
+            metrics,
+            headers: {
+                'X-TripBoard-Analytics-Scope': scope,
+                'X-TripBoard-Analytics-Timeframe': timeframe,
+                'X-TripBoard-Analytics-Bucket-Mode': bucketMode,
+                'X-TripBoard-Analytics-Bucket-Count': buckets.length,
+                'X-TripBoard-Analytics-Fallback-Charging': fallbackChargingSessions.length > 0,
+            },
         });
     } catch (error) {
         console.error('CRITICAL Analytics error:', error);
-        return NextResponse.json(
+        metrics.push({
+            name: 'total',
+            durationMs: performance.now() - requestStartedAt,
+            description: 'Total route time',
+        });
+        return jsonWithMetrics(
             { success: false, error: error instanceof Error ? error.message : 'Failed to fetch analytics' },
-            { status: 500 }
+            { status: 500 },
+            { metrics }
         );
     }
 }

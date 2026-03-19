@@ -60,7 +60,7 @@ export default function DrivingAnalyticsCharts({
     return (
         <div className="grid gap-6 lg:grid-cols-2">
             <div className={`p-6 ${SURFACE_CARD_CLASS}`}>
-                <h2 className="mb-6 text-lg font-semibold">Daily Distance</h2>
+                <h2 className="mb-6 text-lg font-semibold">Distance Over Time</h2>
                 <ResponsiveContainer width="100%" height={250}>
                     <BarChart data={weeklyData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
@@ -86,7 +86,7 @@ export default function DrivingAnalyticsCharts({
             </div>
 
             <div className={`p-6 ${SURFACE_CARD_CLASS}`}>
-                <h2 className="mb-6 text-lg font-semibold">Daily Energy Consumption</h2>
+                <h2 className="mb-6 text-lg font-semibold">Energy Consumption Over Time</h2>
                 <ResponsiveContainer width="100%" height={250}>
                     <BarChart data={weeklyData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#334155" />

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { startTransition, useState, useEffect, useCallback, useDeferredValue, useRef } from 'react';
 import {
     Zap,
     Battery,
@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import AnalyticsChartsSkeleton from '@/components/analytics/AnalyticsChartsSkeleton';
+import ViewportGate from '@/components/ViewportGate';
 import { fetchCachedJson, readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
 import { useSettingsStore } from '@/stores/settingsStore';
 import type { ChargingAnalyticsData } from '@/lib/analytics/types';
@@ -18,6 +19,7 @@ import {
     DashboardStatCard,
     PageHero,
     PageShell,
+    StatusBadge,
     TimeframeSelector,
 } from '@/components/ui/dashboardPage';
 
@@ -48,13 +50,19 @@ function buildChargingAnalyticsUrl(timeframe: string, customStart: string, custo
     return url;
 }
 
+const DEFAULT_CHARGING_ANALYTICS_URL = buildChargingAnalyticsUrl(DEFAULT_CHARGING_TIMEFRAME, '', '');
+const DEFAULT_CHARGING_ANALYTICS_CACHE_KEY = `analytics:charging:${DEFAULT_CHARGING_ANALYTICS_URL}`;
+
 export default function ChargingAnalyticsClient({ initialData = null }: { initialData?: ChargingAnalyticsData | null }) {
+    const initialCachedData = initialData ?? readCachedJson<ChargingAnalyticsData>(DEFAULT_CHARGING_ANALYTICS_CACHE_KEY);
     const [timeframe, setTimeframe] = useState(DEFAULT_CHARGING_TIMEFRAME);
     const [customStart, setCustomStart] = useState('');
     const [customEnd, setCustomEnd] = useState('');
     const [showCustomPicker, setShowCustomPicker] = useState(false);
-    const [loading, setLoading] = useState(!initialData);
-    const [data, setData] = useState<ChargingAnalyticsData | null>(initialData);
+    const [loading, setLoading] = useState(!initialCachedData);
+    const [data, setData] = useState<ChargingAnalyticsData | null>(initialCachedData);
+    const deferredData = useDeferredValue(data);
+    const skipInitialDefaultFetchRef = useRef(Boolean(initialCachedData));
     const preferredCurrency = useSettingsStore((state) => state.currency);
     const hasCompleteDateRange = timeframe !== 'custom' || (!!customStart && !!customEnd);
 
@@ -64,18 +72,20 @@ export default function ChargingAnalyticsClient({ initialData = null }: { initia
         }
 
         writeCachedJson(
-            `analytics:charging:${buildChargingAnalyticsUrl(DEFAULT_CHARGING_TIMEFRAME, '', '')}`,
+            DEFAULT_CHARGING_ANALYTICS_CACHE_KEY,
             initialData,
             ANALYTICS_CACHE_TTL_MS
         );
     }, [initialData]);
 
-    const fetchAnalytics = useCallback(async () => {
+    const fetchAnalytics = useCallback(async (signal: AbortSignal) => {
         const url = buildChargingAnalyticsUrl(timeframe, customStart, customEnd);
         const cacheKey = `analytics:charging:${url}`;
         const cached = readCachedJson<ChargingAnalyticsData>(cacheKey);
         if (cached) {
-            setData(cached);
+            startTransition(() => {
+                setData(cached);
+            });
             setLoading(false);
             return;
         }
@@ -85,22 +95,33 @@ export default function ChargingAnalyticsClient({ initialData = null }: { initia
             const json = await fetchCachedJson<ChargingAnalyticsData & { success?: boolean }>(
                 cacheKey,
                 async () => {
-                    const res = await fetch(url);
+                    const res = await fetch(url, { signal });
                     const text = await res.text();
                     return JSON.parse(text);
                 },
                 ANALYTICS_CACHE_TTL_MS
             );
 
+            if (signal.aborted) {
+                return;
+            }
+
             if (json.success) {
-                setData(json);
+                startTransition(() => {
+                    setData(json);
+                });
             } else {
                 console.error('API returned success=false:', json);
             }
         } catch (err) {
+            if (signal.aborted) {
+                return;
+            }
             console.error('Failed to fetch analytics:', err);
         } finally {
-            setLoading(false);
+            if (!signal.aborted) {
+                setLoading(false);
+            }
         }
     }, [timeframe, customStart, customEnd]);
 
@@ -109,8 +130,19 @@ export default function ChargingAnalyticsClient({ initialData = null }: { initia
             return;
         }
 
-        void fetchAnalytics();
-    }, [fetchAnalytics, hasCompleteDateRange]);
+        const isDefaultTimeframe = timeframe === DEFAULT_CHARGING_TIMEFRAME && !customStart && !customEnd;
+        if (skipInitialDefaultFetchRef.current && isDefaultTimeframe) {
+            skipInitialDefaultFetchRef.current = false;
+            return;
+        }
+
+        const abortController = new AbortController();
+        void fetchAnalytics(abortController.signal);
+
+        return () => {
+            abortController.abort();
+        };
+    }, [customEnd, customStart, fetchAnalytics, hasCompleteDateRange, timeframe]);
 
     const summary = data?.summary || {
         chargingSessions: 0,
@@ -123,12 +155,15 @@ export default function ChargingAnalyticsClient({ initialData = null }: { initia
         avgCostPerKwh: 0,
         avgChargingLossPct: 0,
     };
+    const showBlockingLoader = loading && !data;
+    const isRefreshing = loading && !!data;
 
     return (
         <PageShell>
             <PageHero
                 title="Charging Analytics"
                 description="Trends in charging energy, losses, source mix, and cost across the selected period."
+                badge={isRefreshing ? <StatusBadge tone="quiet">Refreshing</StatusBadge> : undefined}
                 actions={
                     <TimeframeSelector
                         options={timeframeOptions}
@@ -144,7 +179,7 @@ export default function ChargingAnalyticsClient({ initialData = null }: { initia
                 }
             />
 
-            {loading && (
+            {showBlockingLoader && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50">
                     <Loader2 className="h-8 w-8 animate-spin text-red-500" />
                 </div>
@@ -197,12 +232,17 @@ export default function ChargingAnalyticsClient({ initialData = null }: { initia
                 />
             </div>
 
-            <ChargingAnalyticsCharts
-                dailyData={data?.dailyChargingData || []}
-                chargingMix={data?.chargingMix || []}
-                costBySource={data?.costBySource || []}
-                preferredCurrency={preferredCurrency}
-            />
+            <ViewportGate
+                rootMargin="320px"
+                placeholder={<AnalyticsChartsSkeleton />}
+            >
+                <ChargingAnalyticsCharts
+                    dailyData={deferredData?.dailyChargingData || []}
+                    chargingMix={deferredData?.chargingMix || []}
+                    costBySource={deferredData?.costBySource || []}
+                    preferredCurrency={preferredCurrency}
+                />
+            </ViewportGate>
         </PageShell>
     );
 }

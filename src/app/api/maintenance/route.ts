@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuthenticatedUser } from '@/lib/supabase/auth';
+import { getAuthenticatedUserId } from '@/lib/supabase/auth';
 import { createClient } from '@/lib/supabase/server';
-import { getTeslaSession } from '@/lib/tesla/auth-server';
 import {
     ROTATION_STATUS_OPTIONS,
     SERVICE_TYPE_OPTIONS,
@@ -41,9 +40,8 @@ function isValidDate(value: string | null | undefined) {
 }
 
 export async function GET(request: NextRequest) {
-    const session = await getTeslaSession(request);
-
-    if (!session) {
+    const userId = await getAuthenticatedUserId().catch(() => null);
+    if (!userId) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
@@ -153,9 +151,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-    const session = await getTeslaSession(request);
-
-    if (!session) {
+    const userId = await getAuthenticatedUserId().catch(() => null);
+    if (!userId) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
@@ -250,10 +247,6 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Select a tyre set for tyre-related records' }, { status: 400 });
         }
 
-        const user = await getAuthenticatedUser();
-        if (!user) {
-            return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
-        }
         const supabase = await createClient();
 
         let tyreSetSeason: TyreSeason | null = null;
@@ -284,7 +277,7 @@ export async function POST(request: NextRequest) {
         const tyreEndOdometer = endOdometerKm ?? odometerKm;
 
         const payload = {
-            user_id: user.id,
+            user_id: userId,
             tyre_set_id: isTyreLinkedRecord(serviceType) ? tyreSetId : null,
             service_type: serviceType,
             title,

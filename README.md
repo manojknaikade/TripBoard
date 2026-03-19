@@ -25,7 +25,7 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
 
 - **Advanced Analytics**
   - Daily Distance & Energy Consumption bar charts
-  - **All Time analytics support** with daily buckets preserved for long-range driving and charging charts
+  - **All Time analytics support** with daily bars preserved through the 3-month range and adaptive weekly/monthly bucketing for longer driving and charging charts
   - Efficiency by Time of Day (2-hour buckets, bar chart)
   - Aggregated stats with **trend percentages** vs. previous period
   - **Top Trips Leaderboard:** Longest, shortest, and most efficient trips
@@ -148,6 +148,7 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
    - `supabase/migrations/20260318150000_prune_legacy_tables_and_tesla_session_fallbacks.sql` — Removes obsolete singleton/legacy telemetry tables, deletes anonymous Tesla sessions, and requires owned Tesla sessions only
    - `supabase/migrations/20260318160000_trips_vehicle_uuid_phase1.sql` — Adds nullable `trips.vehicle_uuid`, backfills historical trips to local `vehicles.id`, and switches trip reads/new writes to prefer the UUID path while keeping legacy `vehicle_id` text compatibility during validation
    - `supabase/migrations/20260318170000_trips_vehicle_uuid_cutover.sql` — Finalizes the trip vehicle migration by renaming the UUID column back to canonical `trips.vehicle_id`, dropping the legacy text field, and simplifying trip RLS/functions to UUID-only ownership
+   - `supabase/migrations/20260319224500_fix_telemetry_charge_energy_added_source.sql` — Updates `process_telemetry()` so charging `energy_added_kwh` prefers Tesla’s battery-side `DCChargingEnergyIn` and only falls back to `ACChargingEnergyIn`, instead of summing both fields
 
 5. **Run the Development Server**
 
@@ -206,6 +207,8 @@ Home-charging classification in `process_telemetry()` resolves home coordinates 
 Trip ownership now resolves through `trips.vehicle_id -> vehicles.id` as a strict UUID foreign-key path. The temporary mixed text/UUID compatibility layer has been removed after the historical backfill was validated.
 Telemetry-backed dashboard views also depend on the Fleet Telemetry config including `ChargeLimitSoc`; after deploying the migration, re-send telemetry field definitions from Settings so future telemetry updates populate `vehicle_status.charge_limit_soc`.
 Completed Supercharger sessions are queued in Supabase and can be processed either by calling `GET /api/internal/charging/tesla-sync` from a server-side cron with `Authorization: Bearer $CHARGING_SYNC_SECRET` (or `CRON_SECRET`), or by running `scripts/process-charging-sync.js` as a standalone worker on the VPS.
+If Tesla charging history is not available immediately when a Supercharger session closes, the worker now leaves that session queued for retry with the existing 15-minute stuck-job backoff, instead of permanently marking it unavailable on the first miss. Sessions that still do not resolve after 24 hours are marked unavailable.
+Telemetry charging energy ingestion now prefers Tesla’s battery-side `DCChargingEnergyIn` and only falls back to `ACChargingEnergyIn`; the app no longer sums both values for a single session. Charger-type classification remains based on charger presence/type, power, and home-location checks, so AC/DC/home differentiation is unchanged.
 Historical trip routes can be backfilled from `telemetry_raw` into `trip_waypoints` by applying `supabase/migrations/20260313080000_add_trip_route_waypoints.sql`.
 The legacy Node telemetry/charging detector has been removed from the repo and is not part of the production path.
 If you still have an older Node detector running on the VPS, stop it to avoid duplicate `charging_sessions` writes.
@@ -215,7 +218,20 @@ The current production charging-billing enrichment runs as a separate `systemd` 
 ## Performance Notes
 
 - The app now uses a short-lived in-memory client fetch cache for selected dashboard pages and analytics views. It is intentionally a UX optimization, not a persistence layer.
+- The Supabase proxy now forwards the authenticated user id downstream, and server routes/pages reuse that request-scoped auth result instead of asking Supabase Auth again on the same request.
+- The dashboard header now lives in the shared `/dashboard` layout, so route changes between dashboard sections keep the navigation shell mounted instead of remounting the header, vehicle selector, and notification polling on every page transition.
 - List pages such as trips, charging, and maintenance hydrate from a recent cached response when available, then refresh in the background so the first screen feels immediate without requiring a hard reload.
+- Trips, charging, and maintenance now also prefetch their default landing payloads on the server and seed the same short-lived client cache, which removes the blank first paint on route entry and avoids an immediate duplicate mount fetch while the cache is still fresh.
+- Trips, charging, maintenance, notifications, and analytics now authenticate local data requests with the signed-in app user instead of forcing a Tesla session lookup for every request, which removes extra `tesla_sessions` reads/writes from those hot paths.
+- Trip list cards now default to stored route previews, then selectively backfill an exact thumbnail route only for visible cards that still lack preview points. That restores richer mini-maps without returning to one eager exact-route request per card during list boot.
+- Notification count polling now applies in-flight backpressure, uses a shared client-side unread-count cache across header remounts, and refreshes on a calmer 60-second cadence so slow `/api/notifications?count_only=true` requests do not stack or restart on every local dev remount.
+- Notification dropdown data is now cached briefly on the client when reopened, and the notifications API now exposes `Server-Timing`, `X-TripBoard-Notifications-Mode`, and `X-TripBoard-Payload-Bytes` headers for the same kind of route-level inspection as analytics.
+- Charging details now distinguish vehicle-reported energy added from Tesla-metered delivered energy, clamp impossible `added > delivered` cases in shared helpers, and show explicit charging-loss percentage plus equivalent loss cost on Supercharger session details.
+- Reverse geocoding now uses a shared client-side cache across dashboard, trip detail, charging history/detail, and the settings location picker, so repeated coordinate lookups do not keep hitting `/api/geocode` during the same session.
+- Analytics charts now keep daily bars through the 3-month range, then switch to coarser weekly/monthly bucketing for longer ranges so year/all-time analytics load faster and ship less chart data.
+- Analytics routes now stream a dedicated loading shell while the server-fetched initial payload resolves, so navigation into driving, charging, and maintenance analytics feels immediate even before the first data response arrives.
+- Analytics API responses now expose `Server-Timing` plus lightweight `X-TripBoard-Analytics-*` and `X-TripBoard-Payload-Bytes` headers, so route timing, bucket counts, and payload size can be inspected directly in the browser network panel during performance audits.
+- When profiling perceived slowness, prefer comparing against a built deployment or `next start`; local `next dev` with Turbopack can become materially slower under route churn and concurrent authenticated fetches than the deployed app.
 - Trips, charging, and maintenance service history now use windowed rendering so DOM cost stays bounded even after many pages have been loaded.
 - Trips and charging prefetch the next page in the background before the user reaches the end of the current page, so scrolling feels continuous instead of waiting at the bottom.
 - Maintenance uses a dedicated bootstrap endpoint (`/api/maintenance/bootstrap`) to load tyre sets, the first history page, summary cards, and current odometer in a single request.

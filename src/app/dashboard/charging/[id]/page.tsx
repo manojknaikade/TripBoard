@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useSettingsStore } from '@/stores/settingsStore';
@@ -14,17 +14,21 @@ import {
     Activity,
     Calendar,
     Check,
-    Loader2
+    Loader2,
+    ExternalLink,
 } from 'lucide-react';
-import Header from '@/components/Header';
 import dynamic from 'next/dynamic';
 import ViewportGate from '@/components/ViewportGate';
+import { fetchReverseGeocode, formatCoordinateFallback } from '@/lib/client/geocode';
 import {
     canUseManualChargingCost,
     getChargingBatteryEnergyKwh,
     getChargingCostSource,
     getChargingDeliveredEnergyKwh,
     getChargingDisplayCost,
+    getChargingLossCost,
+    getChargingLossKwh,
+    getChargingLossPercent,
 } from '@/lib/charging/energy';
 import {
     getStoredTeslaChargeEventId,
@@ -97,6 +101,12 @@ function formatDateTime(dateString: string): string {
     });
 }
 
+function buildGoogleMapsUrl(lat: number, lon: number, label?: string | null): string {
+    const coordinates = `${lat},${lon}`;
+    const query = label ? `${label} (${coordinates})` : coordinates;
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+}
+
 export default function ChargingDetailPage() {
     const params = useParams();
     const sessionId = params.id as string;
@@ -105,7 +115,6 @@ export default function ChargingDetailPage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [address, setAddress] = useState<string>('');
-    const geocodeCacheRef = useRef<Map<string, string>>(new Map());
 
     // Cost Editor State
     const preferredCurrency = useSettingsStore((state) => state.currency);
@@ -176,25 +185,14 @@ export default function ChargingDetailPage() {
             return;
         }
 
-        const cacheKey = `${session.latitude},${session.longitude}`;
-        const cachedAddress = geocodeCacheRef.current.get(cacheKey);
-        const fallbackAddress = `${session.latitude.toFixed(4)}, ${session.longitude.toFixed(4)}`;
-
-        if (cachedAddress) {
-            setAddress(cachedAddress);
-            return;
-        }
+        const fallbackAddress = formatCoordinateFallback(session.latitude, session.longitude);
 
         try {
-            const res = await fetch(`/api/geocode?lat=${session.latitude}&lng=${session.longitude}`, {
-                signal,
-            });
-            const data = await res.json();
+            const data = await fetchReverseGeocode(session.latitude, session.longitude);
             const resolvedAddress = data?.success && data?.address
                 ? data.address
                 : data?.fallback || fallbackAddress;
 
-            geocodeCacheRef.current.set(cacheKey, resolvedAddress);
             if (!signal?.aborted) {
                 setAddress(resolvedAddress);
             }
@@ -258,7 +256,6 @@ export default function ChargingDetailPage() {
     if (error || !session) {
         return (
             <div className="min-h-screen">
-                <Header />
                 <PageShell>
                     <Link
                         href="/dashboard/charging"
@@ -280,17 +277,21 @@ export default function ChargingDetailPage() {
     const isDC = session.charger_type?.toLowerCase().includes('3rd_party_fast') || isSupercharger;
     const batteryEnergy = getChargingBatteryEnergyKwh(session);
     const deliveredEnergy = getChargingDeliveredEnergyKwh(session);
+    const lossEnergy = getChargingLossKwh(session);
+    const lossPercent = getChargingLossPercent(session);
+    const lossCost = getChargingLossCost(session);
     const displayCost = getChargingDisplayCost(session);
     const costSource = getChargingCostSource(session);
     const canUseManualCost = canUseManualChargingCost(session);
     const teslaSyncStatus = getTeslaChargingSyncStatus(session);
     const teslaSyncMessage = getTeslaChargingSyncMessage(session);
     const teslaEventId = getStoredTeslaChargeEventId(session.tesla_charge_event_id);
+    const googleMapsUrl = hasCoords
+        ? buildGoogleMapsUrl(session.latitude!, session.longitude!, address || session.location_name)
+        : null;
 
     return (
         <div className="min-h-screen">
-            <Header />
-
             {/* Modal for Cost Entry */}
             {isEditingCost && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 p-4">
@@ -351,7 +352,23 @@ export default function ChargingDetailPage() {
             <PageShell>
                 <PageHero
                     title="Charging Details"
-                    description={address || (!hasCoords ? 'Unknown location' : 'Loading location...')}
+                    description={
+                        <div className="space-y-2">
+                            <div>{address || (!hasCoords ? 'Unknown location' : 'Loading location...')}</div>
+                            {googleMapsUrl ? (
+                                <a
+                                    href={googleMapsUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex items-center gap-2 text-sm font-medium text-slate-300 transition-colors hover:text-white"
+                                >
+                                    <MapPin className="h-4 w-4" />
+                                    Open in Google Maps
+                                    <ExternalLink className="h-3.5 w-3.5" />
+                                </a>
+                            ) : null}
+                        </div>
+                    }
                     badge={
                         isSupercharger ? (
                             <StatusBadge tone="brand">Supercharger</StatusBadge>
@@ -426,9 +443,10 @@ export default function ChargingDetailPage() {
                     {/* Energy & Speed */}
                     <StatBox
                         icon={<Battery className="h-5 w-5" />}
-                        label="Energy to Battery"
+                        label="Energy Added"
                         value={batteryEnergy != null ? `+${batteryEnergy.toFixed(2)} kWh` : 'N/A'}
                         color="green"
+                        subtext="Vehicle-reported"
                     />
                     {isSupercharger && (
                         <StatBox
@@ -445,6 +463,35 @@ export default function ChargingDetailPage() {
                                 deliveredEnergy != null
                                     ? 'Tesla charging history'
                                     : teslaSyncMessage || 'No matched Tesla data yet'
+                            }
+                        />
+                    )}
+                    {isSupercharger && (
+                        <StatBox
+                            icon={<Zap className="h-5 w-5" />}
+                            label="Energy Loss"
+                            value={lossPercent != null
+                                ? `${lossPercent.toFixed(1)}%`
+                                : deliveredEnergy != null && batteryEnergy != null
+                                    ? '0.0%'
+                                    : teslaSyncStatus === 'pending'
+                                        ? 'Waiting for Tesla'
+                                        : 'Tesla unavailable'
+                            }
+                            color={lossPercent != null && lossPercent > 0 ? "orange" : "slate"}
+                            subtext={
+                                lossEnergy != null && lossEnergy > 0
+                                    ? `${lossEnergy.toFixed(2)} kWh`
+                                    : deliveredEnergy != null && batteryEnergy != null
+                                        ? 'No measurable gap'
+                                        : undefined
+                            }
+                            detail={
+                                lossCost != null && lossCost > 0
+                                    ? `${session.currency || preferredCurrency} ${lossCost.toFixed(2)} equivalent cost`
+                                    : displayCost != null && deliveredEnergy != null && batteryEnergy != null
+                                        ? `${session.currency || preferredCurrency} 0.00 equivalent cost`
+                                        : undefined
                             }
                         />
                     )}
@@ -530,6 +577,7 @@ export default function ChargingDetailPage() {
                             lat={session.latitude}
                             lon={session.longitude}
                             color="blue"
+                            googleMapsUrl={googleMapsUrl}
                         />
                     )}
                 </div>
@@ -543,13 +591,15 @@ function StatBox({
     label,
     value,
     color,
-    subtext
+    subtext,
+    detail,
 }: {
     icon: React.ReactNode;
     label: string;
     value: React.ReactNode;
     color: string;
-    subtext?: string;
+    subtext?: React.ReactNode;
+    detail?: React.ReactNode;
 }) {
     const colorClasses = {
         blue: 'text-slate-300',
@@ -575,6 +625,11 @@ function StatBox({
                         </div>
                         {subtext && <span className="text-xs font-normal text-slate-500">{subtext}</span>}
                     </div>
+                    {detail && (
+                        <div className="mt-2 text-xs font-medium text-slate-400">
+                            {detail}
+                        </div>
+                    )}
                 </div>
             </div>
         </div>
@@ -586,11 +641,13 @@ function LocationCard({
     lat,
     lon,
     color,
+    googleMapsUrl,
 }: {
     title: string;
     lat?: number | null;
     lon?: number | null;
     color: string;
+    googleMapsUrl?: string | null;
 }) {
     const toneMap = {
         blue: 'quiet' as const,
@@ -612,6 +669,17 @@ function LocationCard({
                     <p className="mt-2 break-all font-mono text-sm tracking-tight text-slate-300">
                         {lat != null && lon != null ? `${lat.toFixed(5)}, ${lon.toFixed(5)}` : 'Unknown'}
                     </p>
+                    {googleMapsUrl ? (
+                        <a
+                            href={googleMapsUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mt-3 inline-flex items-center gap-2 text-sm font-medium text-slate-300 transition-colors hover:text-white"
+                        >
+                            Open in Google Maps
+                            <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                    ) : null}
                 </div>
             </div>
         </div>

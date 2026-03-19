@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getAuthenticatedUserId } from '@/lib/supabase/auth';
 import { createClient } from '@/lib/supabase/server';
-import { getTeslaSession } from '@/lib/tesla/auth-server';
 import {
     dedupeRoutePoints,
     extractRoutePointFromTelemetry,
@@ -456,9 +456,8 @@ async function loadThumbnailRoutePointsFromTelemetry(
 
 // GET - List trips for the authenticated user
 export async function GET(request: NextRequest) {
-    const session = await getTeslaSession(request);
-
-    if (!session) {
+    const userId = await getAuthenticatedUserId().catch(() => null);
+    if (!userId) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
@@ -666,9 +665,8 @@ export async function GET(request: NextRequest) {
 
 // POST - Start a new trip
 export async function POST(request: NextRequest) {
-    const session = await getTeslaSession(request);
-
-    if (!session) {
+    const userId = await getAuthenticatedUserId().catch(() => null);
+    if (!userId) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
@@ -727,9 +725,8 @@ export async function POST(request: NextRequest) {
 
 // PATCH - End/update a trip
 export async function PATCH(request: NextRequest) {
-    const session = await getTeslaSession(request);
-
-    if (!session) {
+    const userId = await getAuthenticatedUserId().catch(() => null);
+    if (!userId) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 

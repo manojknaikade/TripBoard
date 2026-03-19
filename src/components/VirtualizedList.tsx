@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 type VirtualizedListProps<T> = {
     items: T[];
@@ -193,11 +193,7 @@ export default function VirtualizedList<T>({
         };
     }, [heights, items.length, offsets, overscanPx]);
 
-    if (items.length === 0) {
-        return <>{emptyFallback}</>;
-    }
-
-    const onHeightChange = (index: number, height: number) => {
+    const onHeightChange = useCallback((index: number, height: number) => {
         const roundedHeight = Math.max(1, Math.round(height));
         setMeasuredHeights((current) => (
             current[index] === roundedHeight
@@ -207,7 +203,11 @@ export default function VirtualizedList<T>({
                     [index]: roundedHeight,
                 }
         ));
-    };
+    }, []);
+
+    if (items.length === 0) {
+        return <>{emptyFallback}</>;
+    }
 
     const startIndex = Math.max(0, visibleRange.start);
     const endIndex = Math.min(items.length - 1, Math.max(visibleRange.end, startIndex));

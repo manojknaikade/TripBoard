@@ -32,7 +32,9 @@ export default function Header() {
     const selectedVehicleId = useVehicleStore((state) => state.selectedVehicleId);
     const selectVehicle = useVehicleStore((state) => state.selectVehicle);
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+    const [mobileMenuPathname, setMobileMenuPathname] = useState<string | null>(null);
     const [isDesktop, setIsDesktop] = useState(false);
+    const isMobileMenuVisible = isMobileMenuOpen && mobileMenuPathname === pathname;
 
     useEffect(() => {
         const mediaQuery = window.matchMedia('(min-width: 768px)');
@@ -45,7 +47,13 @@ export default function Header() {
     }, []);
 
     const toggleMobileMenu = () => {
-        setIsMobileMenuOpen(!isMobileMenuOpen);
+        if (isMobileMenuVisible) {
+            setIsMobileMenuOpen(false);
+            return;
+        }
+
+        setMobileMenuPathname(pathname);
+        setIsMobileMenuOpen(true);
     };
 
     return (
@@ -106,12 +114,12 @@ export default function Header() {
                     className={`flex items-center justify-center rounded-xl p-2 text-slate-300 transition-colors hover:bg-slate-800 hover:text-white md:hidden ${FOCUS_RING_CLASS}`}
                     aria-label="Toggle mobile menu"
                 >
-                    {isMobileMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
+                    {isMobileMenuVisible ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
                 </button>
             </div>
 
             {/* Mobile Navigation Menu */}
-            {isMobileMenuOpen && (
+            {isMobileMenuVisible && (
                 <div className="absolute w-full border-t border-slate-700/50 bg-slate-950 px-4 py-4 shadow-2xl md:hidden">
                     <nav className="flex flex-col gap-2">
                         <MobileNavLink

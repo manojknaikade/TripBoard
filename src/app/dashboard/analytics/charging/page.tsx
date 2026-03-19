@@ -1,4 +1,3 @@
-import Header from '@/components/Header';
 import ChargingAnalyticsClient from '@/components/analytics/ChargingAnalyticsClient';
 import { fetchInitialAnalyticsData } from '@/lib/analytics/server';
 import type { ChargingAnalyticsData } from '@/lib/analytics/types';
@@ -10,10 +9,5 @@ export default async function ChargingAnalyticsPage() {
         '/api/analytics/summary?scope=charging&timeframe=7days'
     );
 
-    return (
-        <div className="min-h-screen">
-            <Header />
-            <ChargingAnalyticsClient initialData={initialData} />
-        </div>
-    );
+    return <ChargingAnalyticsClient initialData={initialData} />;
 }

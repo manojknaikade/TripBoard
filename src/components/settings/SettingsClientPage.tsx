@@ -15,7 +15,6 @@ import {
     ShieldCheck,
 } from 'lucide-react';
 import { useSettingsStore } from '@/stores/settingsStore';
-import Header from '@/components/Header';
 import PasswordUpdateForm from '@/components/auth/PasswordUpdateForm';
 import ViewportGate from '@/components/ViewportGate';
 import { fetchCachedJson, invalidateCachedJson, readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
@@ -271,8 +270,6 @@ export default function SettingsClientPage({
 
     return (
         <div className="min-h-screen">
-            <Header />
-
             {/* Saved Toast */}
             {saved && (
                 <div className="fixed right-6 top-24 z-50 flex items-center gap-2 rounded-2xl border border-green-500/20 bg-green-500 px-4 py-2 text-white shadow-lg">

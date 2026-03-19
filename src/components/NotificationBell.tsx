@@ -1,8 +1,24 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { Bell, Zap, Car, Check, X } from 'lucide-react';
+import {
+    invalidateNotificationUnreadCount,
+    isNotificationPollingDisabled,
+    refreshNotificationUnreadCount,
+    setNotificationUnreadCount,
+    subscribeNotificationUnreadCount,
+    getNotificationUnreadSnapshot,
+} from '@/lib/client/notificationUnreadStore';
+import {
+    fetchCachedJson,
+    invalidateCachedJson,
+} from '@/lib/client/fetchCache';
+
+const NOTIFICATIONS_LIST_CACHE_KEY = 'notifications:dropdown:unread';
+const NOTIFICATIONS_LIST_TTL_MS = 15_000;
+const UNREAD_COUNT_POLL_INTERVAL_MS = 60_000;
 
 interface Notification {
     id: string;
@@ -16,10 +32,15 @@ interface Notification {
 
 export default function NotificationBell() {
     const [notifications, setNotifications] = useState<Notification[]>([]);
-    const [unreadCount, setUnreadCount] = useState(0);
     const [isOpen, setIsOpen] = useState(false);
     const [loading, setLoading] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
+    const notificationsRequestRef = useRef<Promise<void> | null>(null);
+    const { unreadCount } = useSyncExternalStore(
+        subscribeNotificationUnreadCount,
+        getNotificationUnreadSnapshot,
+        getNotificationUnreadSnapshot
+    );
 
     // Close dropdown on outside click
     useEffect(() => {
@@ -32,58 +53,118 @@ export default function NotificationBell() {
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
-    const fetchUnreadCount = useCallback(async () => {
-        try {
-            const res = await fetch('/api/notifications?count_only=true', {
-                cache: 'no-store',
-            });
-            const data = await res.json();
-            if (data.success) {
-                setUnreadCount(data.unread_count || 0);
-            }
-        } catch {
-            // silently fail
-        }
-    }, []);
-
     const fetchNotifications = useCallback(async () => {
-        setLoading(true);
-        try {
-            const res = await fetch('/api/notifications?unread_only=true&limit=20', {
-                cache: 'no-store',
-            });
-            const data = await res.json();
-            if (data.success) {
-                setNotifications(data.notifications || []);
-                setUnreadCount(data.unread_count || 0);
-            }
-        } catch {
-            // silently fail
-        } finally {
-            setLoading(false);
+        if (notificationsRequestRef.current) {
+            return notificationsRequestRef.current;
         }
+
+        setLoading(true);
+        const requestPromise = (async () => {
+            try {
+                const data = await fetchCachedJson<{
+                    success?: boolean;
+                    notifications?: Notification[];
+                    unread_count?: number;
+                    error?: string;
+                }>(NOTIFICATIONS_LIST_CACHE_KEY, async () => {
+                    const res = await fetch('/api/notifications?unread_only=true&limit=20', {
+                        cache: 'no-store',
+                    });
+
+                    if (res.status === 401) {
+                        throw Object.assign(new Error('Not authenticated'), { status: 401 });
+                    }
+
+                    return res.json();
+                }, NOTIFICATIONS_LIST_TTL_MS);
+
+                if (data.success) {
+                    setNotifications(data.notifications || []);
+                    setNotificationUnreadCount(data.unread_count || 0);
+                }
+            } catch (error) {
+                if (error instanceof Error && 'status' in error && error.status === 401) {
+                    setNotifications([]);
+                    setNotificationUnreadCount(0);
+                    return;
+                }
+
+                try {
+                    await refreshNotificationUnreadCount({ force: true });
+                } catch {
+                    // silently fail
+                }
+            } finally {
+                setLoading(false);
+                notificationsRequestRef.current = null;
+            }
+        })();
+
+        notificationsRequestRef.current = requestPromise;
+        return requestPromise;
     }, []);
 
-    // Poll for unread count only while the tab is visible and the dropdown is closed.
     useEffect(() => {
-        const pollUnreadCount = () => {
-            if (document.visibilityState !== 'visible' || isOpen) {
+        let timeoutId: number | null = null;
+        let cancelled = false;
+
+        const schedulePoll = (delayMs: number) => {
+            timeoutId = window.setTimeout(async () => {
+                if (cancelled) {
+                    return;
+                }
+
+                if (
+                    document.visibilityState === 'visible'
+                    && !isOpen
+                    && !isNotificationPollingDisabled()
+                ) {
+                    try {
+                        await refreshNotificationUnreadCount();
+                    } catch {
+                        // silently fail
+                    }
+                }
+
+                if (!cancelled) {
+                    schedulePoll(UNREAD_COUNT_POLL_INTERVAL_MS);
+                }
+            }, delayMs);
+        };
+
+        if (
+            document.visibilityState === 'visible'
+            && !isOpen
+            && !isNotificationPollingDisabled()
+        ) {
+            void refreshNotificationUnreadCount();
+        }
+
+        const handleVisibilityChange = () => {
+            if (
+                document.visibilityState !== 'visible'
+                || isOpen
+                || isNotificationPollingDisabled()
+            ) {
                 return;
             }
 
-            void fetchUnreadCount();
+            void refreshNotificationUnreadCount();
         };
 
-        pollUnreadCount();
-
-        const interval = window.setInterval(pollUnreadCount, 30000);
-        document.addEventListener('visibilitychange', pollUnreadCount);
+        schedulePoll(UNREAD_COUNT_POLL_INTERVAL_MS);
+        document.addEventListener('visibilitychange', handleVisibilityChange);
 
         return () => {
-            window.clearInterval(interval);
-            document.removeEventListener('visibilitychange', pollUnreadCount);
+            cancelled = true;
+
+            if (timeoutId !== null) {
+                window.clearTimeout(timeoutId);
+            }
+
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
         };
-    }, [fetchUnreadCount, isOpen]);
+    }, [isOpen]);
 
     const toggleDropdown = () => {
         if (!isOpen) {
@@ -99,8 +180,10 @@ export default function NotificationBell() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mark_all: true }),
             });
+            invalidateCachedJson(NOTIFICATIONS_LIST_CACHE_KEY);
+            invalidateNotificationUnreadCount();
             setNotifications([]);
-            setUnreadCount(0);
+            setNotificationUnreadCount(0);
         } catch {
             // silently fail
         }
@@ -113,8 +196,10 @@ export default function NotificationBell() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ids: [id] }),
             });
+            invalidateCachedJson(NOTIFICATIONS_LIST_CACHE_KEY);
+            invalidateNotificationUnreadCount();
             setNotifications(prev => prev.filter(n => n.id !== id));
-            setUnreadCount(prev => Math.max(0, prev - 1));
+            setNotificationUnreadCount(unreadCount - 1);
         } catch {
             // silently fail
         }

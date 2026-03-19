@@ -1,7 +1,8 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
+import { getAuthenticatedUserId } from '@/lib/supabase/auth';
 import { createClient } from '@/lib/supabase/server';
-import { getTeslaSession } from '@/lib/tesla/auth-server';
 import { type MaintenanceServiceType, type TyreSeason } from '@/lib/maintenance';
+import { jsonWithMetrics, type RouteMetric } from '@/lib/server/responseMetrics';
 
 export const dynamic = 'force-dynamic';
 
@@ -153,10 +154,30 @@ function getBucketKey(dateValue: string, mode: 'day' | 'month') {
 }
 
 export async function GET(request: NextRequest) {
-    const session = await getTeslaSession(request);
+    const requestStartedAt = performance.now();
+    const metrics: RouteMetric[] = [];
 
-    if (!session) {
-        return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+    const userId = await getAuthenticatedUserId().catch((error) => {
+        console.warn('Failed to resolve maintenance analytics auth session:', error);
+        return null;
+    });
+
+    if (!userId) {
+        metrics.push({
+            name: 'total',
+            durationMs: performance.now() - requestStartedAt,
+            description: 'Total route time',
+        });
+        return jsonWithMetrics(
+            { error: 'Not authenticated' },
+            { status: 401 },
+            {
+                metrics,
+                headers: {
+                    'X-TripBoard-Analytics-Auth': 'missing',
+                },
+            }
+        );
     }
 
     try {
@@ -166,6 +187,7 @@ export async function GET(request: NextRequest) {
         const fromDateKey = fromDate.toISOString().slice(0, 10);
         const toDateKey = toDate.toISOString().slice(0, 10);
 
+        const queriesStartedAt = performance.now();
         const [
             { data: summaryRows, error: summaryError },
             { data: maintenanceRecords, error: maintenanceRecordsError },
@@ -208,29 +230,79 @@ export async function GET(request: NextRequest) {
                 .limit(1)
                 .maybeSingle(),
         ]);
+        metrics.push({
+            name: 'queries',
+            durationMs: performance.now() - queriesStartedAt,
+            description: 'Maintenance analytics queries',
+        });
 
         if (summaryError) {
             console.warn('Maintenance analytics summary RPC unavailable, using in-route fallback:', summaryError.message);
         }
 
         if (maintenanceRecordsError) {
-            return NextResponse.json({ error: maintenanceRecordsError.message }, { status: 500 });
+            metrics.push({
+                name: 'total',
+                durationMs: performance.now() - requestStartedAt,
+                description: 'Total route time',
+            });
+            return jsonWithMetrics(
+                { error: maintenanceRecordsError.message },
+                { status: 500 },
+                { metrics }
+            );
         }
 
         if (tyreMileageError) {
-            return NextResponse.json({ error: tyreMileageError.message }, { status: 500 });
+            metrics.push({
+                name: 'total',
+                durationMs: performance.now() - requestStartedAt,
+                description: 'Total route time',
+            });
+            return jsonWithMetrics(
+                { error: tyreMileageError.message },
+                { status: 500 },
+                { metrics }
+            );
         }
 
         if (tyreSetsError) {
-            return NextResponse.json({ error: tyreSetsError.message }, { status: 500 });
+            metrics.push({
+                name: 'total',
+                durationMs: performance.now() - requestStartedAt,
+                description: 'Total route time',
+            });
+            return jsonWithMetrics(
+                { error: tyreSetsError.message },
+                { status: 500 },
+                { metrics }
+            );
         }
 
         if (vehicleStatusError) {
-            return NextResponse.json({ error: vehicleStatusError.message }, { status: 500 });
+            metrics.push({
+                name: 'total',
+                durationMs: performance.now() - requestStartedAt,
+                description: 'Total route time',
+            });
+            return jsonWithMetrics(
+                { error: vehicleStatusError.message },
+                { status: 500 },
+                { metrics }
+            );
         }
 
         if (latestLoggedOdometerError) {
-            return NextResponse.json({ error: latestLoggedOdometerError.message }, { status: 500 });
+            metrics.push({
+                name: 'total',
+                durationMs: performance.now() - requestStartedAt,
+                description: 'Total route time',
+            });
+            return jsonWithMetrics(
+                { error: latestLoggedOdometerError.message },
+                { status: 500 },
+                { metrics }
+            );
         }
 
         const filteredMaintenanceRecords = (maintenanceRecords || []) as MaintenanceRecordRow[];
@@ -268,6 +340,7 @@ export async function GET(request: NextRequest) {
         let fallbackTotalSpend = 0;
         let fallbackSeasonChanges = 0;
         let fallbackRotations = 0;
+        const aggregationStartedAt = performance.now();
 
         for (const record of filteredMaintenanceRecords) {
             const bucketKey = getBucketKey(record.start_date, mode);
@@ -333,7 +406,18 @@ export async function GET(request: NextRequest) {
             .filter((item) => item.mileageKm > 0)
             .sort((a, b) => b.mileageKm - a.mileageKm);
 
-        return NextResponse.json({
+        metrics.push({
+            name: 'aggregate',
+            durationMs: performance.now() - aggregationStartedAt,
+            description: 'Maintenance analytics aggregation and shaping',
+        });
+        metrics.push({
+            name: 'total',
+            durationMs: performance.now() - requestStartedAt,
+            description: 'Total route time',
+        });
+
+        return jsonWithMetrics({
             success: true,
             summary: {
                 totalRecords: summaryRow?.total_records ?? filteredMaintenanceRecords.length,
@@ -357,11 +441,25 @@ export async function GET(request: NextRequest) {
                 .sort((a, b) => b.records - a.records),
             tyreSetMileage,
             currencyTotals,
+        }, undefined, {
+            metrics,
+            headers: {
+                'X-TripBoard-Analytics-Timeframe': timeframe,
+                'X-TripBoard-Analytics-Bucket-Mode': mode,
+                'X-TripBoard-Analytics-Bucket-Count': buckets.length,
+                'X-TripBoard-Analytics-Records': filteredMaintenanceRecords.length,
+            },
         });
     } catch (error) {
-        return NextResponse.json(
+        metrics.push({
+            name: 'total',
+            durationMs: performance.now() - requestStartedAt,
+            description: 'Total route time',
+        });
+        return jsonWithMetrics(
             { error: error instanceof Error ? error.message : 'Failed to load maintenance analytics' },
-            { status: 500 }
+            { status: 500 },
+            { metrics }
         );
     }
 }

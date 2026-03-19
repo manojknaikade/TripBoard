@@ -1,4 +1,3 @@
-import Header from '@/components/Header';
 import MaintenanceAnalyticsClient from '@/components/analytics/MaintenanceAnalyticsClient';
 import { fetchInitialAnalyticsData } from '@/lib/analytics/server';
 import type { MaintenanceAnalyticsData } from '@/lib/analytics/types';
@@ -10,10 +9,5 @@ export default async function MaintenanceAnalyticsPage() {
         '/api/analytics/maintenance?timeframe=year'
     );
 
-    return (
-        <div className="min-h-screen">
-            <Header />
-            <MaintenanceAnalyticsClient initialData={initialData} />
-        </div>
-    );
+    return <MaintenanceAnalyticsClient initialData={initialData} />;
 }

@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { getAuthenticatedUser } from '@/lib/supabase/auth';
+import { getAuthenticatedUser, getAuthenticatedUserId } from '@/lib/supabase/auth';
 import { normalizeTeslaRegion, type TeslaRegion } from '@/lib/tesla/api';
 
 const TESLA_TOKEN_URL = 'https://auth.tesla.com/oauth2/v3/token';
@@ -9,6 +9,7 @@ const TESLA_CLIENT_ID = process.env.TESLA_CLIENT_ID!;
 const TESLA_CLIENT_SECRET = process.env.TESLA_CLIENT_SECRET!;
 const TESLA_SESSION_COOKIE = 'tesla_session';
 const TOKEN_REFRESH_WINDOW_MS = 5 * 60 * 1000;
+const TESLA_SESSION_TOUCH_INTERVAL_MS = 15 * 60 * 1000;
 
 type TeslaSessionInput = {
     accessToken: string;
@@ -24,6 +25,7 @@ type TeslaSessionRow = {
     refresh_token_encrypted: string | null;
     token_expires_at: string | null;
     region: string;
+    last_used_at: string;
 };
 
 export type TeslaSession = TeslaSessionInput & {
@@ -105,6 +107,16 @@ function getTokenExpiry(accessToken: string) {
     }
 }
 
+function shouldTouchTeslaSession(lastUsedAt: string | null) {
+    if (!lastUsedAt) {
+        return true;
+    }
+
+    const elapsedMs = Date.now() - new Date(lastUsedAt).getTime();
+
+    return !Number.isFinite(elapsedMs) || elapsedMs >= TESLA_SESSION_TOUCH_INTERVAL_MS;
+}
+
 function toStoredTeslaSession(row: TeslaSessionRow): StoredTeslaSession {
     return {
         id: row.id,
@@ -157,7 +169,7 @@ async function getTeslaSessionRowForUser(userId: string) {
     const supabase = createAdminClient();
     const { data, error } = await supabase
         .from('tesla_sessions')
-        .select('id, user_id, session_token_hash, access_token_encrypted, refresh_token_encrypted, token_expires_at, region')
+        .select('id, user_id, session_token_hash, access_token_encrypted, refresh_token_encrypted, token_expires_at, region, last_used_at')
         .eq('user_id', userId)
         .maybeSingle<TeslaSessionRow>();
 
@@ -253,12 +265,12 @@ export async function setTeslaSession(
 }
 
 async function getTeslaSessionForAuthenticatedUser(): Promise<TeslaSession | null> {
-    const user = await getAuthenticatedUser();
-    if (!user) {
+    const userId = await getAuthenticatedUserId();
+    if (!userId) {
         return null;
     }
 
-    return getTeslaSessionForUserId(user.id);
+    return getTeslaSessionForUserId(userId);
 }
 
 async function getTeslaSessionForUserId(userId: string): Promise<TeslaSession | null> {
@@ -302,10 +314,12 @@ async function getTeslaSessionForUserId(userId: string): Promise<TeslaSession | 
             }
         }
 
-        try {
-            await touchTeslaSessionRecord(row.session_token_hash);
-        } catch (touchError) {
-            console.warn('Failed to update Tesla session last_used_at:', touchError);
+        if (shouldTouchTeslaSession(row.last_used_at)) {
+            try {
+                await touchTeslaSessionRecord(row.session_token_hash);
+            } catch (touchError) {
+                console.warn('Failed to update Tesla session last_used_at:', touchError);
+            }
         }
         return session;
     } catch (error) {

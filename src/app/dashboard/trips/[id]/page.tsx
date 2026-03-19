@@ -15,7 +15,6 @@ import {
     Calendar,
     Thermometer,
 } from 'lucide-react';
-import Header from '@/components/Header';
 import dynamic from 'next/dynamic';
 import ViewportGate from '@/components/ViewportGate';
 import type { TripRoutePoint } from '@/lib/trips/routePoints';
@@ -27,6 +26,7 @@ import {
     SUBCARD_CLASS,
     SURFACE_CARD_CLASS,
 } from '@/components/ui/dashboardPage';
+import { fetchReverseGeocode, formatCoordinateFallback } from '@/lib/client/geocode';
 
 const TripDetailMap = dynamic(() => import('@/components/TripDetailMap'), {
     loading: () => <div className="h-96 w-full animate-pulse rounded-xl bg-slate-800" />,
@@ -153,7 +153,6 @@ export default function TripDetailPage() {
     const [routePoints, setRoutePoints] = useState<TripRoutePoint[]>([]);
     const [loadingRoutePoints, setLoadingRoutePoints] = useState(false);
     const [loadingAddresses, setLoadingAddresses] = useState(false);
-    const geocodeCacheRef = useRef<Map<string, string>>(new Map());
     const routePointsRequestedRef = useRef(false);
     const routePointsAbortRef = useRef<AbortController | null>(null);
     const units = useSettingsStore((state) => state.units);
@@ -293,24 +292,16 @@ export default function TripDetailPage() {
     }, [loadingRoutePoints, tripId]);
 
     const resolveAddress = useCallback(async (latitude: number, longitude: number, signal?: AbortSignal) => {
-        const cacheKey = `${latitude},${longitude}`;
-        const cachedAddress = geocodeCacheRef.current.get(cacheKey);
-        const fallbackAddress = `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
-
-        if (cachedAddress) {
-            return cachedAddress;
-        }
+        const fallbackAddress = formatCoordinateFallback(latitude, longitude);
 
         try {
-            const res = await fetch(`/api/geocode?lat=${latitude}&lng=${longitude}`, {
-                signal,
-            });
-            const data = await res.json();
+            const data = await fetchReverseGeocode(latitude, longitude);
+            if (signal?.aborted) {
+                throw new DOMException('The operation was aborted.', 'AbortError');
+            }
             const resolvedAddress = data?.success && data?.address
                 ? data.address
                 : data?.fallback || fallbackAddress;
-
-            geocodeCacheRef.current.set(cacheKey, resolvedAddress);
             return resolvedAddress;
         } catch (error) {
             if (error instanceof DOMException && error.name === 'AbortError') {
@@ -375,7 +366,6 @@ export default function TripDetailPage() {
     if (error || !trip) {
         return (
             <div className="min-h-screen">
-                <Header />
                 <PageShell>
                     <Link
                         href="/dashboard/trips"
@@ -397,8 +387,6 @@ export default function TripDetailPage() {
 
     return (
         <div className="min-h-screen">
-            <Header />
-
             <PageShell>
                 <PageHero
                     title="Trip Details"

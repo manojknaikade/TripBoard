@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getAuthenticatedUserId } from '@/lib/supabase/auth';
 import { createClient } from '@/lib/supabase/server';
-import { getTeslaSession } from '@/lib/tesla/auth-server';
 import {
     dedupeRoutePoints,
     extractRoutePointFromTelemetry,
@@ -204,9 +204,8 @@ export async function GET(
     request: NextRequest,
     context: { params: Promise<{ id: string }> }
 ) {
-    const session = await getTeslaSession(request);
-
-    if (!session) {
+    const userId = await getAuthenticatedUserId().catch(() => null);
+    if (!userId) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 

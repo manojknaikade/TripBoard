@@ -15,6 +15,14 @@ export type ChargingCostLike = ChargingEnergyLike & TeslaChargingSyncLike & {
     charger_price_per_kwh?: number | null;
 };
 
+function normalizePositiveEnergy(value: number | null | undefined): number | null {
+    if (value == null || !Number.isFinite(value) || value < 0) {
+        return null;
+    }
+
+    return value;
+}
+
 export function hasTeslaDirectCost(session: ChargingCostLike): boolean {
     return isSuperchargerChargingSession(session) && session.cost_estimate != null;
 }
@@ -29,11 +37,23 @@ export function canUseManualChargingCost(session: ChargingCostLike): boolean {
 }
 
 export function getChargingBatteryEnergyKwh(session: ChargingEnergyLike): number | null {
-    return session.energy_added_kwh ?? null;
+    const batteryEnergy = normalizePositiveEnergy(session.energy_added_kwh ?? null);
+    const deliveredEnergy = normalizePositiveEnergy(session.energy_delivered_kwh ?? null);
+
+    if (batteryEnergy == null) {
+        return null;
+    }
+
+    // Vehicle-reported added energy should never exceed metered delivered energy.
+    if (deliveredEnergy != null && batteryEnergy > deliveredEnergy) {
+        return deliveredEnergy;
+    }
+
+    return batteryEnergy;
 }
 
 export function getChargingDeliveredEnergyKwh(session: ChargingEnergyLike): number | null {
-    return session.energy_delivered_kwh ?? null;
+    return normalizePositiveEnergy(session.energy_delivered_kwh ?? null);
 }
 
 export function getChargingLossKwh(session: ChargingEnergyLike): number | null {
@@ -45,6 +65,17 @@ export function getChargingLossKwh(session: ChargingEnergyLike): number | null {
     }
 
     return delivered > battery + 0.05 ? delivered - battery : 0;
+}
+
+export function getChargingLossPercent(session: ChargingEnergyLike): number | null {
+    const delivered = getChargingDeliveredEnergyKwh(session);
+    const lossKwh = getChargingLossKwh(session);
+
+    if (delivered == null || lossKwh == null || delivered <= 0 || lossKwh <= 0) {
+        return lossKwh === 0 ? 0 : null;
+    }
+
+    return (lossKwh / delivered) * 100;
 }
 
 export function getEffectiveChargingEnergyKwh(session: ChargingEnergyLike): number | null {

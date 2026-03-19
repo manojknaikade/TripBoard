@@ -19,9 +19,9 @@ import {
 } from 'lucide-react';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useVehicleStore } from '@/stores/vehicleStore';
-import Header from '@/components/Header';
 import dynamic from 'next/dynamic';
 import { fetchCachedJson, readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
+import { fetchReverseGeocode } from '@/lib/client/geocode';
 import type { AppSettingsSnapshot } from '@/lib/settings/appSettings';
 import type { TeslaVehicleSummary } from '@/lib/tesla/vehicleSummaries';
 import { fetchSharedLiveVehicleJson } from '@/lib/vehicle/liveData';
@@ -223,7 +223,6 @@ export default function DashboardClient({
   const [streetAddress, setStreetAddress] = useState<string | null>(null);
   const [isLocationCardNearViewport, setIsLocationCardNearViewport] = useState(false);
   const locationCardRef = useRef<HTMLElement | null>(null);
-  const geocodeCacheRef = useRef<Map<string, string>>(new Map());
   const vehicleFetchIdRef = useRef(0);
 
   const units = useSettingsStore((state) => state.units);
@@ -339,10 +338,6 @@ export default function DashboardClient({
   }, [activeRegion]);
 
   useEffect(() => {
-    void fetchVehicles();
-  }, [fetchVehicles]);
-
-  useEffect(() => {
     if (initialVehicles.length === 0) {
       return;
     }
@@ -356,6 +351,10 @@ export default function DashboardClient({
       VEHICLE_LIST_CACHE_TTL_MS
     );
   }, [initialSettings.region, initialVehicles]);
+
+  useEffect(() => {
+    void fetchVehicles();
+  }, [fetchVehicles]);
 
   useEffect(() => {
     if (initialVehiclesError) {
@@ -668,26 +667,17 @@ export default function DashboardClient({
     }
     const lat = displayData.latitude;
     const lon = displayData.longitude;
-    const cacheKey = `${lat},${lon}`;
-    const cachedAddress = geocodeCacheRef.current.get(cacheKey);
-
-    if (cachedAddress) {
-      setStreetAddress(cachedAddress);
-      return;
-    }
-
     const controller = new AbortController();
 
-    fetch(`/api/geocode?lat=${lat}&lng=${lon}`, { signal: controller.signal })
-      .then(res => res.json())
+    fetchReverseGeocode(lat, lon)
       .then(data => {
+        if (controller.signal.aborted) {
+          return;
+        }
+
         const nextAddress = data?.success && data?.address
           ? data.address
           : data?.fallback || null;
-
-        if (nextAddress) {
-          geocodeCacheRef.current.set(cacheKey, nextAddress);
-        }
 
         setStreetAddress(nextAddress);
       })
@@ -726,8 +716,6 @@ export default function DashboardClient({
 
   return (
     <div className="min-h-screen">
-      <Header />
-
       {/* Main Content */}
       <main className="mx-auto max-w-7xl px-6 pb-20 pt-6 md:pb-8">
         <section className={`mb-6 px-6 py-5 shadow-[0_18px_56px_-44px_rgba(15,23,42,0.85)] ${SURFACE_CARD_CLASS}`}>

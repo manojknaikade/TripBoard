@@ -6,6 +6,7 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { Search, Loader2 } from 'lucide-react';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { fetchReverseGeocode } from '@/lib/client/geocode';
 import { getMapTileConfig } from '@/lib/maps/style';
 
 // Fix for default marker icons in Next.js
@@ -143,8 +144,7 @@ export default function LocationPicker({ latitude, longitude, address, onLocatio
     const handleSelectLocation = async (lat: number, lon: number) => {
         // Reverse geocoding
         try {
-            const res = await fetch(`/api/geocode?lat=${lat}&lng=${lon}`);
-            const data = await res.json();
+            const data = await fetchReverseGeocode(lat, lon);
             onLocationChange(lat, lon, data.address || data.fallback || 'Unknown location');
             setSearchResults([]); // Clear search results
             setSearchQuery('');

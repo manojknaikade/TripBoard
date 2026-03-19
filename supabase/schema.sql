@@ -1064,7 +1064,7 @@ BEGIN
 
     _charge_power := COALESCE(_ac_power, 0) + COALESCE(_dc_power, 0);
     IF _ac_energy IS NOT NULL OR _dc_energy IS NOT NULL THEN
-        _charge_energy_added := COALESCE(_ac_energy, 0) + COALESCE(_dc_energy, 0);
+        _charge_energy_added := COALESCE(_dc_energy, _ac_energy);
     END IF;
 
     UPDATE public.vehicle_status

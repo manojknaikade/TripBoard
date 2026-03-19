@@ -56,6 +56,23 @@ const defaultSettings = {
     homeLocation: { latitude: null, longitude: null } as HomeLocation,
 };
 
+function arePollingConfigsEqual(left: PollingConfig, right: PollingConfig) {
+    return (
+        left.driving === right.driving
+        && left.charging === right.charging
+        && left.parked === right.parked
+        && left.sleeping === right.sleeping
+    );
+}
+
+function areHomeLocationsEqual(left: HomeLocation, right: HomeLocation) {
+    return (
+        left.latitude === right.latitude
+        && left.longitude === right.longitude
+        && left.address === right.address
+    );
+}
+
 export const useSettingsStore = create<SettingsStore>()(
     persist(
         (set) => ({
@@ -83,16 +100,34 @@ export const useSettingsStore = create<SettingsStore>()(
             setHomeLocation: (homeLocation) => set({ homeLocation }),
 
             applySnapshot: (snapshot, homeLocation) =>
-                set({
-                    pollingConfig: snapshot.pollingConfig,
-                    region: snapshot.region,
-                    units: snapshot.units,
-                    currency: snapshot.currency || 'CHF',
-                    dateFormat: snapshot.dateFormat || 'DD/MM',
-                    notifications: snapshot.notifications,
-                    dataSource: snapshot.dataSource,
-                    mapStyle: snapshot.mapStyle || 'streets',
-                    ...(homeLocation ? { homeLocation } : {}),
+                set((state) => {
+                    const nextState = {
+                        pollingConfig: snapshot.pollingConfig,
+                        region: snapshot.region,
+                        units: snapshot.units,
+                        currency: snapshot.currency || 'CHF',
+                        dateFormat: snapshot.dateFormat || 'DD/MM',
+                        notifications: snapshot.notifications,
+                        dataSource: snapshot.dataSource,
+                        mapStyle: snapshot.mapStyle || 'streets',
+                        homeLocation: homeLocation ? {
+                            latitude: homeLocation.latitude,
+                            longitude: homeLocation.longitude,
+                            address: homeLocation.address,
+                        } : state.homeLocation,
+                    };
+
+                    const didChange = !arePollingConfigsEqual(state.pollingConfig, nextState.pollingConfig)
+                        || state.region !== nextState.region
+                        || state.units !== nextState.units
+                        || state.currency !== nextState.currency
+                        || state.dateFormat !== nextState.dateFormat
+                        || state.notifications !== nextState.notifications
+                        || state.dataSource !== nextState.dataSource
+                        || state.mapStyle !== nextState.mapStyle
+                        || !areHomeLocationsEqual(state.homeLocation, nextState.homeLocation);
+
+                    return didChange ? nextState : state;
                 }),
 
             loadFromDatabase: async () => {

@@ -1,6 +1,6 @@
 import { headers } from 'next/headers';
 
-export async function fetchInitialAnalyticsData<T>(path: string): Promise<T | null> {
+export async function fetchInitialRouteData<T>(path: string): Promise<T | null> {
     const requestHeaders = await headers();
     const host = requestHeaders.get('x-forwarded-host') || requestHeaders.get('host');
 
@@ -28,3 +28,5 @@ export async function fetchInitialAnalyticsData<T>(path: string): Promise<T | nu
         return null;
     }
 }
+
+export const fetchInitialAnalyticsData = fetchInitialRouteData;

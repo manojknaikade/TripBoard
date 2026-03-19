@@ -1,10 +1,24 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
+import {
+    AUTHENTICATED_USER_ID_HEADER,
+    AUTH_STATE_HEADER,
+} from '@/lib/supabase/requestAuthHeaders';
 
 export async function updateSession(request: NextRequest) {
-    let supabaseResponse = NextResponse.next({
-        request,
-    });
+    const requestHeaders = new Headers(request.headers);
+    requestHeaders.delete(AUTH_STATE_HEADER);
+    requestHeaders.delete(AUTHENTICATED_USER_ID_HEADER);
+
+    function buildNextResponse() {
+        return NextResponse.next({
+            request: {
+                headers: requestHeaders,
+            },
+        });
+    }
+
+    let supabaseResponse = buildNextResponse();
 
     const supabase = createServerClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -18,9 +32,7 @@ export async function updateSession(request: NextRequest) {
                     cookiesToSet.forEach(({ name, value }) =>
                         request.cookies.set(name, value)
                     );
-                    supabaseResponse = NextResponse.next({
-                        request,
-                    });
+                    supabaseResponse = buildNextResponse();
                     cookiesToSet.forEach(({ name, value, options }) =>
                         supabaseResponse.cookies.set(name, value, options)
                     );
@@ -30,7 +42,23 @@ export async function updateSession(request: NextRequest) {
     );
 
     // Refresh session if expired
-    await supabase.auth.getUser();
+    const {
+        data: { user },
+    } = await supabase.auth.getUser();
 
-    return supabaseResponse;
+    requestHeaders.set(AUTH_STATE_HEADER, '1');
+
+    if (user?.id) {
+        requestHeaders.set(AUTHENTICATED_USER_ID_HEADER, user.id);
+    } else {
+        requestHeaders.delete(AUTHENTICATED_USER_ID_HEADER);
+    }
+
+    const response = buildNextResponse();
+
+    for (const cookie of supabaseResponse.cookies.getAll()) {
+        response.cookies.set(cookie);
+    }
+
+    return response;
 }

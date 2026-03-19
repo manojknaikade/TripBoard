@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getAuthenticatedUserId } from '@/lib/supabase/auth';
 import { createClient } from '@/lib/supabase/server';
-import { getTeslaSession } from '@/lib/tesla/auth-server';
 import {
     getChargingBatteryEnergyKwh,
     getChargingDeliveredEnergyKwh,
@@ -182,9 +182,8 @@ async function loadChargingSummary(
 }
 
 export async function GET(request: NextRequest) {
-    const teslaSession = await getTeslaSession(request);
-
-    if (!teslaSession) {
+    const userId = await getAuthenticatedUserId().catch(() => null);
+    if (!userId) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 

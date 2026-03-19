@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { getTeslaSession } from '@/lib/tesla/auth-server';
+import { getAuthenticatedUserId } from '@/lib/supabase/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,9 +19,8 @@ type MaintenanceSummaryFallbackRow = {
 };
 
 export async function GET(request: NextRequest) {
-    const session = await getTeslaSession(request);
-
-    if (!session) {
+    const userId = await getAuthenticatedUserId().catch(() => null);
+    if (!userId) {
         return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 

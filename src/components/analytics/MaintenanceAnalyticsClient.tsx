@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
     BarChart3,
     CircleDollarSign,
@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import AnalyticsChartsSkeleton from '@/components/analytics/AnalyticsChartsSkeleton';
+import ViewportGate from '@/components/ViewportGate';
 import { fetchCachedJson, readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
 import { useSettingsStore } from '@/stores/settingsStore';
 import type { MaintenanceAnalyticsData } from '@/lib/analytics/types';
@@ -19,6 +20,7 @@ import {
     DashboardStatCard,
     PageHero,
     PageShell,
+    StatusBadge,
     TimeframeSelector,
 } from '@/components/ui/dashboardPage';
 
@@ -52,10 +54,16 @@ function buildMaintenanceAnalyticsUrl(timeframe: string) {
     return `/api/analytics/maintenance?timeframe=${timeframe}`;
 }
 
+const DEFAULT_MAINTENANCE_ANALYTICS_URL = buildMaintenanceAnalyticsUrl(DEFAULT_MAINTENANCE_TIMEFRAME);
+const DEFAULT_MAINTENANCE_ANALYTICS_CACHE_KEY = `analytics:maintenance:${DEFAULT_MAINTENANCE_ANALYTICS_URL}`;
+
 export default function MaintenanceAnalyticsClient({ initialData = null }: { initialData?: MaintenanceAnalyticsData | null }) {
+    const initialCachedData = initialData ?? readCachedJson<MaintenanceAnalyticsData>(DEFAULT_MAINTENANCE_ANALYTICS_CACHE_KEY);
     const [timeframe, setTimeframe] = useState(DEFAULT_MAINTENANCE_TIMEFRAME);
-    const [loading, setLoading] = useState(!initialData);
-    const [data, setData] = useState<MaintenanceAnalyticsData | null>(initialData);
+    const [loading, setLoading] = useState(!initialCachedData);
+    const [data, setData] = useState<MaintenanceAnalyticsData | null>(initialCachedData);
+    const deferredData = useDeferredValue(data);
+    const skipInitialDefaultFetchRef = useRef(Boolean(initialCachedData));
     const units = useSettingsStore((state) => state.units);
     const preferredCurrency = useSettingsStore((state) => state.currency);
 
@@ -65,18 +73,20 @@ export default function MaintenanceAnalyticsClient({ initialData = null }: { ini
         }
 
         writeCachedJson(
-            `analytics:maintenance:${buildMaintenanceAnalyticsUrl(DEFAULT_MAINTENANCE_TIMEFRAME)}`,
+            DEFAULT_MAINTENANCE_ANALYTICS_CACHE_KEY,
             initialData,
             MAINTENANCE_ANALYTICS_CACHE_TTL_MS
         );
     }, [initialData]);
 
-    const fetchAnalytics = useCallback(async () => {
+    const fetchAnalytics = useCallback(async (signal: AbortSignal) => {
         const url = buildMaintenanceAnalyticsUrl(timeframe);
         const cacheKey = `analytics:maintenance:${url}`;
         const cached = readCachedJson<MaintenanceAnalyticsData>(cacheKey);
         if (cached) {
-            setData(cached);
+            startTransition(() => {
+                setData(cached);
+            });
             setLoading(false);
             return;
         }
@@ -86,27 +96,48 @@ export default function MaintenanceAnalyticsClient({ initialData = null }: { ini
             const json = await fetchCachedJson<MaintenanceAnalyticsData & { success?: boolean }>(
                 cacheKey,
                 async () => {
-                    const response = await fetch(url);
+                    const response = await fetch(url, { signal });
                     return response.json();
                 },
                 MAINTENANCE_ANALYTICS_CACHE_TTL_MS
             );
 
+            if (signal.aborted) {
+                return;
+            }
+
             if (json.success) {
-                setData(json);
+                startTransition(() => {
+                    setData(json);
+                });
             } else {
                 console.error('Maintenance analytics API returned success=false:', json);
             }
         } catch (error) {
+            if (signal.aborted) {
+                return;
+            }
             console.error('Failed to fetch maintenance analytics:', error);
         } finally {
-            setLoading(false);
+            if (!signal.aborted) {
+                setLoading(false);
+            }
         }
     }, [timeframe]);
 
     useEffect(() => {
-        void fetchAnalytics();
-    }, [fetchAnalytics]);
+        if (skipInitialDefaultFetchRef.current && timeframe === DEFAULT_MAINTENANCE_TIMEFRAME) {
+            skipInitialDefaultFetchRef.current = false;
+            return;
+        }
+
+        const abortController = new AbortController();
+        void fetchAnalytics(abortController.signal);
+
+        return () => {
+            abortController.abort();
+        };
+    }, [fetchAnalytics, timeframe]);
 
     const summary = data?.summary || {
         totalRecords: 0,
@@ -122,6 +153,8 @@ export default function MaintenanceAnalyticsClient({ initialData = null }: { ini
     };
 
     const currencyTotals = data?.currencyTotals || [];
+    const showBlockingLoader = loading && !data;
+    const isRefreshing = loading && !!data;
 
     const spendValue = useMemo(() => {
         if (summary.mixedCurrencies) {
@@ -138,6 +171,7 @@ export default function MaintenanceAnalyticsClient({ initialData = null }: { ini
             <PageHero
                 title="Maintenance Analytics"
                 description="Service volume, tyre work, and logged maintenance cost across the selected timeframe."
+                badge={isRefreshing ? <StatusBadge tone="quiet">Refreshing</StatusBadge> : undefined}
                 actions={
                     <TimeframeSelector
                         options={timeframeOptions}
@@ -147,7 +181,7 @@ export default function MaintenanceAnalyticsClient({ initialData = null }: { ini
                 }
             />
 
-            {loading && (
+            {showBlockingLoader && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50">
                     <Loader2 className="h-8 w-8 animate-spin text-red-500" />
                 </div>
@@ -197,16 +231,21 @@ export default function MaintenanceAnalyticsClient({ initialData = null }: { ini
                 />
             </div>
 
-            <MaintenanceAnalyticsCharts
-                activityData={data?.activityData || []}
-                mixedCurrencies={summary.mixedCurrencies}
-                spendCurrency={summary.spendCurrency}
-                preferredCurrency={preferredCurrency}
-                currencyTotals={currencyTotals}
-                serviceTypeBreakdown={data?.serviceTypeBreakdown || []}
-                tyreSetMileage={data?.tyreSetMileage || []}
-                units={units}
-            />
+            <ViewportGate
+                rootMargin="320px"
+                placeholder={<AnalyticsChartsSkeleton />}
+            >
+                <MaintenanceAnalyticsCharts
+                    activityData={deferredData?.activityData || []}
+                    mixedCurrencies={summary.mixedCurrencies}
+                    spendCurrency={summary.spendCurrency}
+                    preferredCurrency={preferredCurrency}
+                    currencyTotals={deferredData?.currencyTotals || []}
+                    serviceTypeBreakdown={deferredData?.serviceTypeBreakdown || []}
+                    tyreSetMileage={deferredData?.tyreSetMileage || []}
+                    units={units}
+                />
+            </ViewportGate>
         </PageShell>
     );
 }

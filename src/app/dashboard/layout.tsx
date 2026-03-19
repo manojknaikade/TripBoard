@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { requireAuthenticatedUser } from '@/lib/supabase/auth';
+import Header from '@/components/Header';
 
 export default async function DashboardLayout({
     children,
@@ -8,5 +9,10 @@ export default async function DashboardLayout({
 }) {
     await requireAuthenticatedUser('/dashboard');
 
-    return children;
+    return (
+        <>
+            <Header />
+            {children}
+        </>
+    );
 }

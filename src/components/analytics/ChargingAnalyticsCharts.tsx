@@ -75,7 +75,7 @@ export default function ChargingAnalyticsCharts({
     return (
         <div className="grid gap-6 lg:grid-cols-2">
             <div className={`p-6 ${SURFACE_CARD_CLASS}`}>
-                <h2 className="mb-6 text-lg font-semibold">Charging Energy (Daily)</h2>
+                <h2 className="mb-6 text-lg font-semibold">Charging Energy Over Time</h2>
                 <ResponsiveContainer width="100%" height={250}>
                     <BarChart data={dailyData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
@@ -108,7 +108,7 @@ export default function ChargingAnalyticsCharts({
             </div>
 
             <div className={`p-6 ${SURFACE_CARD_CLASS}`}>
-                <h2 className="mb-6 text-lg font-semibold">Charging Cost (Daily)</h2>
+                <h2 className="mb-6 text-lg font-semibold">Charging Cost Over Time</h2>
                 <ResponsiveContainer width="100%" height={250}>
                     <BarChart data={dailyData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
