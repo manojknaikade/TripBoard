@@ -18,6 +18,7 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
   - **Route Thumbnails:** Trip list mini-maps render the recorded route instead of a straight-line placeholder
   - **Geocoding:** Automatic address resolution for start/end locations
   - **Map Style Preference:** Switch between street and dark basemaps
+  - **Trip visibility threshold:** Per-user minimum trip distance can be tuned in Settings and respects the current unit system
   - **Metrics:** Distance, duration, energy used, efficiency (Wh/km or Wh/mi), average/max speed, and **outside temperature** (min/max/avg)
   - **Trip detail links:** Start and end location cards open directly in Google Maps
   - **Filtering:** Filter trips by Week, Month, or Custom Date Range
@@ -149,6 +150,7 @@ A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. Tri
    - `supabase/migrations/20260318160000_trips_vehicle_uuid_phase1.sql` — Adds nullable `trips.vehicle_uuid`, backfills historical trips to local `vehicles.id`, and switches trip reads/new writes to prefer the UUID path while keeping legacy `vehicle_id` text compatibility during validation
    - `supabase/migrations/20260318170000_trips_vehicle_uuid_cutover.sql` — Finalizes the trip vehicle migration by renaming the UUID column back to canonical `trips.vehicle_id`, dropping the legacy text field, and simplifying trip RLS/functions to UUID-only ownership
    - `supabase/migrations/20260319224500_fix_telemetry_charge_energy_added_source.sql` — Updates `process_telemetry()` so charging `energy_added_kwh` prefers Tesla’s battery-side `DCChargingEnergyIn` and only falls back to `ACChargingEnergyIn`, instead of summing both fields
+   - `supabase/migrations/20260320001000_add_minimum_trip_distance_setting.sql` — Adds a per-user trip visibility threshold in `user_settings` and makes trip-list summary SQL respect that minimum distance
 
 5. **Run the Development Server**
 

@@ -19,6 +19,7 @@ interface HomeLocation {
 interface SettingsStore {
     // Settings
     pollingConfig: PollingConfig;
+    minimumTripDistanceMiles: number;
     region: Region;
     units: Units;
     currency: Currency;
@@ -30,6 +31,7 @@ interface SettingsStore {
 
     // Actions
     setPollingConfig: (config: Partial<PollingConfig>) => void;
+    setMinimumTripDistanceMiles: (distanceMiles: number) => void;
     setRegion: (region: Region) => void;
     setUnits: (units: Units) => void;
     setCurrency: (currency: Currency) => void;
@@ -46,6 +48,7 @@ interface SettingsStore {
 
 const defaultSettings = {
     pollingConfig: DEFAULT_POLLING_CONFIG,
+    minimumTripDistanceMiles: 0.3,
     region: 'eu' as Region,
     units: 'imperial' as Units,
     currency: 'CHF' as Currency,
@@ -83,6 +86,13 @@ export const useSettingsStore = create<SettingsStore>()(
                     pollingConfig: { ...state.pollingConfig, ...config },
                 })),
 
+            setMinimumTripDistanceMiles: (minimumTripDistanceMiles) =>
+                set((state) => (
+                    state.minimumTripDistanceMiles === minimumTripDistanceMiles
+                        ? state
+                        : { minimumTripDistanceMiles }
+                )),
+
             setRegion: (region) => set({ region }),
 
             setUnits: (units) => set({ units }),
@@ -103,6 +113,7 @@ export const useSettingsStore = create<SettingsStore>()(
                 set((state) => {
                     const nextState = {
                         pollingConfig: snapshot.pollingConfig,
+                        minimumTripDistanceMiles: snapshot.minimumTripDistanceMiles,
                         region: snapshot.region,
                         units: snapshot.units,
                         currency: snapshot.currency || 'CHF',
@@ -118,6 +129,7 @@ export const useSettingsStore = create<SettingsStore>()(
                     };
 
                     const didChange = !arePollingConfigsEqual(state.pollingConfig, nextState.pollingConfig)
+                        || state.minimumTripDistanceMiles !== nextState.minimumTripDistanceMiles
                         || state.region !== nextState.region
                         || state.units !== nextState.units
                         || state.currency !== nextState.currency
@@ -138,6 +150,7 @@ export const useSettingsStore = create<SettingsStore>()(
                     if (data.success && data.settings) {
                         set({
                             pollingConfig: data.settings.pollingConfig,
+                            minimumTripDistanceMiles: data.settings.minimumTripDistanceMiles ?? 0.3,
                             region: data.settings.region,
                             units: data.settings.units,
                             currency: data.settings.currency || 'CHF',
@@ -160,6 +173,7 @@ export const useSettingsStore = create<SettingsStore>()(
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             pollingConfig: state.pollingConfig,
+                            minimumTripDistanceMiles: state.minimumTripDistanceMiles,
                             region: state.region,
                             units: state.units,
                             currency: state.currency,

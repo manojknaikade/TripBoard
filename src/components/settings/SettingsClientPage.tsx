@@ -60,6 +60,7 @@ export default function SettingsClientPage({
     const [settingsHydrated, setSettingsHydrated] = useState(false);
     const [exporting, setExporting] = useState<'csv' | 'json' | null>(null);
     const [savingHome, setSavingHome] = useState(false);
+    const [tripDistanceInput, setTripDistanceInput] = useState('');
     const [vehicles, setVehicles] = useState<VehicleSummary[]>(initialVehicles);
     const [loadingVehicles, setLoadingVehicles] = useState(false);
     const [vehicleFetchAttempted, setVehicleFetchAttempted] = useState(initialVehicles.length > 0);
@@ -69,6 +70,7 @@ export default function SettingsClientPage({
 
     const applySnapshot = useSettingsStore((state) => state.applySnapshot);
     const pollingConfig = useSettingsStore((state) => state.pollingConfig);
+    const minimumTripDistanceMiles = useSettingsStore((state) => state.minimumTripDistanceMiles);
     const region = useSettingsStore((state) => state.region);
     const units = useSettingsStore((state) => state.units);
     const currency = useSettingsStore((state) => state.currency);
@@ -78,6 +80,7 @@ export default function SettingsClientPage({
     const mapStyle = useSettingsStore((state) => state.mapStyle);
     const homeLocation = useSettingsStore((state) => state.homeLocation);
     const setPollingConfig = useSettingsStore((state) => state.setPollingConfig);
+    const setMinimumTripDistanceMiles = useSettingsStore((state) => state.setMinimumTripDistanceMiles);
     const setRegion = useSettingsStore((state) => state.setRegion);
     const setUnits = useSettingsStore((state) => state.setUnits);
     const setCurrency = useSettingsStore((state) => state.setCurrency);
@@ -88,6 +91,7 @@ export default function SettingsClientPage({
     const setHomeLocation = useSettingsStore((state) => state.setHomeLocation);
     const saveToDatabase = useSettingsStore((state) => state.saveToDatabase);
     const activePollingConfig = settingsHydrated ? pollingConfig : initialSettings.pollingConfig;
+    const activeMinimumTripDistanceMiles = settingsHydrated ? minimumTripDistanceMiles : initialSettings.minimumTripDistanceMiles;
     const activeRegion = settingsHydrated ? region : initialSettings.region;
     const activeUnits = settingsHydrated ? units : initialSettings.units;
     const activeCurrency = settingsHydrated ? currency : initialSettings.currency;
@@ -125,6 +129,13 @@ export default function SettingsClientPage({
             })
             .catch(err => console.error('Failed to fetch home location:', err));
     }, [applySnapshot, initialHomeLocation, initialSettings, initialVehicles, setHomeLocation]);
+
+    useEffect(() => {
+        const displayDistance = activeUnits === 'metric'
+            ? activeMinimumTripDistanceMiles * 1.60934
+            : activeMinimumTripDistanceMiles;
+        setTripDistanceInput(displayDistance.toFixed(1));
+    }, [activeMinimumTripDistanceMiles, activeUnits]);
 
     useEffect(() => {
         if (activeDataSource !== 'telemetry') {
@@ -216,6 +227,25 @@ export default function SettingsClientPage({
         } finally {
             setSavingHome(false);
         }
+    };
+
+    const saveMinimumTripDistance = () => {
+        const parsed = Number(tripDistanceInput);
+
+        if (!Number.isFinite(parsed) || parsed < 0) {
+            const displayDistance = activeUnits === 'metric'
+                ? activeMinimumTripDistanceMiles * 1.60934
+                : activeMinimumTripDistanceMiles;
+            setTripDistanceInput(displayDistance.toFixed(1));
+            return;
+        }
+
+        const nextMiles = activeUnits === 'metric'
+            ? parsed / 1.60934
+            : parsed;
+
+        setMinimumTripDistanceMiles(Math.max(0, Number(nextMiles.toFixed(4))));
+        showSaved();
     };
 
     const handleExport = async (format: 'csv' | 'json') => {
@@ -486,6 +516,41 @@ export default function SettingsClientPage({
                                 />
                             ))}
                         </div>
+                    </SettingsSection>
+
+                    <SettingsSection
+                        icon={<MapPin className="h-5 w-5" />}
+                        title="Trip Visibility Threshold"
+                        description="Hide very short parking maneuvers from trip history and summary cards. This value is shown in your current units."
+                    >
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                            <label className="flex-1">
+                                <span className="mb-2 block text-sm text-slate-300">Minimum trip distance</span>
+                                <div className="flex items-center gap-3">
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        step="0.1"
+                                        value={tripDistanceInput}
+                                        onChange={(e) => setTripDistanceInput(e.target.value)}
+                                        onBlur={saveMinimumTripDistance}
+                                        className={`w-full ${INPUT_CLASS}`}
+                                    />
+                                    <span className="text-sm font-medium uppercase tracking-[0.14em] text-slate-400">
+                                        {activeUnits === 'metric' ? 'km' : 'mi'}
+                                    </span>
+                                </div>
+                            </label>
+                            <button
+                                onClick={saveMinimumTripDistance}
+                                className={`rounded-2xl bg-red-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600 ${FOCUS_RING_CLASS}`}
+                            >
+                                Save Threshold
+                            </button>
+                        </div>
+                        <p className="mt-3 text-sm text-slate-400">
+                            Set this to `0` to show every recorded movement, including very short parking maneuvers.
+                        </p>
                     </SettingsSection>
 
                     {/* Map Style */}

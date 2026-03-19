@@ -36,7 +36,10 @@ export async function POST(request: NextRequest) {
 
     try {
         const body = await request.json()
-        const { pollingConfig, region, units, currency, dateFormat, notifications, dataSource, mapStyle } = body
+        const { pollingConfig, minimumTripDistanceMiles, region, units, currency, dateFormat, notifications, dataSource, mapStyle } = body
+        const normalizedMinimumTripDistanceMiles = Number.isFinite(Number(minimumTripDistanceMiles))
+            ? Math.max(0, Number(minimumTripDistanceMiles))
+            : 0.3;
 
         const supabase = await createClient();
 
@@ -48,6 +51,7 @@ export async function POST(request: NextRequest) {
                 polling_charging: pollingConfig?.charging,
                 polling_parked: pollingConfig?.parked,
                 polling_sleeping: pollingConfig?.sleeping,
+                minimum_trip_distance_miles: normalizedMinimumTripDistanceMiles,
                 region,
                 units,
                 currency,

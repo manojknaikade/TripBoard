@@ -15,6 +15,7 @@ export type AppSettingsSnapshot = {
         parked: number;
         sleeping: number;
     };
+    minimumTripDistanceMiles: number;
     region: Region;
     units: Units;
     currency: Currency;
@@ -37,6 +38,7 @@ export const DEFAULT_APP_SETTINGS: AppSettingsSnapshot = {
         parked: 1800,
         sleeping: 3600,
     },
+    minimumTripDistanceMiles: 0.3,
     region: 'eu',
     units: 'imperial',
     currency: 'CHF',
@@ -75,7 +77,7 @@ export async function getAppSettingsSnapshot(): Promise<AppSettingsSnapshot> {
     const supabase = await ensureUserSettingsRow(user.id);
     const { data, error } = await supabase
         .from('user_settings')
-        .select('polling_driving, polling_charging, polling_parked, polling_sleeping, region, units, currency, date_format, notifications_enabled, data_source, map_style')
+        .select('polling_driving, polling_charging, polling_parked, polling_sleeping, minimum_trip_distance_miles, region, units, currency, date_format, notifications_enabled, data_source, map_style')
         .eq('user_id', user.id)
         .maybeSingle();
 
@@ -87,6 +89,8 @@ export async function getAppSettingsSnapshot(): Promise<AppSettingsSnapshot> {
         throw new Error('Failed to load app settings');
     }
 
+    const minimumTripDistanceMiles = Number(data.minimum_trip_distance_miles ?? 0.3);
+
     return {
         pollingConfig: {
             driving: data.polling_driving,
@@ -94,6 +98,9 @@ export async function getAppSettingsSnapshot(): Promise<AppSettingsSnapshot> {
             parked: data.polling_parked,
             sleeping: data.polling_sleeping,
         },
+        minimumTripDistanceMiles: Number.isFinite(minimumTripDistanceMiles)
+            ? Math.max(minimumTripDistanceMiles, 0)
+            : 0.3,
         region: data.region,
         units: data.units,
         currency: data.currency || 'CHF',

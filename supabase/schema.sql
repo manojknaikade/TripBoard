@@ -645,7 +645,20 @@ CREATE OR REPLACE FUNCTION "public"."get_trip_list_summary"("p_from" timestamp w
     LANGUAGE "sql" SECURITY DEFINER
     SET "search_path" TO 'public'
     AS $$
-WITH filtered_trips AS (
+WITH current_settings AS (
+    SELECT GREATEST(
+        COALESCE(
+            (
+                SELECT user_settings.minimum_trip_distance_miles
+                FROM public.user_settings AS user_settings
+                WHERE user_settings.user_id = auth.uid()
+            ),
+            0.3
+        ),
+        0
+    ) AS minimum_trip_distance_miles
+),
+filtered_trips AS (
     SELECT
         GREATEST(
             COALESCE(
@@ -676,9 +689,10 @@ WITH filtered_trips AS (
       AND (p_vehicle_id IS NULL OR trip.vehicle_id = p_vehicle_id)
 ),
 qualifying_trips AS (
-    SELECT *
+    SELECT filtered_trips.*
     FROM filtered_trips
-    WHERE distance_miles >= 0.3
+    CROSS JOIN current_settings
+    WHERE filtered_trips.distance_miles >= current_settings.minimum_trip_distance_miles
 )
 SELECT
     COUNT(*)::bigint AS total_trips,
@@ -1728,9 +1742,11 @@ CREATE TABLE IF NOT EXISTS "public"."user_settings" (
     "home_latitude" double precision,
     "home_longitude" double precision,
     "home_address" "text",
+    "minimum_trip_distance_miles" numeric DEFAULT 0.3 NOT NULL,
     CONSTRAINT "user_settings_data_source_check" CHECK (("data_source" = ANY (ARRAY['polling'::"text", 'telemetry'::"text"]))),
     CONSTRAINT "user_settings_date_format_check" CHECK (("date_format" = ANY (ARRAY['DD/MM'::"text", 'MM/DD'::"text"]))),
     CONSTRAINT "user_settings_map_style_check" CHECK (("map_style" = ANY (ARRAY['streets'::"text", 'dark'::"text"]))),
+    CONSTRAINT "user_settings_minimum_trip_distance_miles_check" CHECK (("minimum_trip_distance_miles" >= (0)::numeric)),
     CONSTRAINT "user_settings_region_check" CHECK (("region" = ANY (ARRAY['na'::"text", 'eu'::"text", 'cn'::"text"]))),
     CONSTRAINT "user_settings_units_check" CHECK (("units" = ANY (ARRAY['imperial'::"text", 'metric'::"text"])))
 );

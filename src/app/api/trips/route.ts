@@ -17,6 +17,25 @@ async function getTelemetrySupabase() {
     return createAdminClient();
 }
 
+async function loadMinimumTripDistanceMiles(
+    supabase: Awaited<ReturnType<typeof createClient>>,
+    userId: string
+): Promise<number> {
+    const { data, error } = await supabase
+        .from('user_settings')
+        .select('minimum_trip_distance_miles')
+        .eq('user_id', userId)
+        .maybeSingle();
+
+    if (error) {
+        console.error('Trip distance threshold load error:', error);
+        return 0.3;
+    }
+
+    const parsed = Number(data?.minimum_trip_distance_miles ?? 0.3);
+    return Number.isFinite(parsed) ? Math.max(parsed, 0) : 0.3;
+}
+
 type TripWaypointRow = {
     trip_id: string;
     timestamp: string;
@@ -510,7 +529,7 @@ export async function GET(request: NextRequest) {
 
     query = query.range(offset, offset + limit);
 
-    const [listResult, summary] = await Promise.all([
+    const [listResult, summary, minimumTripDistanceMiles] = await Promise.all([
         query,
         includeSummary
             ? loadTripSummary(supabase, {
@@ -519,6 +538,7 @@ export async function GET(request: NextRequest) {
                 vehicleId: selectedVehicle?.id || null,
             })
             : Promise.resolve(null),
+        loadMinimumTripDistanceMiles(supabase, userId),
     ]);
 
     const { data: trips, error } = listResult;
@@ -532,8 +552,6 @@ export async function GET(request: NextRequest) {
     const hasMore = pagedTrips.length > limit;
     const visibleTrips = pagedTrips.slice(0, limit);
 
-    // Filter out very short trips (parking maneuvers) - minimum 0.3 miles / 0.5 km
-    const MINIMUM_DISTANCE_MILES = 0.3;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const filteredTrips = visibleTrips.filter((trip: any) => {
         const distance = trip.distance_miles ? parseFloat(trip.distance_miles.toString()) : 0;
@@ -542,7 +560,7 @@ export async function GET(request: NextRequest) {
             ? parseFloat(trip.end_odometer.toString()) - parseFloat(trip.start_odometer.toString())
             : 0;
         const actualDistance = distance || odometerDistance;
-        return actualDistance >= MINIMUM_DISTANCE_MILES;
+        return actualDistance >= minimumTripDistanceMiles;
     });
 
     // Transform to match frontend expectations
