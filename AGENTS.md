@@ -12,6 +12,30 @@
   - `npm run lint`
   - `npm run build`
 
+# Maintainer PR Workflow
+
+- Admin PR flow:
+  - Read the PR summary and confirm it targets `master`.
+  - Check CI before reviewing deeply.
+  - Pull the branch locally for user-facing, telemetry, auth, settings, or schema-sensitive changes.
+  - Run the default verification commands:
+    - `npm run lint`
+    - `npm run build`
+  - Manually test the affected flow.
+  - Review for regressions, stale-state issues, wrong data-source usage, and incomplete migration/doc follow-through.
+  - Approve or request changes on GitHub.
+  - Prefer `Squash and merge` unless preserving commit structure matters.
+  - Delete the branch after merge and sync local `master`.
+- Review checklist:
+  - Scope is focused and does not mix unrelated refactors.
+  - Behavior matches the bug report or feature request.
+  - Nearby flows are not obviously regressed.
+  - API writes hit the correct source of truth.
+  - Telemetry, region, and settings changes use the intended inputs.
+  - `README.md` is updated if setup, behavior, or operations changed.
+  - `supabase/schema.sql` is refreshed if migrations changed.
+  - No secrets, temp files, or generated junk are committed.
+
 # Token-Saving Rules
 
 - Prefer incremental follow-ups over fresh audits. If the user says `go ahead`, `continue`, or asks for a small extension, continue from the current branch/diff/context unless new evidence says the prior understanding is wrong.
