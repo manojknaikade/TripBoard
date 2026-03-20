@@ -76,6 +76,32 @@ export default function VehicleMap({
     }, []);
 
     useEffect(() => {
+        if (!containerRef.current || !mapRef.current) {
+            return;
+        }
+
+        const map = mapRef.current;
+        let frameId = window.requestAnimationFrame(() => {
+            map.invalidateSize(false);
+        });
+        const resizeObserver = typeof ResizeObserver === 'undefined'
+            ? null
+            : new ResizeObserver(() => {
+                window.cancelAnimationFrame(frameId);
+                frameId = window.requestAnimationFrame(() => {
+                    map.invalidateSize(false);
+                });
+            });
+
+        resizeObserver?.observe(containerRef.current);
+
+        return () => {
+            window.cancelAnimationFrame(frameId);
+            resizeObserver?.disconnect();
+        };
+    }, []);
+
+    useEffect(() => {
         if (!mapRef.current) {
             return;
         }
@@ -108,6 +134,7 @@ export default function VehicleMap({
             markerRef.current.getPopup()?.setContent(vehicleName || 'Your Tesla');
         }
 
+        mapRef.current.invalidateSize(false);
         mapRef.current.panTo(newLatLng);
     }, [latitude, longitude, heading, vehicleName]);
 

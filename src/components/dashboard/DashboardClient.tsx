@@ -202,6 +202,10 @@ function clampPercent(value: number) {
   return Math.min(100, Math.max(0, Math.round(value)));
 }
 
+function hasValidCoordinates(latitude: number | null | undefined, longitude: number | null | undefined) {
+  return Number.isFinite(latitude) && Number.isFinite(longitude);
+}
+
 function formatVehicleStateLabel(state: string) {
   const normalized = state.trim().toLowerCase();
 
@@ -253,6 +257,7 @@ export default function DashboardClient({
   const [isLocationCardNearViewport, setIsLocationCardNearViewport] = useState(false);
   const locationCardRef = useRef<HTMLElement | null>(null);
   const vehicleFetchIdRef = useRef(0);
+  const pendingVehicleRequestsRef = useRef(0);
 
   const units = useSettingsStore((state) => state.units);
   const region = useSettingsStore((state) => state.region);
@@ -397,6 +402,7 @@ export default function DashboardClient({
     const requestId = ++vehicleFetchIdRef.current;
     const cacheKey = buildVehicleCacheKey(vehicleId, activeDataSource, activeRegion);
 
+    pendingVehicleRequestsRef.current += 1;
     setDataLoading(true);
     setIsAsleep(false);
     setError(null);
@@ -450,9 +456,8 @@ export default function DashboardClient({
     } catch {
       setError('Failed to fetch vehicle data');
     } finally {
-      if (requestId === vehicleFetchIdRef.current) {
-        setDataLoading(false);
-      }
+      pendingVehicleRequestsRef.current = Math.max(0, pendingVehicleRequestsRef.current - 1);
+      setDataLoading(pendingVehicleRequestsRef.current > 0);
     }
   }, [activeDataSource, activeRegion, persistVehicleCache, vehicleCache, vehicleData]);
 
@@ -571,6 +576,7 @@ export default function DashboardClient({
   const cachedSnapshotAgeLabel = cachedData ? formatTimeAgo(cachedData.timestamp) : null;
   const snapshotAgeMs = displayTimestamp ? Date.now() - displayTimestamp : null;
   const isSnapshotStale = snapshotAgeMs !== null && snapshotAgeMs > 6 * 60 * 60 * 1000;
+  const hasLocation = hasValidCoordinates(displayData?.latitude, displayData?.longitude);
 
   const vehicleStatusMeta = (() => {
     if (waking) {
@@ -668,8 +674,7 @@ export default function DashboardClient({
     if (
       isLocationCardNearViewport ||
       !locationCardRef.current ||
-      !displayData?.latitude ||
-      !displayData?.longitude
+      !hasLocation
     ) {
       return;
     }
@@ -690,21 +695,20 @@ export default function DashboardClient({
     observer.observe(locationCardRef.current);
 
     return () => observer.disconnect();
-  }, [displayData?.latitude, displayData?.longitude, isLocationCardNearViewport]);
+  }, [hasLocation, isLocationCardNearViewport]);
 
   // Reverse geocode via the shared API route so address formatting stays
   // consistent across dashboard, trips, and charging views.
   useEffect(() => {
     if (
       !isLocationCardNearViewport ||
-      !displayData?.latitude ||
-      !displayData?.longitude
+      !hasLocation
     ) {
       setStreetAddress(null);
       return;
     }
-    const lat = displayData.latitude;
-    const lon = displayData.longitude;
+    const lat = displayData!.latitude;
+    const lon = displayData!.longitude;
     const controller = new AbortController();
 
     fetchReverseGeocode(lat, lon)
@@ -727,7 +731,7 @@ export default function DashboardClient({
       });
 
     return () => controller.abort();
-  }, [displayData?.latitude, displayData?.longitude, isLocationCardNearViewport]);
+  }, [displayData, hasLocation, isLocationCardNearViewport]);
 
   if (loading) {
     return (
@@ -938,7 +942,7 @@ export default function DashboardClient({
                 </div>
               </section>
 
-              {displayData.latitude && displayData.longitude && (
+              {hasLocation && (
                 <section
                   ref={locationCardRef}
                   className={`flex h-full flex-col p-6 ${SURFACE_CARD_CLASS}`}
