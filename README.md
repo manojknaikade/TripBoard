@@ -56,16 +56,23 @@ Create `.env.local` from `.env.example` and fill in the values you need.
 | `TESLA_VEHICLE_COMMAND_PROXY_URL` | Optional | Required only if you want the app to push Tesla Fleet Telemetry configuration through the Vehicle Command Proxy |
 | `TESLA_TELEMETRY_HOSTNAME` | Optional | Required with telemetry configuration; hostname TripBoard tells Tesla vehicles to stream telemetry to |
 | `TESLA_TELEMETRY_PORT` | Optional | Required with telemetry configuration; port for the telemetry ingester |
-| `CHARGING_SYNC_SECRET` | Optional | Secret accepted by `/api/internal/charging/tesla-sync` and the standalone charging-sync worker |
-| `CRON_SECRET` | Optional | Alternate secret name accepted by the same internal charging-sync route |
-| `SUPABASE_URL` | Optional | Worker-only alias used by `scripts/process-charging-sync.js` if you do not want to reuse `NEXT_PUBLIC_SUPABASE_URL` |
-| `SUPABASE_KEY` | Optional | Worker-only alias used by `scripts/process-charging-sync.js` if you do not want to reuse `SUPABASE_SERVICE_ROLE_KEY` |
+| `CHARGING_SYNC_SECRET` | Optional | Secret you generate yourself to protect `/api/internal/charging/tesla-sync` when calling it from cron or another external scheduler |
+| `CRON_SECRET` | Optional | Legacy alternate env name for the same internal charging-sync route secret |
+| `SUPABASE_URL` | Optional | Worker/ingester alias used outside the Next.js app if you do not want to reuse `NEXT_PUBLIC_SUPABASE_URL` |
+| `SUPABASE_KEY` | Optional | Worker/ingester alias used outside the Next.js app if you do not want to reuse `SUPABASE_SERVICE_ROLE_KEY` |
 | `CHARGING_SYNC_LIMIT` | Optional | Max jobs claimed per worker run, default `10` |
 
 Generate a token encryption key with:
 
 ```bash
 openssl rand -base64 32
+```
+
+Generate a charging-sync route secret with:
+
+```bash
+openssl rand -base64 32
+```
 ```
 
 ## Local Setup

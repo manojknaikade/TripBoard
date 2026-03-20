@@ -75,7 +75,9 @@ Meaning:
 - `TESLA_VEHICLE_COMMAND_PROXY_URL`: base URL of the Vehicle Command Proxy used by the app
 - `TESLA_TELEMETRY_HOSTNAME`: hostname written into Tesla fleet telemetry configuration
 - `TESLA_TELEMETRY_PORT`: port written into Tesla fleet telemetry configuration
-- `CHARGING_SYNC_SECRET`: bearer token for the internal Tesla charging-sync processor route
+- `CHARGING_SYNC_SECRET`: bearer token you generate yourself for the internal Tesla charging-sync processor route
+
+`CRON_SECRET` is also accepted by the route as a legacy alias, but new setups should use only `CHARGING_SYNC_SECRET`.
 
 These variables are required. The telemetry-config route no longer falls back to hardcoded production values.
 
