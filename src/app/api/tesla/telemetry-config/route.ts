@@ -75,7 +75,6 @@ function getTelemetryProxyConfig() {
 
 export async function POST(request: NextRequest) {
     const session = await getTeslaSession(request);
-    const region = normalizeTeslaRegion(request.nextUrl.searchParams.get('region')) || session?.region || 'eu';
 
     if (!session) {
         return NextResponse.json(
@@ -96,6 +95,10 @@ export async function POST(request: NextRequest) {
 
     // Accept either VIN or vehicleId (we'll get VIN from vehicle data)
     const { vin, vehicleId } = body;
+    const region = normalizeTeslaRegion(body?.region)
+        || normalizeTeslaRegion(request.nextUrl.searchParams.get('region'))
+        || session.region
+        || 'eu';
 
     // If vehicleId provided, we need to first get the VIN
     let targetVin = vin;

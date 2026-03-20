@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/server';
 import {
     dedupeRoutePoints,
     extractRoutePointFromTelemetry,
+    hasTripRouteCoverage,
     sampleRoutePoints,
     type TripRoutePoint,
 } from '@/lib/trips/routePoints';
@@ -583,6 +584,7 @@ export async function GET(request: NextRequest) {
     }
 
     const vinByTripId = new Map(tripsWithResolvedVin.map((trip) => [trip.id, trip.vin]));
+    const tripById = new Map(filteredTrips.map((trip) => [trip.id, trip]));
 
     try {
         routePointMap = await loadStoredThumbnailRoutePoints(
@@ -593,7 +595,21 @@ export async function GET(request: NextRequest) {
         console.error('Trip thumbnail waypoint batch fetch error:', routeError);
     }
 
-    const missingStoredRoutes = tripsWithResolvedVin.filter((trip) => !routePointMap.has(trip.id));
+    const missingStoredRoutes = tripsWithResolvedVin.filter((trip) => {
+        const tripRow = tripById.get(trip.id);
+        const storedRoutePoints = routePointMap.get(trip.id) || [];
+
+        if (!tripRow) {
+            return !routePointMap.has(trip.id);
+        }
+
+        return !hasTripRouteCoverage(storedRoutePoints, {
+            startLatitude: tripRow.start_latitude,
+            startLongitude: tripRow.start_longitude,
+            endLatitude: tripRow.end_latitude,
+            endLongitude: tripRow.end_longitude,
+        });
+    });
 
     // Telemetry fallback is the expensive path. Keep it for small result sets so
     // detail-rich recent views still work, but avoid turning large history ranges
@@ -602,6 +618,8 @@ export async function GET(request: NextRequest) {
         const telemetrySupabase = await getTelemetrySupabase();
         await Promise.all(missingStoredRoutes.map(async (trip) => {
             try {
+                const tripRow = tripById.get(trip.id);
+                const existingRoutePoints = routePointMap.get(trip.id) || [];
                 const points = await loadThumbnailRoutePointsFromTelemetry(
                     telemetrySupabase,
                     trip.id,
@@ -610,7 +628,22 @@ export async function GET(request: NextRequest) {
                     trip.end_time
                 );
 
-                if (points.length > 0) {
+                if (!tripRow) {
+                    if (points.length > 0) {
+                        routePointMap.set(trip.id, points);
+                    }
+                    return;
+                }
+
+                if (
+                    hasTripRouteCoverage(points, {
+                        startLatitude: tripRow.start_latitude,
+                        startLongitude: tripRow.start_longitude,
+                        endLatitude: tripRow.end_latitude,
+                        endLongitude: tripRow.end_longitude,
+                    })
+                    || points.length > existingRoutePoints.length
+                ) {
                     routePointMap.set(trip.id, points);
                 }
             } catch (routeError) {

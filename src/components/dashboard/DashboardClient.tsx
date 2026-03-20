@@ -67,10 +67,10 @@ interface VehicleData {
   ft: number;  // frunk
   rt: number;  // trunk
   // Tire pressure (bar)
-  tpms_pressure_fl: number;
-  tpms_pressure_fr: number;
-  tpms_pressure_rl: number;
-  tpms_pressure_rr: number;
+  tpms_pressure_fl: number | null;
+  tpms_pressure_fr: number | null;
+  tpms_pressure_rl: number | null;
+  tpms_pressure_rr: number | null;
   // Window states (Closed, PartiallyOpen, Opened)
   fd_window?: string;
   fp_window?: string;
@@ -146,6 +146,35 @@ function formatTimeAgo(timestamp: number): string {
   }
   const days = Math.floor(seconds / 86400);
   return days === 1 ? '1 day ago' : `${days} days ago`;
+}
+
+function isFinitePressure(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function mergeVehicleTirePressure(
+  current: VehicleData,
+  previous?: VehicleData | null
+): VehicleData {
+  if (!previous || (previous.id !== current.id && previous.vin !== current.vin)) {
+    return current;
+  }
+
+  return {
+    ...current,
+    tpms_pressure_fl: isFinitePressure(current.tpms_pressure_fl)
+      ? current.tpms_pressure_fl
+      : (isFinitePressure(previous.tpms_pressure_fl) ? previous.tpms_pressure_fl : null),
+    tpms_pressure_fr: isFinitePressure(current.tpms_pressure_fr)
+      ? current.tpms_pressure_fr
+      : (isFinitePressure(previous.tpms_pressure_fr) ? previous.tpms_pressure_fr : null),
+    tpms_pressure_rl: isFinitePressure(current.tpms_pressure_rl)
+      ? current.tpms_pressure_rl
+      : (isFinitePressure(previous.tpms_pressure_rl) ? previous.tpms_pressure_rl : null),
+    tpms_pressure_rr: isFinitePressure(current.tpms_pressure_rr)
+      ? current.tpms_pressure_rr
+      : (isFinitePressure(previous.tpms_pressure_rr) ? previous.tpms_pressure_rr : null),
+  };
 }
 
 function getStatusToneClasses(tone: 'live' | 'warning' | 'quiet' | 'danger') {
@@ -398,13 +427,17 @@ export default function DashboardClient({
           setVehicleData(null);
           // Keep using cached data but don't update it
         } else {
-          setVehicleData(data.vehicle);
+          const previousVehicleSnapshot = vehicleCache[cacheKey]?.vehicle
+            || (vehicleData && vehicleData.id === data.vehicle.id ? vehicleData : null);
+          const mergedVehicle = mergeVehicleTirePressure(data.vehicle, previousVehicleSnapshot);
+
+          setVehicleData(mergedVehicle);
           // Use timestamp from API response (properly formatted in telemetry endpoint)
           const timestamp = data.timestamp || Date.now();
           setLastUpdated(timestamp);
           setIsAsleep(false);
           persistVehicleCache(cacheKey, {
-            vehicle: data.vehicle,
+            vehicle: mergedVehicle,
             timestamp,
           });
         }
@@ -421,7 +454,7 @@ export default function DashboardClient({
         setDataLoading(false);
       }
     }
-  }, [activeDataSource, activeRegion, persistVehicleCache]);
+  }, [activeDataSource, activeRegion, persistVehicleCache, vehicleCache, vehicleData]);
 
   useEffect(() => {
     if (selectedVehicle) {
@@ -477,13 +510,16 @@ export default function DashboardClient({
         }
 
         if (data.success && data.vehicle && data.state !== 'asleep') {
+          const previousVehicleSnapshot = vehicleCache[wakeCacheKey]?.vehicle
+            || (vehicleData && vehicleData.id === data.vehicle.id ? vehicleData : null);
+          const mergedVehicle = mergeVehicleTirePressure(data.vehicle, previousVehicleSnapshot);
           const timestamp = data.timestamp || Date.now();
-          setVehicleData(data.vehicle);
+          setVehicleData(mergedVehicle);
           setLastUpdated(timestamp);
           setIsAsleep(false);
           setWaking(false);
           persistVehicleCache(wakeCacheKey, {
-            vehicle: data.vehicle,
+            vehicle: mergedVehicle,
             timestamp,
           });
         } else if (attempts < maxAttempts) {
@@ -527,7 +563,9 @@ export default function DashboardClient({
     : null;
 
   // Data to display (current or cached)
-  const displayData = vehicleData || cachedData?.vehicle || null;
+  const displayData = vehicleData
+    ? mergeVehicleTirePressure(vehicleData, cachedData?.vehicle)
+    : cachedData?.vehicle || null;
   const displayTimestamp = vehicleData ? lastUpdated : cachedData?.timestamp;
   const isShowingCachedSnapshot = !vehicleData && !!cachedData;
   const cachedSnapshotAgeLabel = cachedData ? formatTimeAgo(cachedData.timestamp) : null;
@@ -992,10 +1030,10 @@ function TirePressureOverviewCard({
   rearLeft,
   rearRight,
 }: {
-  frontLeft: number;
-  frontRight: number;
-  rearLeft: number;
-  rearRight: number;
+  frontLeft: number | null;
+  frontRight: number | null;
+  rearLeft: number | null;
+  rearRight: number | null;
 }) {
   const tires = [
     { label: 'Front Left', pressure: frontLeft },
@@ -1004,43 +1042,55 @@ function TirePressureOverviewCard({
     { label: 'Rear Right', pressure: rearRight },
   ];
 
-  const hasPressureData = tires.some((tire) => tire.pressure);
+  const hasPressureData = tires.some((tire) => tire.pressure != null && Number.isFinite(tire.pressure));
 
   return (
     <div className={`flex h-full flex-col p-6 ${SURFACE_CARD_CLASS}`}>
-      <div className="mb-4 flex items-center gap-3">
+      <div className="mb-4 flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <Gauge className="h-6 w-6 text-orange-300" />
           <h2 className="text-lg font-semibold text-white">Tire pressure</h2>
         </div>
+        {!hasPressureData && (
+          <span className={SUBDUED_BADGE_CLASS}>
+            Unavailable
+          </span>
+        )}
       </div>
-      {hasPressureData ? (
-        <div className="grid gap-4 lg:grid-cols-4">
-          {tires.map((tire) => (
+      <div className="grid gap-4 lg:grid-cols-4">
+        {tires.map((tire) => {
+          const pressureBar = tire.pressure;
+          const hasValue = pressureBar != null && Number.isFinite(pressureBar);
+          const pressurePsi = hasValue ? Math.round(pressureBar * 14.5) : null;
+
+          return (
             <div key={tire.label} className={`relative flex min-h-[7.25rem] flex-col justify-center p-4 ${SUBCARD_CLASS}`}>
               <span
-                className={`absolute right-3 top-3 h-2.5 w-2.5 rounded-full ${tire.pressure
-                  ? Math.round(tire.pressure * 14.5) < 35
-                    ? 'bg-red-400'
-                    : 'bg-green-400'
-                  : 'bg-slate-500'}`}
+                className={`absolute right-3 top-3 h-2.5 w-2.5 rounded-full ${
+                  !hasValue
+                    ? 'bg-slate-500'
+                    : pressurePsi! < 35
+                      ? 'bg-red-400'
+                      : 'bg-green-400'
+                }`}
               />
               <p className="text-center text-xs font-medium text-slate-400">{tire.label}</p>
               <div className="mt-2.5 flex items-end justify-center gap-x-2.5 gap-y-1">
                 <p className="text-[2.2rem] font-semibold leading-none tracking-tight text-white">
-                  {tire.pressure ? Math.round(tire.pressure * 14.5) : '--'}
+                  {hasValue ? pressurePsi : '--'}
                 </p>
                 <p className="pb-0.5 text-base font-medium text-slate-100">PSI</p>
               </div>
               <p className="mt-1 text-center text-sm text-slate-400">
-                {tire.pressure ? `${tire.pressure.toFixed(2)} bar` : '-- bar'}
+                {hasValue ? `${pressureBar.toFixed(2)} bar` : 'No reading'}
               </p>
             </div>
-          ))}
-        </div>
-      ) : (
-        <p className="mt-3 text-sm text-slate-400">
-          Tire pressure data requires expanded telemetry subscription.
+          );
+        })}
+      </div>
+      {!hasPressureData && (
+        <p className="mt-4 text-sm text-slate-400">
+          Tire pressure is not available in the current vehicle snapshot.
         </p>
       )}
     </div>
