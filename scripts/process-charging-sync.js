@@ -44,8 +44,7 @@ function getSupabase() {
     });
 }
 
-function getEncryptionKey() {
-    const rawKey = getRequiredEnv('TOKEN_ENCRYPTION_KEY');
+function normalizeEncryptionKey(rawKey) {
     const decodedKey = Buffer.from(rawKey, 'base64');
 
     if (decodedKey.length === 32) {
@@ -59,25 +58,52 @@ function getEncryptionKey() {
     return crypto.createHash('sha256').update(rawKey).digest();
 }
 
+function getConfiguredEncryptionKeys() {
+    const configuredKeys = [
+        getRequiredEnv('TOKEN_ENCRYPTION_KEY'),
+        ...String(process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS || '')
+            .split(',')
+            .map((value) => value.trim())
+            .filter(Boolean),
+    ];
+
+    const keys = [];
+    const seen = new Set();
+
+    for (const rawKey of configuredKeys) {
+        const key = normalizeEncryptionKey(rawKey);
+        const fingerprint = crypto.createHash('sha256').update(key).digest('hex').slice(0, 16);
+
+        if (seen.has(fingerprint)) {
+            continue;
+        }
+
+        seen.add(fingerprint);
+        keys.push({ fingerprint, key });
+    }
+
+    return {
+        active: keys[0],
+        all: keys,
+    };
+}
+
 function encryptValue(value) {
+    const { active } = getConfiguredEncryptionKeys();
     const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', getEncryptionKey(), iv);
+    const cipher = crypto.createCipheriv('aes-256-gcm', active.key, iv);
     const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
     const authTag = cipher.getAuthTag();
 
-    return [iv, authTag, encrypted].map((part) => part.toString('base64url')).join('.');
+    return [active.fingerprint, iv, authTag, encrypted]
+        .map((part) => part.toString('base64url'))
+        .join('.');
 }
 
-function decryptValue(payload) {
-    const [iv, authTag, encrypted] = String(payload || '').split('.');
-
-    if (!iv || !authTag || !encrypted) {
-        throw new Error('Invalid encrypted payload');
-    }
-
+function decryptWithKey({ encrypted, iv, authTag, key }) {
     const decipher = crypto.createDecipheriv(
         'aes-256-gcm',
-        getEncryptionKey(),
+        key,
         Buffer.from(iv, 'base64url'),
     );
     decipher.setAuthTag(Buffer.from(authTag, 'base64url'));
@@ -88,6 +114,70 @@ function decryptValue(payload) {
     ]);
 
     return decrypted.toString('utf8');
+}
+
+function decryptValue(payload) {
+    const { active, all } = getConfiguredEncryptionKeys();
+    const parts = String(payload || '').split('.');
+
+    if (parts.length === 4) {
+        const [fingerprint, iv, authTag, encrypted] = parts;
+
+        if (!fingerprint || !iv || !authTag || !encrypted) {
+            throw new Error('Invalid encrypted payload');
+        }
+
+        const preferredOrder = [
+            ...all.filter((candidate) => candidate.fingerprint === fingerprint),
+            ...all.filter((candidate) => candidate.fingerprint !== fingerprint),
+        ];
+
+        for (const candidate of preferredOrder) {
+            try {
+                return {
+                    value: decryptWithKey({
+                        encrypted,
+                        iv,
+                        authTag,
+                        key: candidate.key,
+                    }),
+                    needsMigration: candidate.fingerprint !== active.fingerprint,
+                };
+            } catch {
+                // Try the next configured key.
+            }
+        }
+
+        throw new Error('Unable to decrypt payload with configured encryption keys');
+    }
+
+    if (parts.length === 3) {
+        const [iv, authTag, encrypted] = parts;
+
+        if (!iv || !authTag || !encrypted) {
+            throw new Error('Invalid encrypted payload');
+        }
+
+        for (const candidate of all) {
+            try {
+                return {
+                    value: decryptWithKey({
+                        encrypted,
+                        iv,
+                        authTag,
+                        key: candidate.key,
+                    }),
+                    needsMigration: true,
+                };
+            } catch {
+                // Try the next configured key.
+            }
+        }
+
+        throw new Error('Unable to decrypt payload with configured encryption keys');
+    }
+
+    throw new Error('Invalid encrypted payload');
 }
 
 function getTokenExpiry(accessToken) {
@@ -548,17 +638,23 @@ async function getStoredTeslaSessionForUser(supabase, userId, preferredRegion) {
         return null;
     }
 
+    const accessToken = decryptValue(row.access_token_encrypted);
+    const refreshToken = row.refresh_token_encrypted
+        ? decryptValue(row.refresh_token_encrypted)
+        : null;
+
     return {
         row,
-        accessToken: decryptValue(row.access_token_encrypted),
-        refreshToken: row.refresh_token_encrypted ? decryptValue(row.refresh_token_encrypted) : undefined,
+        accessToken: accessToken.value,
+        refreshToken: refreshToken ? refreshToken.value : undefined,
         region: normalizeTeslaRegion(row.region),
         tokenExpiresAt: row.token_expires_at,
+        needsReencryption: accessToken.needsMigration || Boolean(refreshToken?.needsMigration),
     };
 }
 
 async function ensureFreshStoredTeslaSession(supabase, storedSession) {
-    if (!storedSession.tokenExpiresAt) {
+    if (!storedSession.tokenExpiresAt || storedSession.needsReencryption) {
         const tokenExpiresAt = await persistTeslaSessionRecord(supabase, storedSession.row, {
             accessToken: storedSession.accessToken,
             refreshToken: storedSession.refreshToken,
@@ -568,6 +664,7 @@ async function ensureFreshStoredTeslaSession(supabase, storedSession) {
         return {
             ...storedSession,
             tokenExpiresAt,
+            needsReencryption: false,
         };
     }
 
@@ -597,6 +694,7 @@ async function ensureFreshStoredTeslaSession(supabase, storedSession) {
         accessToken: session.accessToken,
         refreshToken: session.refreshToken,
         tokenExpiresAt,
+        needsReencryption: false,
     };
 }
 

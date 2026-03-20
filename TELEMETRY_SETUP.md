@@ -32,12 +32,9 @@ Supabase owns the application-side telemetry processing:
 - `public.reconcile_stale_charging_sessions(interval)` closes stale open charging sessions when explicit end events are missing
 - `public.enqueue_supercharger_tesla_sync_job()` queues completed Supercharger sessions for one-time Tesla billing enrichment
 
-Relevant migrations:
+Relevant baseline migration:
 
-- [supabase/migrations/20260311000000_trip_temperature_trigger.sql](/Users/manojnaikade/Documents/TripBoard/supabase/migrations/20260311000000_trip_temperature_trigger.sql)
-- [supabase/migrations/20260313000000_fix_notifications.sql](/Users/manojnaikade/Documents/TripBoard/supabase/migrations/20260313000000_fix_notifications.sql)
-- [supabase/migrations/20260313010000_move_charging_detection_to_db.sql](/Users/manojnaikade/Documents/TripBoard/supabase/migrations/20260313010000_move_charging_detection_to_db.sql)
-- [supabase/migrations/20260315021000_add_tesla_charging_sync_queue.sql](/Users/manojnaikade/Documents/TripBoard/supabase/migrations/20260315021000_add_tesla_charging_sync_queue.sql)
+- [supabase/migrations/20260320010000_initial_public_schema.sql](/Users/manojnaikade/Documents/TripBoard/supabase/migrations/20260320010000_initial_public_schema.sql)
 
 ### App-Side Telemetry Configuration
 
@@ -63,6 +60,8 @@ That route talks to the Vehicle Command Proxy and tells Tesla vehicles which hos
 Set these in local `.env.local` and in production on Vercel:
 
 ```dotenv
+TESLA_PUBLIC_KEY_PEM="-----BEGIN PUBLIC KEY-----\nreplace_with_your_tesla_public_key\n-----END PUBLIC KEY-----"
+TOKEN_ENCRYPTION_KEY_PREVIOUS=
 TESLA_VEHICLE_COMMAND_PROXY_URL=https://your-vehicle-proxy.example.com:4443
 TESLA_TELEMETRY_HOSTNAME=your-telemetry-host.example.com
 TESLA_TELEMETRY_PORT=443
@@ -71,6 +70,8 @@ CHARGING_SYNC_SECRET=your_charging_sync_secret
 
 Meaning:
 
+- `TESLA_PUBLIC_KEY_PEM`: public key served from `/.well-known/appspecific/com.tesla.3p.public-key.pem` for Tesla partner registration
+- `TOKEN_ENCRYPTION_KEY_PREVIOUS`: optional fallback Tesla token encryption key during staged key rotation
 - `TESLA_VEHICLE_COMMAND_PROXY_URL`: base URL of the Vehicle Command Proxy used by the app
 - `TESLA_TELEMETRY_HOSTNAME`: hostname written into Tesla fleet telemetry configuration
 - `TESLA_TELEMETRY_PORT`: port written into Tesla fleet telemetry configuration
@@ -93,8 +94,8 @@ Optional aliases may still exist in your environment, but the deployed ingester 
 
 Use:
 
-- [supabase/schema.sql](/Users/manojnaikade/Documents/TripBoard/supabase/schema.sql) for the current schema snapshot on a fresh project
-- `supabase/migrations/*` for incremental changes after that point
+- [supabase/migrations/20260320010000_initial_public_schema.sql](/Users/manojnaikade/Documents/TripBoard/supabase/migrations/20260320010000_initial_public_schema.sql) as the current clean bootstrap migration
+- [supabase/schema.sql](/Users/manojnaikade/Documents/TripBoard/supabase/schema.sql) as the checked-in public schema snapshot
 
 Required telemetry-related tables and functions:
 
@@ -167,6 +168,7 @@ The app route:
 - resolves the vehicle VIN when needed
 - calls the Vehicle Command Proxy
 - configures Tesla telemetry to stream to `TESLA_TELEMETRY_HOSTNAME:TESLA_TELEMETRY_PORT`
+- serves the Tesla public key from environment configuration at `/.well-known/appspecific/com.tesla.3p.public-key.pem`
 
 Fields currently configured include:
 

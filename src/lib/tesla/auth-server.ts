@@ -37,15 +37,20 @@ export type StoredTeslaSession = TeslaSessionInput & {
     sessionTokenHash: string;
     tokenExpiresAt: string | null;
     userId: string | null;
+    needsReencryption?: boolean;
 };
 
-function getEncryptionKey() {
-    const rawKey = process.env.TOKEN_ENCRYPTION_KEY;
+type EncryptionKey = {
+    fingerprint: string;
+    key: Buffer;
+};
 
-    if (!rawKey) {
-        throw new Error('TOKEN_ENCRYPTION_KEY is required for Tesla session storage');
-    }
+type DecryptedValue = {
+    value: string;
+    needsMigration: boolean;
+};
 
+function normalizeEncryptionKey(rawKey: string) {
     const decodedKey = Buffer.from(rawKey, 'base64');
     if (decodedKey.length === 32) {
         return decodedKey;
@@ -58,35 +63,137 @@ function getEncryptionKey() {
     return crypto.createHash('sha256').update(rawKey).digest();
 }
 
+function parseConfiguredEncryptionKeys() {
+    const activeRawKey = process.env.TOKEN_ENCRYPTION_KEY;
+
+    if (!activeRawKey) {
+        throw new Error('TOKEN_ENCRYPTION_KEY is required for Tesla session storage');
+    }
+
+    const configuredKeys = [
+        activeRawKey,
+        ...(process.env.TOKEN_ENCRYPTION_KEY_PREVIOUS || '')
+            .split(',')
+            .map((value) => value.trim())
+            .filter(Boolean),
+    ];
+
+    const keys: EncryptionKey[] = [];
+    const seen = new Set<string>();
+
+    for (const rawKey of configuredKeys) {
+        const key = normalizeEncryptionKey(rawKey);
+        const fingerprint = crypto.createHash('sha256').update(key).digest('hex').slice(0, 16);
+
+        if (seen.has(fingerprint)) {
+            continue;
+        }
+
+        seen.add(fingerprint);
+        keys.push({ fingerprint, key });
+    }
+
+    return {
+        active: keys[0],
+        all: keys,
+    };
+}
+
 function encryptValue(value: string) {
+    const { active } = parseConfiguredEncryptionKeys();
     const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', getEncryptionKey(), iv);
+    const cipher = crypto.createCipheriv('aes-256-gcm', active.key, iv);
     const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
     const authTag = cipher.getAuthTag();
 
-    return [iv, authTag, encrypted].map((part) => part.toString('base64url')).join('.');
+    return [active.fingerprint, iv, authTag, encrypted]
+        .map((part) => part.toString('base64url'))
+        .join('.');
 }
 
-function decryptValue(payload: string) {
-    const [iv, authTag, encrypted] = payload.split('.');
-
-    if (!iv || !authTag || !encrypted) {
-        throw new Error('Invalid encrypted payload');
-    }
-
+function decryptWithKey(params: {
+    encrypted: string;
+    iv: string;
+    authTag: string;
+    key: Buffer;
+}) {
     const decipher = crypto.createDecipheriv(
         'aes-256-gcm',
-        getEncryptionKey(),
-        Buffer.from(iv, 'base64url')
+        params.key,
+        Buffer.from(params.iv, 'base64url')
     );
-    decipher.setAuthTag(Buffer.from(authTag, 'base64url'));
+    decipher.setAuthTag(Buffer.from(params.authTag, 'base64url'));
 
     const decrypted = Buffer.concat([
-        decipher.update(Buffer.from(encrypted, 'base64url')),
+        decipher.update(Buffer.from(params.encrypted, 'base64url')),
         decipher.final(),
     ]);
 
     return decrypted.toString('utf8');
+}
+
+function decryptValue(payload: string): DecryptedValue {
+    const { active, all } = parseConfiguredEncryptionKeys();
+    const parts = payload.split('.');
+
+    if (parts.length === 4) {
+        const [fingerprint, iv, authTag, encrypted] = parts;
+
+        if (!fingerprint || !iv || !authTag || !encrypted) {
+            throw new Error('Invalid encrypted payload');
+        }
+
+        const preferredOrder = [
+            ...all.filter((candidate) => candidate.fingerprint === fingerprint),
+            ...all.filter((candidate) => candidate.fingerprint !== fingerprint),
+        ];
+
+        for (const candidate of preferredOrder) {
+            try {
+                return {
+                    value: decryptWithKey({
+                        encrypted,
+                        iv,
+                        authTag,
+                        key: candidate.key,
+                    }),
+                    needsMigration: candidate.fingerprint !== active.fingerprint,
+                };
+            } catch {
+                // Try the next key candidate.
+            }
+        }
+
+        throw new Error('Unable to decrypt payload with configured encryption keys');
+    }
+
+    if (parts.length === 3) {
+        const [iv, authTag, encrypted] = parts;
+
+        if (!iv || !authTag || !encrypted) {
+            throw new Error('Invalid encrypted payload');
+        }
+
+        for (const candidate of all) {
+            try {
+                return {
+                    value: decryptWithKey({
+                        encrypted,
+                        iv,
+                        authTag,
+                        key: candidate.key,
+                    }),
+                    needsMigration: true,
+                };
+            } catch {
+                // Try the next key candidate.
+            }
+        }
+
+        throw new Error('Unable to decrypt payload with configured encryption keys');
+    }
+
+    throw new Error('Invalid encrypted payload');
 }
 
 function hashSessionToken(sessionToken: string) {
@@ -118,16 +225,20 @@ function shouldTouchTeslaSession(lastUsedAt: string | null) {
 }
 
 function toStoredTeslaSession(row: TeslaSessionRow): StoredTeslaSession {
+    const accessToken = decryptValue(row.access_token_encrypted);
+    const refreshToken = row.refresh_token_encrypted
+        ? decryptValue(row.refresh_token_encrypted)
+        : null;
+
     return {
         id: row.id,
         userId: row.user_id,
         sessionTokenHash: row.session_token_hash,
-        accessToken: decryptValue(row.access_token_encrypted),
-        refreshToken: row.refresh_token_encrypted
-            ? decryptValue(row.refresh_token_encrypted)
-            : undefined,
+        accessToken: accessToken.value,
+        refreshToken: refreshToken?.value,
         region: normalizeTeslaRegion(row.region) ?? 'eu',
         tokenExpiresAt: row.token_expires_at,
+        needsReencryption: accessToken.needsMigration || Boolean(refreshToken?.needsMigration),
     };
 }
 
@@ -280,16 +391,19 @@ async function getTeslaSessionForUserId(userId: string): Promise<TeslaSession | 
     }
 
     try {
+        const accessToken = decryptValue(row.access_token_encrypted);
+        const refreshToken = row.refresh_token_encrypted
+            ? decryptValue(row.refresh_token_encrypted)
+            : null;
         const session: TeslaSession = {
-            accessToken: decryptValue(row.access_token_encrypted),
-            refreshToken: row.refresh_token_encrypted
-                ? decryptValue(row.refresh_token_encrypted)
-                : undefined,
+            accessToken: accessToken.value,
+            refreshToken: refreshToken?.value,
             region: normalizeTeslaRegion(row.region) ?? 'eu',
             tokenExpiresAt: row.token_expires_at,
         };
+        const needsReencryption = accessToken.needsMigration || Boolean(refreshToken?.needsMigration);
 
-        if (!session.tokenExpiresAt) {
+        if (!session.tokenExpiresAt || needsReencryption) {
             session.tokenExpiresAt = getTokenExpiry(session.accessToken);
             await persistTeslaSessionRecord({
                 session,
@@ -455,7 +569,7 @@ export async function ensureFreshStoredTeslaSession(
         return null;
     }
 
-    if (!session.tokenExpiresAt) {
+    if (!session.tokenExpiresAt || session.needsReencryption) {
         const tokenExpiresAt = getTokenExpiry(session.accessToken);
 
         await persistTeslaSessionRecord({
@@ -471,6 +585,7 @@ export async function ensureFreshStoredTeslaSession(
         return {
             ...session,
             tokenExpiresAt,
+            needsReencryption: false,
         };
     }
 
@@ -504,5 +619,6 @@ export async function ensureFreshStoredTeslaSession(
         ...session,
         ...refreshedSession,
         tokenExpiresAt,
+        needsReencryption: false,
     };
 }

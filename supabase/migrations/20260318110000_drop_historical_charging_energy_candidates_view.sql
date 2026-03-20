@@ -1,1 +1,0 @@
-DROP VIEW IF EXISTS public.historical_charging_energy_candidates_before_20260308;

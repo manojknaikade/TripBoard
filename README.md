@@ -1,290 +1,274 @@
-# TripBoard ⚡️
+# TripBoard
 
-A modern, real-time dashboard for tracking and analyzing Tesla vehicle data. TripBoard provides detailed insights into your trips, charging efficiency, and vehicle status with a beautiful, dark-themed UI.
+TripBoard is a self-hosted Tesla dashboard built around Supabase and the Tesla Fleet API. From the codebase, the app’s core job is to authenticate users, link one Tesla account to a TripBoard account, ingest Tesla telemetry, and turn that telemetry into trip history, charging sessions, route maps, analytics, notifications, and maintenance tracking.
 
-![TripBoard Dashboard](https://github.com/user-attachments/assets/placeholder-image)
+## What The App Does
 
-## 🚀 Features
+- Shows live Tesla vehicle state and fleet summaries
+- Tracks trips with route waypoints, distance, speed, efficiency, and temperature stats
+- Tracks charging sessions with charger classification, costs, delivered energy, and loss metrics
+- Provides analytics pages for driving, charging, and maintenance trends
+- Stores Tesla OAuth tokens server-side in encrypted Supabase tables
+- Supports Tesla Fleet Telemetry configuration plus an optional charging-sync worker for Supercharger billing enrichment
+- Includes maintenance records and tyre-set tracking alongside trip and charging history
 
-- **Real-Time Dashboard**
-  - Live vehicle status (Online/Asleep)
-  - Current battery level and estimated range
-  - Location tracking with interactive maps
-  - Quick commands (Lock/Unlock, Climate, etc.)
+## Tech Stack
 
-- **Trip History & Maps**
-  - Detailed logs of every trip with average speed
-  - **Interactive Maps:** View exact recorded trip routes with start/end markers
-  - **Route Thumbnails:** Trip list mini-maps render the recorded route instead of a straight-line placeholder
-  - **Geocoding:** Automatic address resolution for start/end locations
-  - **Map Style Preference:** Switch between street and dark basemaps
-  - **Trip visibility threshold:** Per-user minimum trip distance can be tuned in Settings and respects the current unit system
-  - **Metrics:** Distance, duration, energy used, efficiency (Wh/km or Wh/mi), average/max speed, and **outside temperature** (min/max/avg)
-  - **Trip detail links:** Start and end location cards open directly in Google Maps
-  - **Filtering:** Filter trips by Week, Month, or Custom Date Range
-  - **Export:** Download trip data as CSV or JSON
+- Next.js 16 App Router
+- React 19
+- TypeScript
+- Tailwind CSS
+- Supabase Auth, PostgREST, and PostgreSQL
+- `@supabase/ssr` and `@supabase/supabase-js`
+- TanStack React Query
+- Zustand
+- Leaflet and React Leaflet
+- Recharts
+- date-fns
+- Lucide React
+- Tesla Fleet API
+- OpenStreetMap / Carto tiles and Nominatim geocoding
 
-- **Advanced Analytics**
-  - Daily Distance & Energy Consumption bar charts
-  - **All Time analytics support** with daily bars preserved through the 3-month range and adaptive weekly/monthly bucketing for longer driving and charging charts
-  - Efficiency by Time of Day (2-hour buckets, bar chart)
-  - Aggregated stats with **trend percentages** vs. previous period
-  - **Top Trips Leaderboard:** Longest, shortest, and most efficient trips
-  - **Temperature Impact:** Chart correlating outside temperature with driving efficiency
-  - **Vampire Drain:** Estimated energy loss while parked (trip-interstitial method)
-  - Charging Sources breakdown (pie chart)
-  - **Cost by Charging Source:** Horizontal bar chart showing costs per charger type
-  - **Charging Loss Analytics:** Separate battery energy, charger-delivered energy, measured charging loss, and estimated wasted charging cost
-  - **Maintenance analytics tab:** Service volume, spend, average service cost, tyre work, and tracked tyre-set mileage
+## Prerequisites
 
-- **Maintenance & Tyre Tracking**
-  - Dedicated maintenance dashboard for tyre sets, seasonal swaps, rotations, and common Tesla service items
-  - Track tyre sets separately from maintenance records, including mounted vs. stored sets
-  - Record explicit service cost, start odometer, and end odometer for maintenance entries
-  - Inline creation of a new tyre set while logging a tyre season change or rotation
-  - Maintenance UI follows the app unit setting while persisting odometer values in kilometers
-  - Maintenance analytics uses `This Year`, `Last Year`, and `All Time` filters for service reporting
+- Node.js 20+ and npm
+- Docker Desktop or another local Docker runtime
+- Supabase CLI 2.x
+- A Supabase project for hosted usage, or the local Supabase stack for development
+- A Tesla developer application if you want Tesla OAuth, telemetry, or vehicle integration features
+- `openssl` if you want to generate `TOKEN_ENCRYPTION_KEY` locally
 
-- **User Preferences & Security**
-  - App sign-in and sign-up use **Supabase native authentication** with either email/password or email magic links
-  - Tesla OAuth and direct Tesla token entry are now **account-linking** steps after the user signs in
-  - Tesla access and refresh tokens are stored **server-side in Supabase**, encrypted with `TOKEN_ENCRYPTION_KEY`, and linked to the active Supabase user
-  - One linked Tesla account can expose **multiple vehicles** under the same TripBoard user session
-  - Forgot-password and in-app password rotation now use Supabase Auth recovery/update flows
-  - Toggle between **Metric** (km, kWh) and **Imperial** (mi, kWh) units
-  - Set home address with interactive map picker
-  - Settings and home location are persisted **per Supabase user** in `user_settings`
-  - Selectable map style across dashboard, trip, charging, and settings maps
-  - Customizable polling intervals
+## Environment Variables
 
-## 🛠 Tech Stack
+Create `.env.local` from `.env.example` and fill in the values you need.
 
-- **Framework:** [Next.js 16](https://nextjs.org/) (App Router)
-- **Language:** TypeScript
-- **Styling:** [Tailwind CSS](https://tailwindcss.com/)
-- **Database & Auth:** [Supabase](https://supabase.com/)
-- **State Management:** [Zustand](https://github.com/pmndrs/zustand)
-- **Maps:** [Leaflet](https://leafletjs.com/) with [React Leaflet](https://react-leaflet.js.org/) & OpenStreetMap
-- **Charts:** [Recharts](https://recharts.org/)
-- **Icons:** [Lucide React](https://lucide.dev/)
-- **API:** Tesla Fleet API Integration
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL` | Yes | Supabase project URL used by the browser and server helpers |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Supabase anon key used by the browser and SSR clients |
+| `SUPABASE_SERVICE_ROLE_KEY` | Yes | Server-side privileged Supabase access for Tesla session storage and internal routes |
+| `TESLA_CLIENT_ID` | Yes | Tesla OAuth client ID used for sign-in and partner token flows |
+| `TESLA_CLIENT_SECRET` | Yes | Tesla OAuth client secret |
+| `NEXT_PUBLIC_TESLA_REDIRECT_URI` | Yes | Tesla OAuth callback URL, typically `http://localhost:3000/api/auth/tesla/callback` in local dev |
+| `TESLA_PUBLIC_KEY_PEM` | Optional | Public key served from `/.well-known/appspecific/com.tesla.3p.public-key.pem` for Tesla partner registration; required if you want to register your own Tesla app/domain |
+| `TOKEN_ENCRYPTION_KEY` | Yes | 32-byte key used to encrypt Tesla access and refresh tokens before storing them in Supabase |
+| `TOKEN_ENCRYPTION_KEY_PREVIOUS` | Optional | Comma-separated old encryption keys accepted for fallback decryption during token-key rotation; successfully loaded Tesla sessions are re-encrypted with `TOKEN_ENCRYPTION_KEY` |
+| `TESLA_VEHICLE_COMMAND_PROXY_URL` | Optional | Required only if you want the app to push Tesla Fleet Telemetry configuration through the Vehicle Command Proxy |
+| `TESLA_TELEMETRY_HOSTNAME` | Optional | Required with telemetry configuration; hostname TripBoard tells Tesla vehicles to stream telemetry to |
+| `TESLA_TELEMETRY_PORT` | Optional | Required with telemetry configuration; port for the telemetry ingester |
+| `CHARGING_SYNC_SECRET` | Optional | Secret accepted by `/api/internal/charging/tesla-sync` and the standalone charging-sync worker |
+| `CRON_SECRET` | Optional | Alternate secret name accepted by the same internal charging-sync route |
+| `SUPABASE_URL` | Optional | Worker-only alias used by `scripts/process-charging-sync.js` if you do not want to reuse `NEXT_PUBLIC_SUPABASE_URL` |
+| `SUPABASE_KEY` | Optional | Worker-only alias used by `scripts/process-charging-sync.js` if you do not want to reuse `SUPABASE_SERVICE_ROLE_KEY` |
+| `CHARGING_SYNC_LIMIT` | Optional | Max jobs claimed per worker run, default `10` |
 
-## 🏁 Getting Started
+Generate a token encryption key with:
 
-### Prerequisites
+```bash
+openssl rand -base64 32
+```
 
-- Node.js 18+ and npm
-- A [Supabase](https://supabase.com/) project
-- A Tesla Account (for Fleet API access)
+## Local Setup
 
-### Installation
+1. Clone the repository.
 
-1. **Clone the repository**
+```bash
+git clone <your-private-repo-url> tripboard
+cd tripboard
+```
 
-   ```bash
-   git clone https://github.com/yourusername/tripboard.git
-   cd tripboard
-   ```
+2. Install dependencies.
 
-2. **Install dependencies**
+```bash
+npm install
+```
 
-   ```bash
-   npm install
-   ```
+3. Copy the environment template.
 
-3. **Environment Setup**
-   Create a `.env.local` file in the root directory:
+```bash
+cp .env.example .env.local
+```
 
-   ```env
-   # Supabase
-   NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
-   NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
-   SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
-   
-   # Tesla Fleet API
-   TESLA_CLIENT_ID=your_tesla_client_id
-   TESLA_CLIENT_SECRET=your_tesla_client_secret
-   NEXT_PUBLIC_TESLA_REDIRECT_URI=http://localhost:3000/api/auth/tesla/callback
-   TESLA_VEHICLE_COMMAND_PROXY_URL=https://your-vehicle-proxy.example.com:4443
-   TESLA_TELEMETRY_HOSTNAME=your-telemetry-host.example.com
-   TESLA_TELEMETRY_PORT=443
-   CHARGING_SYNC_SECRET=your_charging_sync_secret
-   
-   # Encryption (used for Tesla token/session storage)
-   # Generate with: openssl rand -base64 32
-   TOKEN_ENCRYPTION_KEY=your_random_32_byte_string
-   ```
+4. Start the local Supabase stack.
 
-   `TESLA_VEHICLE_COMMAND_PROXY_URL` is the Vehicle Command Proxy the app talks to for fleet telemetry config operations. `TESLA_TELEMETRY_HOSTNAME` and `TESLA_TELEMETRY_PORT` are the host/port Tesla vehicles should stream telemetry to. `CHARGING_SYNC_SECRET` protects the internal route that processes completed Supercharger sessions and writes Tesla billing data into `charging_sessions`.
+```bash
+supabase start
+```
 
-4. **Database Setup**
-   Use `supabase/schema.sql` as the current public-schema snapshot for a fresh Supabase project.
-   Use `supabase/migrations/` for incremental schema changes going forward. Do not apply the full snapshot and then replay the full migration history on top of it.
-   Whenever a migration is added or applied manually, refresh `supabase/schema.sql` from the live database so the checked-in snapshot stays accurate.
+5. Print the local Supabase credentials and copy the values you need into `.env.local`.
 
-   If a migration fails with `relation ... does not exist`, the database is usually missing an earlier dependency or the expected base schema has not been applied yet.
+```bash
+supabase status -o env
+```
 
-   **Key migrations:**
-   - `supabase/migrations/20260312000000_create_tesla_sessions.sql` — Adds encrypted server-side Tesla session storage
-   - `supabase/migrations/20260312010000_harden_public_table_rls.sql` — Enables RLS on exposed public tables and adds tighter policies
-   - `supabase/migrations/20260312013000_harden_functions_and_policies.sql` — Hardens exposed SQL functions and related policies after the base schema exists
-   - `supabase/migrations/20260311000000_trip_temperature_trigger.sql` — Adds temperature columns to `trips` and updates the `process_telemetry` trigger
-   - `supabase/migrations/20260311000001_backfill_trip_temperatures.sql` — Backfills temperature data for all existing trips from raw telemetry
-   - `supabase/migrations/20260313030000_add_map_style_setting.sql` — Adds a persisted per-user map style preference
-   - `supabase/migrations/20260313040000_create_maintenance_records.sql` — Creates the base maintenance log with seeded tyre season history
-   - `supabase/migrations/20260313050000_add_tyre_sets.sql` — Adds tyre set tracking and links seasonal records to specific sets
-   - `supabase/migrations/20260313060000_add_record_odometer_ranges.sql` — Adds explicit start/end odometer fields for seasonal records
-   - `supabase/migrations/20260313070000_add_maintenance_cost.sql` — Adds per-record service cost and currency fields
-   - `supabase/migrations/20260313080000_add_trip_route_waypoints.sql` — Captures exact route waypoints for future trips and backfills historical trip routes from `telemetry_raw`
-   - `supabase/migrations/20260315021000_add_tesla_charging_sync_queue.sql` — Adds the Tesla Supercharger enrichment queue and extends `tesla_sessions` with `user_id`
-   - `supabase/migrations/20260315190000_add_maintenance_summary_function.sql` — Adds an optional SQL aggregate used as a performance optimization for maintenance summary endpoints
-   - `supabase/migrations/20260315220000_add_analytics_rollups_and_indexes.sql` — Adds charging analytics SQL rollups and partial time-range indexes used by the dashboard analytics routes
-   - `supabase/migrations/20260315233000_add_list_summary_functions.sql` — Adds SQL rollups for trip-list and charging-list summary cards so those headers do not require scanning filtered rows in Next.js route handlers
-   - `supabase/migrations/20260316014830_add_vehicle_status_charge_limit_soc.sql` — Stores `ChargeLimitSoc` from Fleet Telemetry in `vehicle_status` so telemetry mode can show the real dashboard charge limit without Tesla API polling
-   - `supabase/migrations/20260316021448_add_vehicle_status_state.sql` — Stores a canonical telemetry-derived `state` in `vehicle_status` so dashboard status does not depend on route-side derivation alone
-   - `supabase/migrations/20260316022700_backfill_trip_speed_metrics.sql` — Recomputes historical and future trip `max_speed_mph` / `avg_speed_mph` from Fleet Telemetry `VehicleSpeed`
-   - `supabase/migrations/20260318120000_bind_tesla_sessions_to_users.sql` — Deduplicates legacy Tesla sessions and enforces one encrypted Tesla token set per Supabase user
-   - `supabase/migrations/20260318130000_multi_tenant_auth_hardening.sql` — Moves settings to `user_settings`, adds ownership to maintenance/tyre data, and hardens summary SQL/functions around `auth.uid()`
-   - `supabase/migrations/20260318140000_telemetry_home_settings_per_user.sql` — Updates `process_telemetry()` so home-charging detection prefers the linked user’s `user_settings` home coordinates before falling back to the global bootstrap row
-   - `supabase/migrations/20260318150000_prune_legacy_tables_and_tesla_session_fallbacks.sql` — Removes obsolete singleton/legacy telemetry tables, deletes anonymous Tesla sessions, and requires owned Tesla sessions only
-   - `supabase/migrations/20260318160000_trips_vehicle_uuid_phase1.sql` — Adds nullable `trips.vehicle_uuid`, backfills historical trips to local `vehicles.id`, and switches trip reads/new writes to prefer the UUID path while keeping legacy `vehicle_id` text compatibility during validation
-   - `supabase/migrations/20260318170000_trips_vehicle_uuid_cutover.sql` — Finalizes the trip vehicle migration by renaming the UUID column back to canonical `trips.vehicle_id`, dropping the legacy text field, and simplifying trip RLS/functions to UUID-only ownership
-   - `supabase/migrations/20260319224500_fix_telemetry_charge_energy_added_source.sql` — Updates `process_telemetry()` so charging `energy_added_kwh` prefers Tesla’s battery-side `DCChargingEnergyIn` and only falls back to `ACChargingEnergyIn`, instead of summing both fields
-   - `supabase/migrations/20260320001000_add_minimum_trip_distance_setting.sql` — Adds a per-user trip visibility threshold in `user_settings` and makes trip-list summary SQL respect that minimum distance
+6. Apply the local database schema from the consolidated migration.
 
-5. **Run the Development Server**
+```bash
+supabase db reset --local
+```
 
-   ```bash
-   npm run dev
-   ```
+7. Start the Next.js app.
 
-   Open [http://localhost:3000](http://localhost:3000) in your browser.
+```bash
+npm run dev
+```
 
-## 📂 Project Structure
+8. Open `http://localhost:3000`.
+
+## Supabase Setup
+
+The repo now uses a single clean baseline migration for first-time setup:
+
+- `supabase/migrations/20260320010000_initial_public_schema.sql`
+
+That file was consolidated from the previous iterative migration history and represents the current public schema, including tables, constraints, indexes, functions, triggers, grants, and RLS policies required by the app.
+
+For local development:
+
+```bash
+supabase start
+supabase db reset --local
+```
+
+`supabase start` boots the local stack. `supabase db reset --local` recreates the local database and initializes it from the consolidated migration file above. An empty `supabase/seed.sql` is included so local resets work without extra seed data.
+
+`supabase/schema.sql` is now a checked-in snapshot of the current public schema for reference, review, and diffing. It is not the primary bootstrap source for local setup. The executable source of truth for first-time database setup is the baseline migration in `supabase/migrations/`.
+
+`supabase/seed.sql` is only the local post-migration seed hook used by `supabase db reset --local`. It is currently empty on purpose so resets succeed without loading demo data.
+
+If you change the database schema later:
+
+1. Add a new tracked migration in `supabase/migrations/`.
+2. Apply it with the Supabase CLI.
+3. Refresh `supabase/schema.sql` from the resulting live public schema.
+
+## Tesla And Telemetry Notes
+
+- Supabase email/password and magic-link auth are used for TripBoard sign-in
+- Tesla integration is a second step after app authentication
+- Tesla tokens are encrypted before being stored in `public.tesla_sessions`
+- Trip and charging detection are handled in PostgreSQL via `public.process_telemetry()`
+- Telemetry configuration is pushed from the Next.js route at `src/app/api/tesla/telemetry-config/route.ts`
+- The Tesla partner public key is not stored in the repo anymore; the well-known PEM endpoint now serves `TESLA_PUBLIC_KEY_PEM` from environment configuration
+- Reverse geocoding uses Nominatim through `src/app/api/geocode/route.ts`; no Mapbox key is required by the current codebase
+- `scripts/process-charging-sync.js` is an optional worker that enriches completed Supercharger sessions with Tesla charging-history data
+
+## Project Structure
 
 ```text
 src/
-├── app/
-│   ├── api/              # API Routes
-│   │   ├── analytics/    #   Analytics summary with trend %
-│   │   ├── maintenance/  #   Maintenance records and tyre sets
-│   │   ├── settings/     #   User settings & home location
-│   │   ├── trips/        #   Trip data & CSV/JSON export
-│   │   └── tesla/        #   Tesla Fleet API integration
-│   ├── auth/             # Authentication pages
-│   ├── dashboard/        # Dashboard, Trips, Charging, Analytics, Maintenance, Settings
-│   └── layout.tsx        # Root layout
-├── components/           # Reusable UI components
-│   ├── TripDetailMap.tsx     # Interactive full-size map
-│   ├── TripMiniMap.tsx       # Thumbnail map for list views
-│   └── settings/             # Settings-specific components
-├── lib/
-│   ├── supabase/         # Supabase clients (server, admin)
-│   ├── maintenance.ts    # Maintenance types and Tesla maintenance guide definitions
-│   └── utils/            # Trip detection, polling, helpers
-├── stores/               # Zustand state stores
-└── types/                # TypeScript type definitions
+  app/            Next.js App Router pages, API routes, auth flows, and the Tesla well-known PEM route
+  components/     UI for dashboard, trips, charging, maintenance, settings, and auth
+  lib/            Supabase helpers, Tesla integration, analytics, charging, trips, notifications, and settings logic
+  stores/         Zustand client state
 scripts/
-├── process-charging-sync.js # Standalone worker that enriches completed Supercharger sessions with Tesla billing data
+  process-charging-sync.js     Optional Tesla charging-history worker
+  reencrypt-tesla-sessions.js  One-off Tesla token re-encryption migration script
+  setup-telemetry.sh           Telemetry setup helper
 supabase/
-├── schema.sql            # Canonical bootstrap schema for fresh projects
-└── migrations/           # Incremental database changes
+  config.toml                  Local Supabase CLI configuration
+  migrations/                  Executable schema history; includes the baseline bootstrap migration
+  schema.sql                   Checked-in public-schema snapshot for reference and diffing
+  seed.sql                     Optional local seed hook run by `supabase db reset --local`
 ```
 
-## ⚙️ Data Pipeline
+## Verification
 
-TripBoard uses a **database-level trigger** (`process_telemetry`) on the `telemetry_raw` table to automatically:
+Default project verification for app changes:
 
-- Update `vehicle_status` with the latest telemetry values and a canonical derived state (`parked`, `charging`, or `driving`)
-- Detect trip start/end based on gear changes (D/R → start, P → end)
-- Record `trip_waypoints` during active trips so trip detail maps and list thumbnails can render the exact route taken
-- Recompute trip max/average speed from `VehicleSpeed` telemetry when trips complete, with a historical backfill for older trips
-- Track outside temperature (min/max/avg) during active trips
-- Detect and record charging sessions with charger type classification
-- Reconcile stale open charging sessions with `reconcile_stale_charging_sessions()`
-- Queue completed Supercharger sessions for one-time Tesla billing enrichment
+```bash
+npm run lint
+npm run build
+```
 
-The Go telemetry server on the VPS ingests raw Tesla Fleet Telemetry and inserts into `telemetry_raw`. All trip/charging logic runs as PL/pgSQL triggers in Supabase.
-Home-charging classification in `process_telemetry()` resolves home coordinates from the linked vehicle owner’s `user_settings` row, with Tesla’s `LocatedAtHome` signal still acting as an input when available.
-Trip ownership now resolves through `trips.vehicle_id -> vehicles.id` as a strict UUID foreign-key path. The temporary mixed text/UUID compatibility layer has been removed after the historical backfill was validated.
-Telemetry-backed dashboard views also depend on the Fleet Telemetry config including `ChargeLimitSoc`; after deploying the migration, re-send telemetry field definitions from Settings so future telemetry updates populate `vehicle_status.charge_limit_soc`.
-Completed Supercharger sessions are queued in Supabase and can be processed either by calling `GET /api/internal/charging/tesla-sync` from a server-side cron with `Authorization: Bearer $CHARGING_SYNC_SECRET` (or `CRON_SECRET`), or by running `scripts/process-charging-sync.js` as a standalone worker on the VPS.
-If Tesla charging history is not available immediately when a Supercharger session closes, the worker now leaves that session queued for retry with the existing 15-minute stuck-job backoff, instead of permanently marking it unavailable on the first miss. Sessions that still do not resolve after 24 hours are marked unavailable.
-Telemetry charging energy ingestion now prefers Tesla’s battery-side `DCChargingEnergyIn` and only falls back to `ACChargingEnergyIn`; the app no longer sums both values for a single session. Charger-type classification remains based on charger presence/type, power, and home-location checks, so AC/DC/home differentiation is unchanged.
-Historical trip routes can be backfilled from `telemetry_raw` into `trip_waypoints` by applying `supabase/migrations/20260313080000_add_trip_route_waypoints.sql`.
-The legacy Node telemetry/charging detector has been removed from the repo and is not part of the production path.
-If you still have an older Node detector running on the VPS, stop it to avoid duplicate `charging_sessions` writes.
-The production `tesla-ingester.service` now loads its Supabase credentials from `/home/ubuntu/.env` via `EnvironmentFile=` instead of hardcoding secrets in the unit file. The Go binary expects `SUPABASE_KEY`, and that value should be the Supabase service role key.
-The current production charging-billing enrichment runs as a separate `systemd` timer on the VPS using `scripts/process-charging-sync.js`, so completed Supercharger sessions are typically enriched within 30 seconds of being closed in Supabase.
+## Deploying On Vercel
 
-## Performance Notes
+TripBoard works well as a Vercel-hosted Next.js app, but all maintainer-specific credentials should live in Vercel environment variables, not in the public repo.
 
-- The app now uses a short-lived in-memory client fetch cache for selected dashboard pages and analytics views. It is intentionally a UX optimization, not a persistence layer.
-- The Supabase proxy now forwards the authenticated user id downstream, and server routes/pages reuse that request-scoped auth result instead of asking Supabase Auth again on the same request.
-- The dashboard header now lives in the shared `/dashboard` layout, so route changes between dashboard sections keep the navigation shell mounted instead of remounting the header, vehicle selector, and notification polling on every page transition.
-- List pages such as trips, charging, and maintenance hydrate from a recent cached response when available, then refresh in the background so the first screen feels immediate without requiring a hard reload.
-- Trips, charging, and maintenance now also prefetch their default landing payloads on the server and seed the same short-lived client cache, which removes the blank first paint on route entry and avoids an immediate duplicate mount fetch while the cache is still fresh.
-- Trips, charging, maintenance, notifications, and analytics now authenticate local data requests with the signed-in app user instead of forcing a Tesla session lookup for every request, which removes extra `tesla_sessions` reads/writes from those hot paths.
-- Trip list cards now default to stored route previews, then selectively backfill an exact thumbnail route only for visible cards that still lack preview points. That restores richer mini-maps without returning to one eager exact-route request per card during list boot.
-- Notification count polling now applies in-flight backpressure, uses a shared client-side unread-count cache across header remounts, and refreshes on a calmer 60-second cadence so slow `/api/notifications?count_only=true` requests do not stack or restart on every local dev remount.
-- Notification dropdown data is now cached briefly on the client when reopened, and the notifications API now exposes `Server-Timing`, `X-TripBoard-Notifications-Mode`, and `X-TripBoard-Payload-Bytes` headers for the same kind of route-level inspection as analytics.
-- Charging details now distinguish vehicle-reported energy added from Tesla-metered delivered energy, clamp impossible `added > delivered` cases in shared helpers, and show explicit charging-loss percentage plus equivalent loss cost on Supercharger session details.
-- Reverse geocoding now uses a shared client-side cache across dashboard, trip detail, charging history/detail, and the settings location picker, so repeated coordinate lookups do not keep hitting `/api/geocode` during the same session.
-- Analytics charts now keep daily bars through the 3-month range, then switch to coarser weekly/monthly bucketing for longer ranges so year/all-time analytics load faster and ship less chart data.
-- Analytics routes now stream a dedicated loading shell while the server-fetched initial payload resolves, so navigation into driving, charging, and maintenance analytics feels immediate even before the first data response arrives.
-- Analytics API responses now expose `Server-Timing` plus lightweight `X-TripBoard-Analytics-*` and `X-TripBoard-Payload-Bytes` headers, so route timing, bucket counts, and payload size can be inspected directly in the browser network panel during performance audits.
-- When profiling perceived slowness, prefer comparing against a built deployment or `next start`; local `next dev` with Turbopack can become materially slower under route churn and concurrent authenticated fetches than the deployed app.
-- Trips, charging, and maintenance service history now use windowed rendering so DOM cost stays bounded even after many pages have been loaded.
-- Trips and charging prefetch the next page in the background before the user reaches the end of the current page, so scrolling feels continuous instead of waiting at the bottom.
-- Maintenance uses a dedicated bootstrap endpoint (`/api/maintenance/bootstrap`) to load tyre sets, the first history page, summary cards, and current odometer in a single request.
-- Dashboard and settings now prefetch their initial settings and Tesla vehicle summaries on the server, so those routes no longer depend on a client-only boot fetch before they can render useful content.
-- Analytics pages also prefetch their default timeframe data on the server, so opening analytics does not start from a blank client shell and a full-screen loader.
-- Trip and charging list summary cards prefer SQL rollups (`get_trip_list_summary()` and `get_charging_list_summary()`) and fall back to query-based aggregation if those functions are not deployed yet.
-- The settings location search now goes through the app’s cached geocode route instead of calling Nominatim directly from the browser.
-- Live vehicle fetches now use a shared short-TTL request layer, so concurrent dashboard/map consumers can reuse the same in-flight response instead of polling independently.
+Set these in Vercel Project Settings -> Environment Variables:
 
-## Repo Hygiene
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `TESLA_CLIENT_ID`
+- `TESLA_CLIENT_SECRET`
+- `NEXT_PUBLIC_TESLA_REDIRECT_URI`
+- `TESLA_PUBLIC_KEY_PEM`
+- `TOKEN_ENCRYPTION_KEY`
+- any optional telemetry or charging-sync secrets you use in production
 
-- Update `README.md` whenever product behavior, setup, migrations, or operational expectations change.
-- Refresh `supabase/schema.sql` after database migrations are added or applied so the repo snapshot matches the live public schema.
-- Do not commit `supabase/.temp/`; it is Supabase CLI working state only.
+For `TESLA_PUBLIC_KEY_PEM`, paste the full PEM value directly. Vercel supports multiline values, and the app also accepts escaped `\n` sequences.
 
-## Maintenance Tracking Notes
+Example:
 
-- Maintenance records store odometer values in kilometers in the database. The UI converts to and from the user’s unit preference at the page boundary.
-- Tyre mileage is derived from explicit start and end odometer ranges for each seasonal stint. It is not calculated by summing raw odometer readings.
-- Tyre season and tyre rotation records can link to an existing tyre set or create a new set inline during record creation.
-- Mounted/stored status is derived from seasonal history, while season itself remains the consistent visual accent for tyre sets.
-- The maintenance dashboard now uses modal entry points for the maintenance form and the Tesla maintenance guide so the main page stays focused on KPI, tyre sets, and service history.
-- Maintenance analytics uses the same maintenance data model, including open tyre stints that fall back to the current vehicle odometer when an explicit end odometer is not yet logged.
-- `get_maintenance_summary()` is an optimization, not a hard dependency. If the SQL function migration has not been applied yet, the maintenance APIs fall back to query-based summary calculation.
+```env
+TESLA_PUBLIC_KEY_PEM="-----BEGIN PUBLIC KEY-----\nreplace_with_your_tesla_public_key\n-----END PUBLIC KEY-----"
+```
 
-## Security Notes
+After setting variables, redeploy the project so the well-known Tesla PEM endpoint and Tesla server routes use the updated configuration.
 
-- Tesla access and refresh tokens are never stored in `localStorage`.
-- The browser session is managed by Supabase Auth. Tesla credentials stay server-side and are never written back to browser storage.
-- Supabase password sign-in, reset-password email recovery, and in-app password change are supported alongside magic links.
-- Tesla credentials live in the `tesla_sessions` table in Supabase, are encrypted at rest using `TOKEN_ENCRYPTION_KEY`, and are keyed by the authenticated Supabase user.
-- Legacy anonymous Tesla sessions are no longer supported; every stored Tesla token must belong to an authenticated Supabase user.
-- Rotating `TOKEN_ENCRYPTION_KEY` invalidates existing Tesla sessions until users reconnect.
-- Tesla OAuth is no longer the TripBoard login. Users sign in first, then link Tesla, and that linked account can power multiple vehicles in the same dashboard.
-- Re-linking the same Tesla account under a new Supabase user now reclaims the matching local `vehicles` rows and transfers Tesla-owned maintenance history to the newly authenticated user, so historical trips/charging data remain visible after an auth-account migration.
-- User-facing trips, charging, maintenance, notifications, and settings routes now rely on authenticated Supabase access or explicit `auth.uid()` filtering instead of a global Tesla-cookie-only gate.
-- Public tables exposed through PostgREST should have RLS enabled. This repo hardens active public tables such as `telemetry_raw`, `notifications`, `vehicle_status`, and user-owned records through the tracked Supabase migrations.
-- Routes that use the Supabase service role key are additionally gated server-side in Next.js, because service-role access bypasses RLS by design.
-- The production telemetry ingester should load secrets from `/home/ubuntu/.env` through systemd `EnvironmentFile=`. Avoid embedding Supabase keys directly in `/etc/systemd/system/tesla-ingester.service`.
+## Rotating Secrets
 
-## 🗺️ Geocoding & Maps
+Use the same rollout pattern across all environments that run TripBoard code:
 
-TripBoard uses **OpenStreetMap Nominatim** for free reverse geocoding (converting coordinates to addresses). No additional API keys are required for basic map functionality.
+- local `.env.local`
+- Vercel project environment variables
+- VPS or worker env files such as `/home/ubuntu/.env`
+- any cron jobs, CI jobs, or one-off scripts that call Supabase or Tesla directly
 
-- **Tiles:** CartoDB Dark Matter (via OpenStreetMap)
-- **Geocoding:** Nominatim API
+### `SUPABASE_SERVICE_ROLE_KEY`
 
-## 🤝 Contributing
+1. Rotate the service role key in Supabase.
+2. Update every environment that uses it:
+   - `SUPABASE_SERVICE_ROLE_KEY`
+   - `SUPABASE_KEY` if your worker uses that alias
+3. Redeploy Vercel and restart any VPS workers.
 
-Contributions are welcome! Please fork the repository and submit a pull request for any improvements or bug fixes.
+### `TESLA_CLIENT_SECRET`
 
-## 📄 License
+1. Rotate the client secret in the Tesla developer console.
+2. Update every environment that uses `TESLA_CLIENT_SECRET`.
+3. Redeploy Vercel and restart any worker that refreshes Tesla tokens.
 
-This project is licensed under the MIT License.
+### `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+
+This key is intended to be public-facing. Rotation is optional and usually only needed if you are doing a full Supabase key refresh.
+
+### `TOKEN_ENCRYPTION_KEY`
+
+TripBoard supports safe staged rotation for Tesla session encryption:
+
+1. Generate a new `TOKEN_ENCRYPTION_KEY`.
+   Example:
+
+   ```bash
+   openssl rand -base64 32
+   ```
+
+   Use the generated value as the new `TOKEN_ENCRYPTION_KEY`.
+2. Move the old active key into `TOKEN_ENCRYPTION_KEY_PREVIOUS`.
+3. Deploy the new env values everywhere the app or charging-sync worker runs.
+4. Existing Tesla sessions will still decrypt with the old key and will be lazily re-encrypted with the new key when users sign in, refresh Tesla sessions, or when the charging-sync worker refreshes a stored session.
+5. After you are confident old sessions have been migrated, remove `TOKEN_ENCRYPTION_KEY_PREVIOUS`.
+
+Example rollout:
+
+```env
+TOKEN_ENCRYPTION_KEY=new_active_key
+TOKEN_ENCRYPTION_KEY_PREVIOUS=old_active_key
+```
+
+If you have rotated more than once before all old rows were touched, `TOKEN_ENCRYPTION_KEY_PREVIOUS` can contain multiple older keys separated by commas.
+
+If you prefer an immediate one-off rewrite instead of waiting for lazy migration, run:
+
+```bash
+npm run reencrypt:tesla-sessions -- --dry-run
+npm run reencrypt:tesla-sessions
+```
+
+Optional flags:
+
+- `--user-id <uuid>` to migrate one user first
+- `--limit <n>` to cap the number of rows processed
+- `--batch-size <n>` to adjust page size

@@ -1,18 +1,32 @@
 import { NextResponse } from 'next/server';
 
-// Tesla Fleet API requires this public key at a well-known path for partner registration
-// This is an EC P-256 public key
+function readTeslaPublicKeyPem() {
+    const value = process.env.TESLA_PUBLIC_KEY_PEM?.trim();
 
-const PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
-MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEzKM6gW/zk05MclkZVlrS8yj+NIfU
-rgm5yi50vRwo3nAS63se5/ybImCCJ/oU5B2Et77uy6/fHRrSQhRL+hYK1g==
------END PUBLIC KEY-----`;
+    if (!value) {
+        return null;
+    }
+
+    return value.replace(/\\n/g, '\n');
+}
 
 export async function GET() {
-    return new NextResponse(PUBLIC_KEY, {
+    const publicKeyPem = readTeslaPublicKeyPem();
+
+    if (!publicKeyPem) {
+        return NextResponse.json(
+            {
+                error: 'TESLA_PUBLIC_KEY_PEM is not configured',
+            },
+            { status: 404 }
+        );
+    }
+
+    return new NextResponse(publicKeyPem, {
         status: 200,
         headers: {
             'Content-Type': 'application/x-pem-file',
+            'Cache-Control': 'public, max-age=300, stale-while-revalidate=3600',
         },
     });
 }
