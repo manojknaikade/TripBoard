@@ -272,3 +272,7 @@ Optional flags:
 - `--user-id <uuid>` to migrate one user first
 - `--limit <n>` to cap the number of rows processed
 - `--batch-size <n>` to adjust page size
+
+## License
+
+TripBoard is licensed under the GNU Affero General Public License v3.0 only. See [LICENSE](/Users/manojnaikade/Documents/TripBoard/LICENSE).
