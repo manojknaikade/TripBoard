@@ -258,6 +258,8 @@ export default function DashboardClient({
   const locationCardRef = useRef<HTMLElement | null>(null);
   const vehicleFetchIdRef = useRef(0);
   const pendingVehicleRequestsRef = useRef(0);
+  const vehicleDataRef = useRef<VehicleData | null>(null);
+  const vehicleCacheRef = useRef<VehicleCacheStore>({});
 
   const units = useSettingsStore((state) => state.units);
   const region = useSettingsStore((state) => state.region);
@@ -312,6 +314,14 @@ export default function DashboardClient({
   useEffect(() => {
     setVehicleCache(parseVehicleCache(localStorage.getItem(CACHE_KEY)));
   }, []);
+
+  useEffect(() => {
+    vehicleDataRef.current = vehicleData;
+  }, [vehicleData]);
+
+  useEffect(() => {
+    vehicleCacheRef.current = vehicleCache;
+  }, [vehicleCache]);
 
   const persistVehicleCache = useCallback((cacheKey: string, cacheEntry: CachedData) => {
     setVehicleCache((currentCache) => {
@@ -433,8 +443,8 @@ export default function DashboardClient({
           setVehicleData(null);
           // Keep using cached data but don't update it
         } else {
-          const previousVehicleSnapshot = vehicleCache[cacheKey]?.vehicle
-            || (vehicleData && vehicleData.id === data.vehicle.id ? vehicleData : null);
+          const previousVehicleSnapshot = vehicleCacheRef.current[cacheKey]?.vehicle
+            || (vehicleDataRef.current && vehicleDataRef.current.id === data.vehicle.id ? vehicleDataRef.current : null);
           const mergedVehicle = mergeVehicleTirePressure(data.vehicle, previousVehicleSnapshot);
 
           setVehicleData(mergedVehicle);
@@ -459,7 +469,7 @@ export default function DashboardClient({
       pendingVehicleRequestsRef.current = Math.max(0, pendingVehicleRequestsRef.current - 1);
       setDataLoading(pendingVehicleRequestsRef.current > 0);
     }
-  }, [activeDataSource, activeRegion, persistVehicleCache, vehicleCache, vehicleData]);
+  }, [activeDataSource, activeRegion, persistVehicleCache]);
 
   useEffect(() => {
     if (selectedVehicle) {
@@ -515,8 +525,8 @@ export default function DashboardClient({
         }
 
         if (data.success && data.vehicle && data.state !== 'asleep') {
-          const previousVehicleSnapshot = vehicleCache[wakeCacheKey]?.vehicle
-            || (vehicleData && vehicleData.id === data.vehicle.id ? vehicleData : null);
+          const previousVehicleSnapshot = vehicleCacheRef.current[wakeCacheKey]?.vehicle
+            || (vehicleDataRef.current && vehicleDataRef.current.id === data.vehicle.id ? vehicleDataRef.current : null);
           const mergedVehicle = mergeVehicleTirePressure(data.vehicle, previousVehicleSnapshot);
           const timestamp = data.timestamp || Date.now();
           setVehicleData(mergedVehicle);
