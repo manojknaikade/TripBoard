@@ -26,6 +26,35 @@ type TelemetryPayload = {
     data?: TelemetryValue[];
 };
 
+const EARTH_RADIUS_METERS = 6_371_000;
+const COMPLETED_TRIP_MIN_ROUTE_POINTS = 4;
+const IN_PROGRESS_TRIP_MIN_ROUTE_POINTS = 2;
+const ROUTE_ENDPOINT_TOLERANCE_METERS = 400;
+
+function toRadians(value: number) {
+    return (value * Math.PI) / 180;
+}
+
+function getDistanceMeters(
+    startLatitude: number,
+    startLongitude: number,
+    endLatitude: number,
+    endLongitude: number
+) {
+    const latitudeDelta = toRadians(endLatitude - startLatitude);
+    const longitudeDelta = toRadians(endLongitude - startLongitude);
+    const startLatitudeRadians = toRadians(startLatitude);
+    const endLatitudeRadians = toRadians(endLatitude);
+
+    const a = Math.sin(latitudeDelta / 2) ** 2
+        + Math.cos(startLatitudeRadians)
+        * Math.cos(endLatitudeRadians)
+        * Math.sin(longitudeDelta / 2) ** 2;
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return EARTH_RADIUS_METERS * c;
+}
+
 function toNullableNumber(value: unknown): number | null {
     if (typeof value === 'number' && Number.isFinite(value)) {
         return value;
@@ -154,4 +183,67 @@ export function sampleRoutePoints(
     sampled.push(points[lastIndex]);
 
     return dedupeRoutePoints(sampled);
+}
+
+export function hasTripRouteCoverage(
+    routePoints: TripRoutePoint[] | null | undefined,
+    {
+        startLatitude,
+        startLongitude,
+        endLatitude,
+        endLongitude,
+    }: {
+        startLatitude: number | null;
+        startLongitude: number | null;
+        endLatitude: number | null;
+        endLongitude: number | null;
+    }
+) {
+    if (
+        !Array.isArray(routePoints)
+        || startLatitude == null
+        || startLongitude == null
+    ) {
+        return false;
+    }
+
+    const hasTripEndCoordinates = endLatitude != null && endLongitude != null;
+    const minimumPointCount = hasTripEndCoordinates
+        ? COMPLETED_TRIP_MIN_ROUTE_POINTS
+        : IN_PROGRESS_TRIP_MIN_ROUTE_POINTS;
+
+    if (routePoints.length < minimumPointCount) {
+        return false;
+    }
+
+    const firstPoint = routePoints[0];
+    const lastPoint = routePoints[routePoints.length - 1];
+
+    if (!firstPoint || !lastPoint) {
+        return false;
+    }
+
+    const startDistanceMeters = getDistanceMeters(
+        startLatitude,
+        startLongitude,
+        firstPoint.latitude,
+        firstPoint.longitude
+    );
+
+    if (startDistanceMeters > ROUTE_ENDPOINT_TOLERANCE_METERS) {
+        return false;
+    }
+
+    if (!hasTripEndCoordinates) {
+        return true;
+    }
+
+    const endDistanceMeters = getDistanceMeters(
+        endLatitude,
+        endLongitude,
+        lastPoint.latitude,
+        lastPoint.longitude
+    );
+
+    return endDistanceMeters <= ROUTE_ENDPOINT_TOLERANCE_METERS;
 }

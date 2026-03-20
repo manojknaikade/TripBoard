@@ -16,8 +16,16 @@ import {
     Thermometer,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
-import type { TripRoutePoint } from '@/lib/trips/routePoints';
-import { fetchCachedJson, readCachedJson, writeCachedJson } from '@/lib/client/fetchCache';
+import {
+    hasTripRouteCoverage,
+    type TripRoutePoint,
+} from '@/lib/trips/routePoints';
+import {
+    fetchCachedJson,
+    invalidateCachedJson,
+    readCachedJson,
+    writeCachedJson,
+} from '@/lib/client/fetchCache';
 import VirtualizedList from '@/components/VirtualizedList';
 import {
     DashboardStatCard,
@@ -588,8 +596,28 @@ function getTripName(trip: Trip, units: 'imperial' | 'metric'): string {
     return `Trip at ${timeStr} ${distanceStr}`;
 }
 
-function getTripThumbnailCacheKey(tripId: string) {
-    return `trips:thumbnail:${tripId}`;
+function hasRenderableRoutePoints(
+    routePoints: TripRoutePoint[] | null | undefined,
+    trip: Pick<Trip, 'start_latitude' | 'start_longitude' | 'end_latitude' | 'end_longitude'>
+): routePoints is TripRoutePoint[] {
+    return hasTripRouteCoverage(routePoints, {
+        startLatitude: trip.start_latitude,
+        startLongitude: trip.start_longitude,
+        endLatitude: trip.end_latitude,
+        endLongitude: trip.end_longitude,
+    });
+}
+
+function getTripThumbnailCacheKey(trip: Pick<Trip, 'id' | 'ended_at' | 'start_latitude' | 'start_longitude' | 'end_latitude' | 'end_longitude'>) {
+    return [
+        'trips:thumbnail',
+        trip.id,
+        trip.ended_at ?? 'open',
+        trip.start_latitude,
+        trip.start_longitude,
+        trip.end_latitude ?? 'open',
+        trip.end_longitude ?? 'open',
+    ].join(':');
 }
 
 function TripCard({ trip, units }: { trip: Trip; units: 'imperial' | 'metric' }) {
@@ -598,12 +626,26 @@ function TripCard({ trip, units }: { trip: Trip; units: 'imperial' | 'metric' })
     const cardRef = useRef<HTMLDivElement | null>(null);
     const [isNearViewport, setIsNearViewport] = useState(false);
     const previewRoutePoints = trip.route_points || [];
-    const thumbnailCacheKey = getTripThumbnailCacheKey(trip.id);
-    const [exactRoutePoints, setExactRoutePoints] = useState<TripRoutePoint[] | null>(() => (
-        readCachedJson<TripRoutePoint[]>(thumbnailCacheKey)
-    ));
-    const shouldFetchExactThumbnail = hasCoords && previewRoutePoints.length < 2;
-    const routePoints = exactRoutePoints && exactRoutePoints.length >= 2
+    const thumbnailCacheKey = getTripThumbnailCacheKey(trip);
+    const cachedExactRoutePoints = useMemo(() => {
+        const cachedRoutePoints = readCachedJson<TripRoutePoint[]>(thumbnailCacheKey);
+        return hasRenderableRoutePoints(cachedRoutePoints, trip) ? cachedRoutePoints : null;
+    }, [thumbnailCacheKey, trip]);
+    const [exactRouteState, setExactRouteState] = useState<{
+        cacheKey: string;
+        points: TripRoutePoint[] | null;
+    }>(() => ({
+        cacheKey: thumbnailCacheKey,
+        points: cachedExactRoutePoints,
+    }));
+    const exactRoutePoints = exactRouteState.cacheKey === thumbnailCacheKey
+        ? exactRouteState.points
+        : cachedExactRoutePoints;
+    const hasResolvedExactThumbnail = exactRouteState.cacheKey === thumbnailCacheKey
+        && exactRouteState.points !== null;
+    const previewRouteLooksComplete = hasRenderableRoutePoints(previewRoutePoints, trip);
+    const shouldFetchExactThumbnail = hasCoords && !previewRouteLooksComplete;
+    const routePoints = hasRenderableRoutePoints(exactRoutePoints, trip)
         ? exactRoutePoints
         : previewRoutePoints;
 
@@ -631,39 +673,67 @@ function TripCard({ trip, units }: { trip: Trip; units: 'imperial' | 'metric' })
     }, [hasCoords, isNearViewport]);
 
     useEffect(() => {
-        if (!isNearViewport || !shouldFetchExactThumbnail) {
+        if (!isNearViewport || !shouldFetchExactThumbnail || hasResolvedExactThumbnail) {
             return;
         }
 
-        if (exactRoutePoints && exactRoutePoints.length >= 2) {
+        if (hasRenderableRoutePoints(exactRoutePoints, trip)) {
             return;
         }
 
         let cancelled = false;
 
-        void fetchCachedJson<TripRoutePoint[]>(
-            thumbnailCacheKey,
-            async () => {
-                const response = await fetch(`/api/trips/${trip.id}?thumbnail=1`, {
-                    cache: 'no-store',
-                });
+        void fetch(`/api/trips/${trip.id}?thumbnail=1`, {
+            cache: 'no-store',
+        }).then(async (response) => {
+            const data = await response.json();
+            const points = Array.isArray(data.route_points) ? data.route_points : [];
 
-                const data = await response.json();
-                return Array.isArray(data.route_points) ? data.route_points : [];
-            },
-            TRIP_EXACT_THUMBNAIL_CACHE_TTL_MS
-        ).then((points) => {
-            if (!cancelled) {
-                setExactRoutePoints(points);
+            if (cancelled) {
+                return;
             }
+
+            if (hasRenderableRoutePoints(points, trip)) {
+                writeCachedJson(
+                    thumbnailCacheKey,
+                    points,
+                    TRIP_EXACT_THUMBNAIL_CACHE_TTL_MS
+                );
+                setExactRouteState({
+                    cacheKey: thumbnailCacheKey,
+                    points,
+                });
+                return;
+            }
+
+            invalidateCachedJson(thumbnailCacheKey);
+            setExactRouteState({
+                cacheKey: thumbnailCacheKey,
+                points: null,
+            });
         }).catch(() => {
             // Keep the lightweight dotted fallback if the exact thumbnail fetch fails.
+            invalidateCachedJson(thumbnailCacheKey);
+            if (!cancelled) {
+                setExactRouteState({
+                    cacheKey: thumbnailCacheKey,
+                    points: [],
+                });
+            }
         });
 
         return () => {
             cancelled = true;
         };
-    }, [exactRoutePoints, isNearViewport, shouldFetchExactThumbnail, thumbnailCacheKey, trip.id]);
+    }, [
+        exactRoutePoints,
+        hasResolvedExactThumbnail,
+        isNearViewport,
+        shouldFetchExactThumbnail,
+        thumbnailCacheKey,
+        trip.id,
+        trip,
+    ]);
 
     return (
         <div ref={cardRef}>

@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/server';
 import {
     dedupeRoutePoints,
     extractRoutePointFromTelemetry,
+    hasTripRouteCoverage,
     sampleRoutePoints,
     type TripRoutePoint,
 } from '@/lib/trips/routePoints';
@@ -164,13 +165,22 @@ async function loadRoutePoints(
         throw waypointError;
     }
 
-    if (storedWaypoints && storedWaypoints.length > 0) {
-        return dedupeRoutePoints(storedWaypoints as TripWaypointRow[]);
+    const storedRoutePoints = dedupeRoutePoints((storedWaypoints || []) as TripWaypointRow[]);
+
+    const routeCoverageInput = {
+        startLatitude: trip.start_latitude,
+        startLongitude: trip.start_longitude,
+        endLatitude: trip.end_latitude,
+        endLongitude: trip.end_longitude,
+    };
+
+    if (hasTripRouteCoverage(storedRoutePoints, routeCoverageInput)) {
+        return storedRoutePoints;
     }
 
     const vin = resolveTripVin(trip, vehicles);
     if (!vin) {
-        return [];
+        return storedRoutePoints;
     }
 
     const from = new Date(new Date(trip.start_time).getTime() - 30_000).toISOString();
@@ -197,7 +207,17 @@ async function loadRoutePoints(
         ?.map((row) => extractRoutePointFromTelemetry(row.timestamp, row.payload))
         .filter((point): point is TripRoutePoint => point !== null) ?? [];
 
-    return dedupeRoutePoints(parsedPoints);
+    const telemetryRoutePoints = dedupeRoutePoints(parsedPoints);
+
+    if (hasTripRouteCoverage(telemetryRoutePoints, routeCoverageInput)) {
+        return telemetryRoutePoints;
+    }
+
+    if (telemetryRoutePoints.length > storedRoutePoints.length) {
+        return telemetryRoutePoints;
+    }
+
+    return storedRoutePoints;
 }
 
 export async function GET(
